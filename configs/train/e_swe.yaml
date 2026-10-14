@@ -1,0 +1,9 @@
+inherit: base.yaml
+# Expert LoRA: E-SWE (~15M tokens). Long SWE agent trajectories -> 64K packs.
+# global_batch_tokens unchanged (262,144) -> 4 packs of 64K per optimizer step (token-matched batch).
+data:
+  train:
+    e_swe: /scratch/eh3323/apex/data/processed/swe/train.jsonl
+  max_seq_len: 65536
+output:
+  run_id: e_swe_r32

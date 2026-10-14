@@ -1,0 +1,7 @@
+inherit: linear.yaml
+# Linear merge re-compressed to rank 128 (= Σ r_t, lossless for linear up to numerics) and exported as a
+# PEFT adapter (for LoRA serving); retained-energy per module saved under analysis_dir/<name>/svd_energy.json.
+name: linear_l0.5_svd128
+svd_rank: 128
+export_adapter: true
+fold_svd: true

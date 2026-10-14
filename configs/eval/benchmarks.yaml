@@ -1,0 +1,43 @@
+# 四项评测的官方来源、版本和 split，于训练开始前（2026-10-13）锁定，实验期间不变。
+# 本地快照位于 /scratch/eh3323/apex/data/benchmarks/
+base_model:
+  hf_id: Qwen/Qwen3.6-35B-A3B
+  revision: 995ad96eacd98c81ed38be0c5b274b04031597b0
+  license: apache-2.0
+swebench_pro_v2_hard:
+  name: SWE-bench Pro V2, HARD-51 subset  # 题目中的 "v2-hard" 即官方的 HARD-51 子集
+  hf_dataset: ScaleAI/SWE-bench_Pro
+  hf_config: hard
+  hf_revision: 2d52cb3df914a3fcf80c7f66738b3a88ae37fc50
+  repo: https://github.com/scaleapi/SWE-bench_Pro-os
+  repo_commit: 66f92766bba642462d4bbe5479e83f91f9211862
+  task_list: v2/hard51_ids.txt   # 51 tasks
+  metric: resolved_rate (官方 patch_replay 判分器)
+  agent: mini-swe-agent, v2/tooling/configs/mini_toolcall.yaml
+terminal_bench:
+  name: Terminal-Bench 2.0 (local snapshot incl. TB2.1 task fixes)
+  repo: https://github.com/laude-institute/terminal-bench-2
+  repo_commit: 2fd12b88aafdd04a52c298e3940bcb189f9766d6   # 89 tasks
+  harness: https://github.com/laude-institute/harbor
+  harness_commit: 4778ceba98314a3b0fe119249f7ac84fc0af08b7
+  agent: terminus-2
+  metric: task success rate, mean ± std over 5 runs
+  settings: {timeout_sec: 10800, cpus: 32, memory_gb: 48, temperature: 1.0, top_p: 0.95, top_k: 20, max_tokens: 81920, context: 262144}
+  note: 与 registry 的 terminal-bench@2.0 (69671fb) 相比，含 4 个 task.toml 及少量 tests 的 2.1 修复；按本地快照运行并如实标注
+hle:
+  hf_dataset: cais/hle
+  hf_revision: 5a81a4c7271a2a2a312b9a690f0c2fde837e4c29
+  split: test   # 2500 题，含 342 道图像题，完整多模态评测（不做 text-only）
+  tools: none
+  judge: o3-mini-2025-01-31 (官方判分脚本)
+  metric: accuracy (n=2500, 无答案计错) + calibration error
+asi_bench:
+  repo: https://github.com/apexin-ai/ASI-Bench
+  repo_commit: 8859f9b44ada4a98d82d6eb328b94a704cd84e80
+  hf_dataset: Apexintelligence-AI/ASI-Bench-seed31415
+  hf_revision: 0fa14219cafdbab634d8b3cfbce238a8735a214f
+  note: seed42 官方仅网站评分；本实验使用 seed31415 本地评分（非官方分数）。其参考答案与训练数据、Agent 沙箱严格隔离
+  agent: opencode_cli (官方 adapter)
+  levels: [B1, B2, B3, B4]
+  metric: B3 score (0-100, 主指标)；同时报告 B1-B4 及 Overall
+  judge: GPT-5.5 (13 个需要 LLM 判分的任务，官方设置)

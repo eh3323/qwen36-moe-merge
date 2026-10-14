@@ -1,0 +1,8 @@
+inherit: base.yaml
+# Expert LoRA: E-HLE (~15M tokens, token-matched with the other experts)
+data:
+  train:
+    e_hle: /scratch/eh3323/apex/data/processed/hle/train.jsonl
+  max_seq_len: 32768
+output:
+  run_id: e_hle_r32

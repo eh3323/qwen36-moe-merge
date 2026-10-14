@@ -1,0 +1,29 @@
+inherit: base.yaml
+# Merge selection on held-out val loss (src/merge/merge_select.py): one H200, ~1-2 min per candidate.
+# Val sets = configs/train/base.yaml data.val (the 4 expert val splits, never the benchmark test sets),
+# scored at one fixed max_seq_len for every candidate.
+train_config: configs/train/base.yaml
+val_max_seq_len: 65536
+out_dir: /scratch/eh3323/apex/analysis/merge_select
+extra_adapters:
+  mixed: /scratch/eh3323/apex/runs/mixed_r32/adapter_final   # skipped until the mixed run has finished
+candidates:
+  - base
+  - expert:e_swe
+  - expert:e_tb
+  - expert:e_asi
+  - expert:e_hle
+  - adapter:mixed
+  # task arithmetic: λ=0.25 is the plain average of the 4 task vectors, λ=1 their sum
+  - {method: linear, global_scale: 0.25}
+  - {method: linear, global_scale: 0.5}
+  - {method: linear, global_scale: 0.75}
+  - {method: linear, global_scale: 1.0}
+  - {method: ties, density: 0.2, global_scale: 0.5}
+  - {method: ties, density: 0.2, global_scale: 1.0}
+  - {method: ties, density: 0.2, global_scale: 1.5}
+  - {method: ties, density: 0.1, global_scale: 1.0}
+  - {method: ties, density: 0.5, global_scale: 1.0}
+  - {method: dare_ties, drop_p: 0.9, global_scale: 0.5}
+  - {method: dare_ties, drop_p: 0.9, global_scale: 1.0}
+  - {method: dare_linear, drop_p: 0.9, global_scale: 0.5}

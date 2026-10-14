@@ -1,0 +1,17 @@
+# Training env (LoRA SFT + merging). Resolved into configs/train/train.lock.txt by scripts/train_setup.sh
+# torch from the cu129 index (H200 sm90 / B200 sm100). 2.12.1 is the newest torch that still has
+# prebuilt kernels-community flash-attn builds (torch212-cu126, CUDA-minor-compatible with cu129).
+torch==2.12.1
+transformers==5.19.0
+peft==0.21.2
+accelerate==1.15.0
+# Gated DeltaNet kernels (pure Triton, no compilation): chunk_gated_delta_rule + varlen causal_conv1d
+flash-linear-attention==0.5.2
+fla-core==0.5.2
+# optional: prebuilt flash-attn varlen kernels from the HF kernels hub (falls back to SDPA if unavailable)
+kernels==0.17.2
+safetensors==0.8.0
+pyyaml==6.0.3
+numpy<2.4
+matplotlib
+jinja2>=3.1

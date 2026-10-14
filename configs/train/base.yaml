@@ -1,0 +1,57 @@
+# Shared defaults for all LoRA SFT runs (experts + mixed control use IDENTICAL hyperparameters).
+model:
+  path: /scratch/eh3323/apex/models/Qwen3.6-35B-A3B   # revision 995ad96e
+  class: Qwen3_5MoeForConditionalGeneration           # keep multimodal wrapper: same keys as base ckpt
+  dtype: bfloat16
+  experts_implementation: grouped_mm   # torch grouped GEMM over fused 3-D expert weights (no expert loop)
+  attn_backend: auto                   # auto | flash_attn | hub_fa3 | hub_fa2 | sdpa  (auto: self-tested FA, else SDPA)
+  gdn_backend: fla                     # fla (Triton, varlen) | torch (reference; >10x slower, debugging only)
+  gradient_checkpointing: true
+
+lora:
+  r: 32
+  alpha: 64            # scale alpha/r = 2
+  dropout: 0.05
+  use_rslora: false
+  # exact HF module names (text decoder only; vision tower, MTP head, router `mlp.gate`,
+  # `mlp.shared_expert_gate` and the 256 routed experts `mlp.experts.{gate_up_proj,down_proj}` are NOT adapted)
+  full_attn_targets: [q_proj, k_proj, v_proj, o_proj]          # 10 full-attention layers (3,7,...,39)
+  linear_attn_targets: [in_proj_qkv, in_proj_z, out_proj]      # 30 Gated-DeltaNet layers
+  mlp_targets: [shared_expert.gate_proj, shared_expert.up_proj, shared_expert.down_proj]  # all 40 layers
+
+data:
+  max_seq_len: 32768
+  overlong: truncate          # truncate | drop  (samples longer than max_seq_len)
+  preserve_thinking: true     # render reasoning_content for EVERY assistant turn
+  pack_window: 512            # window-shuffled first-fit-decreasing packing
+  cache_dir: /scratch/eh3323/apex/work/tokcache
+  num_proc: 16
+  val_max_tokens_per_set: 524288
+  val:
+    e_swe: /scratch/eh3323/apex/data/processed/swe/val.jsonl
+    e_tb:  /scratch/eh3323/apex/data/processed/tb/val.jsonl
+    e_asi: /scratch/eh3323/apex/data/processed/asi/val.jsonl
+    e_hle: /scratch/eh3323/apex/data/processed/hle/val.jsonl
+
+train:
+  seed: 1234
+  epochs: 2
+  # 8 packs x 32K = 262,144 tokens / optimizer step (E-SWE: 4 packs x 64K). With ~15M tokens per expert this
+  # gives ~57 steps/epoch (~115 total) -- 1-2M tok/step would leave only 8-15 optimizer steps per epoch.
+  global_batch_tokens: 262144
+  lr: 1.0e-4
+  min_lr_ratio: 0.1
+  warmup_ratio: 0.03
+  weight_decay: 0.0
+  adam_betas: [0.9, 0.999]
+  grad_clip: 1.0
+  ce_chunk_tokens: 4096
+  max_steps: null
+  log_every: 1
+  eval_every: 20
+  eval_at_start: true
+  save_every: 10
+  keep_last: 2
+
+output:
+  root: /scratch/eh3323/apex/runs     # run_dir = root/run_id/{logs,checkpoints,adapter_final}

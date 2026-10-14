@@ -1,0 +1,12 @@
+inherit: base.yaml
+# Mixed control: union of the 4 expert training sets (~60M tokens), identical LoRA + optimizer hyperparameters.
+# max_seq_len 64K so E-SWE samples are treated exactly as in the E-SWE expert (shorter samples pack together).
+data:
+  train:
+    e_swe: /scratch/eh3323/apex/data/processed/swe/train.jsonl
+    e_tb:  /scratch/eh3323/apex/data/processed/tb/train.jsonl
+    e_asi: /scratch/eh3323/apex/data/processed/asi/train.jsonl
+    e_hle: /scratch/eh3323/apex/data/processed/hle/train.jsonl
+  max_seq_len: 65536
+output:
+  run_id: mixed_r32

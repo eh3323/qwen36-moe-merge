@@ -1,0 +1,7 @@
+inherit: e_tb.yaml
+# Optional rank ablation (single expert): r=8, alpha=16 keeps alpha/r = 2 identical to the r=32 runs.
+lora:
+  r: 8
+  alpha: 16
+output:
+  run_id: e_tb_r8

@@ -1,0 +1,6 @@
+inherit: base.yaml
+# TIES: trim top-density per expert, elect sign by weighted sum, disjoint weighted mean, scale by λ.
+# Sweep λ ∈ {0.5, 1.0, 1.5} (and density ∈ {0.1, 0.2, 0.5}).
+method: ties
+density: 0.2
+global_scale: 1.0

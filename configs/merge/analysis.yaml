@@ -1,0 +1,4 @@
+inherit: base.yaml
+# Conflict analysis only (no model written): per-module cosine(ΔW_i,ΔW_j), sign-conflict fractions, norms.
+# python -m src.merge.merge_experts --config configs/merge/analysis.yaml --analyze-only
+analysis: true

@@ -1,0 +1,59 @@
+# Apex patch for apexin-ai/ASI-Bench @8859f9b: filesystem hiding for --sandbox linux_ns (see file header).
+# Apply: cd <asibench checkout> && git apply <this>   (scripts/eval_setup.sh does this on a copy)
+diff --git a/ai4sci_bench/runner/linux_ns_sandbox.py b/ai4sci_bench/runner/linux_ns_sandbox.py
+index d0002af..ad0c96e 100644
+--- a/ai4sci_bench/runner/linux_ns_sandbox.py
++++ b/ai4sci_bench/runner/linux_ns_sandbox.py
+@@ -24,6 +24,43 @@ from ai4sci_bench.runner.proc_util import run_subprocess_with_graceful_timeout
+ 
+ logger = logging.getLogger(__name__)
+ 
++# [apex patch] Optional filesystem hiding for linux_ns (agent must not see reference
++# answers, instance metadata, other runs' workspaces). Controlled by env vars:
++#   ASIBENCH_LINUXNS_HIDE          colon-separated paths covered by an empty tmpfs
++#   ASIBENCH_LINUXNS_ISOLATE_ROOT  dir covered by tmpfs except the agent's own cwd,
++#                                  which is bind-moved back into place
++# The mounts are made in an outer user+mount namespace and the command then runs in a
++# nested user namespace, where inherited mounts are locked (cannot be unmounted).
++_HIDE_SCRIPT = r"""
++set -e
++ws="$1"; shift
++if [ -n "${ASIBENCH_LINUXNS_HIDE:-}" ]; then
++  _old_ifs="$IFS"; IFS=:
++  for p in $ASIBENCH_LINUXNS_HIDE; do
++    if [ -e "$p" ]; then mount -t tmpfs -o size=16k,mode=0755 asibench-hidden "$p"; fi
++  done
++  IFS="$_old_ifs"
++fi
++if [ -n "${ASIBENCH_LINUXNS_ISOLATE_ROOT:-}" ]; then
++  case "$ws" in
++    "$ASIBENCH_LINUXNS_ISOLATE_ROOT"/*) ;;
++    *) echo "asibench linux_ns: workspace $ws not under $ASIBENCH_LINUXNS_ISOLATE_ROOT" >&2; exit 97 ;;
++  esac
++  stash=$(mktemp -d /tmp/asibench-ws.XXXXXX)
++  mount --rbind "$ws" "$stash"
++  mount -t tmpfs -o mode=0755 asibench-hidden "$ASIBENCH_LINUXNS_ISOLATE_ROOT"
++  mkdir -p "$ws"
++  mount --move "$stash" "$ws"
++  rmdir "$stash" 2>/dev/null || true
++fi
++cd "$ws"
++exec unshare --user --map-root-user --mount -- "$@"
++"""
++
++
++def _hiding_enabled() -> bool:
++    return bool(os.environ.get("ASIBENCH_LINUXNS_HIDE") or os.environ.get("ASIBENCH_LINUXNS_ISOLATE_ROOT"))
++
+ 
+ def check_linux_ns_available() -> tuple[bool, str]:
+     """Check if Linux namespace isolation is available on the current host.
+@@ -114,6 +151,8 @@ class LinuxNSSandbox:
+             "--fork",
+             "--",
+         ]
++        if _hiding_enabled():  # [apex patch]
++            sandbox_cmd += ["sh", "-c", _HIDE_SCRIPT, "asibench-hide", str(Path(cwd).resolve())]
+         if shell:
+             if not isinstance(command, str):
+                 raise TypeError("linux_ns shell execution requires command as string")

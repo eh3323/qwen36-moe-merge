@@ -1,0 +1,19 @@
+inherit: select.yaml
+# Interim selection run while E-HLE is still training: the 3 finished experts only, same protocol,
+# separate out_dir. Gives an early read on SWE/TB/ASI interference and smoke-tests merge_select.py on GPU.
+experts:
+  _replace: true
+  e_swe: /scratch/eh3323/apex/runs/e_swe_r32/adapter_final
+  e_tb:  /scratch/eh3323/apex/runs/e_tb_r32/adapter_final
+  e_asi: /scratch/eh3323/apex/runs/e_asi_r32/adapter_final
+out_dir: /scratch/eh3323/apex/analysis/merge_select_3exp
+candidates:
+  - base
+  - expert:e_swe
+  - expert:e_tb
+  - expert:e_asi
+  - {method: linear, global_scale: 0.333}
+  - {method: linear, global_scale: 0.667}
+  - {method: linear, global_scale: 1.0}
+  - {method: ties, density: 0.2, global_scale: 1.0}
+  - {method: dare_ties, drop_p: 0.9, global_scale: 1.0}

@@ -1,0 +1,160 @@
+# Data pipeline configuration (single source of truth for revisions, filters, budgets).
+# Paths are resolved relative to $APEX (default /scratch/eh3323/apex).
+paths:
+  raw: data/raw
+  interim: data/interim
+  processed: data/processed
+  benchmarks: data/benchmarks
+  model_dir: models/Qwen3.6-35B-A3B          # tokenizer + chat_template.jinja
+  mini_toolcall_yaml: data/benchmarks/swebench_pro_repo/v2/tooling/configs/mini_toolcall.yaml
+  terminus_template: data/benchmarks/harbor_repo/src/harbor/agents/terminus_2/templates/terminus-json-plain.txt
+  tb1_safe_list: work/research/tb1_safe_tasks.txt
+  tb_overlap_json: work/research/tb_overlap.json
+
+seed: 20261013
+val_fraction: 0.02            # by instance id (group split)
+token_budget_per_expert: 15000000   # train tokens (n_tokens incl. prompt), token-matched across experts
+# Selection stops at the token budget OR at experts.<e>.target_count (hard cap), whichever comes first.
+# Optional per-expert override: experts.<e>.token_budget (e.g. 30000000 for ~800 SWE trajectories).
+
+# HF sources, pinned revisions (sha at research time 2026-10-13). allow = snapshot_download allow_patterns.
+sources:
+  swe_rebench_oh:
+    repo: nebius/SWE-rebench-openhands-trajectories
+    revision: 35455389ab51bf5e2306bfd436ef72d0f98bf882
+    license: CC-BY-4.0
+    teacher: Qwen3-Coder-480B-A35B-Instruct (Apache-2.0, open weights)
+    allow: ["trajectories.parquet", "tools.json", "README.md", "LICENSE"]
+  swe_hero_oh:
+    repo: nvidia/SWE-Hero-openhands-trajectories
+    revision: 150bc119e52c647216fce285fd801f16b6fd745b
+    license: CC-BY-4.0
+    teacher: Qwen3-Coder-480B-A35B-Instruct (Apache-2.0, open weights)
+    allow: ["data/*.parquet", "README.md"]
+  nemotron_terminal:
+    repo: nvidia/Nemotron-Terminal-Corpus
+    revision: a1667c4ffdadea02a89bffe4f1bb7ca2ff19f8d9
+    license: CC-BY-4.0
+    teacher: DeepSeek-V3.2 (MIT, open weights)
+    allow: ["synthetic_tasks/skill_based/medium/*/data_filtered.parquet",
+            "synthetic_tasks/skill_based/mixed/*/data_filtered.parquet",
+            "README.md"]
+  ot_agent_100k:
+    repo: open-thoughts/OpenThoughts-Agent-SFT-100K
+    revision: 45fb28fcc38d352133cb28a1c8a43a2f14fea97b
+    license: Apache-2.0
+    teacher: GLM-4.7-AWQ (MIT, open weights)
+    allow: ["data/*.parquet", "README.md"]
+  jupyter_agent:
+    repo: jupyter-agent/jupyter-agent-dataset
+    revision: 10a8dd461bb6c580fa25b83cd3b2f6810f1d6385
+    license: Apache-2.0 (Kaggle upstream ToS caveat)
+    teacher: Qwen3-Coder-480B-A35B (traces) / Qwen3-32B (QA) — open weights
+    allow: ["data/thinking-0000[0-5]-of-00103.parquet", "README.md"]   # 6 of 103 thinking shards (~2 GB)
+  nemotron_science:
+    repo: nvidia/Nemotron-Science-v1
+    revision: 82e1af468197076b4f0f392c239274eac032adc7
+    license: CC-BY-4.0
+    teacher: gpt-oss-120b (Apache-2.0, open weights)
+    allow: ["data/MCQ.jsonl", "data/RQA.jsonl", "README.md"]
+  nemotron_math_v2:
+    repo: nvidia/Nemotron-Math-v2
+    revision: 8e793210e175b6406c752a870f585f62de98c0d3
+    license: CC-BY-4.0 (AoPS subset only; StackExchange rows are CC-BY-SA and are skipped)
+    teacher: gpt-oss-120b (Apache-2.0, open weights)
+    stream_file: data/high.part_00.jsonl     # STREAMED with early stop; never downloaded in full (204 GB repo)
+    stream_max_rows: 400000
+  osr2:
+    repo: nvidia/OpenScienceReasoning-2
+    revision: 174b02c9cdf231f220765b2a1d5ece4550921894
+    license: CC-BY-4.0
+    teacher: DeepSeek-R1-0528 (MIT, open weights)
+    stream_file: train/OpenScienceReasoning-2.parquet   # 15.7 GB single file, 9 row groups x 200k rows: two-pass
+    max_full_row_groups: 2                              # streaming (input column of all RGs, full rows of <=2 RGs)
+  # ---- dev-set sources (task metadata only) ----
+  swe_rebench_v2:
+    repo: nebius/SWE-rebench-V2
+    revision: 10483de0f50fe5da545942705a76c6150171af7f
+    license: CC-BY-4.0
+    allow: ["data/*.parquet", "README.md"]
+  tblite:
+    repo: open-thoughts/OpenThoughts-TBLite
+    revision: 7b70111339b4af23cece95d63aeec1c705790868
+    license: Apache-2.0
+    allow: ["*/instruction.md", "*/task.toml", "README.md"]
+  scienceagentbench:
+    repo: osunlp/ScienceAgentBench
+    revision: 9c6e96c9e74572e979b0930ee735041cef528cb7
+    license: CC-BY-4.0
+    allow: ["data/*.parquet", "README.md"]
+  gpqa:
+    repo: Idavidrein/gpqa
+    revision: 83022cefff930aea54f654c0b282e74b9eeda5c6
+    license: CC-BY-4.0 (gated; do not redistribute plaintext)
+    allow: ["gpqa_diamond.csv", "README.md"]
+  embed_model:
+    repo: BAAI/bge-small-en-v1.5
+    revision: 5c38ec7c405ec4b44b94cc5a9bb96e735b38267a
+    kind: model
+    license: MIT
+    allow: ["*.json", "*.txt", "model.safetensors", "1_Pooling/*"]
+
+# ---------------- per-expert recipes ----------------
+experts:
+  swe:
+    max_tokens: 65536
+    target_count: 800
+    hard_fraction: 0.5           # hard = >=2 non-test files changed OR >=40 assistant turns
+    max_per_instance: 2
+    max_repo_fraction: 0.03
+    secondary_fraction: 0.25     # SWE-Hero share of the final set (R2E-Gym-sourced rows only)
+    swe_pro_repos: [NodeBB/NodeBB, ansible/ansible, element-hq/element-web, flipt-io/flipt,
+                    future-architect/vuls, gravitational/teleport, internetarchive/openlibrary,
+                    navidrome/navidrome, protonmail/WebClients, qutebrowser/qutebrowser, tutao/tutanota]
+    drop_orgs: [ansible]
+    # cheap fork heuristic: repo basename equals a SWE-Pro repo basename, or the patch touches a
+    # path that is distinctive for a SWE-Pro code base
+    fork_basenames: [nodebb, ansible, element-web, flipt, vuls, teleport, openlibrary, navidrome,
+                     webclients, qutebrowser, tutanota]
+    fork_path_markers: ["lib/ansible/", "openlibrary/", "qutebrowser/", "src/posts/cache.js",
+                        "navidrome/", "flipt/", "lib/teleport", "tutanota", "element-web",
+                        "applications/mail/", "packages/components/containers/"]
+    system_info: "Linux 5.15.0-1057-aws #63~20.04.1-Ubuntu SMP Mon Mar 25 10:29:36 UTC 2024 x86_64"
+  tb:
+    max_tokens: 32768
+    target_count: 2000
+    nemotron_fraction: 0.6
+    nemotron_categories_exclude: [scientific_computing, data_science, model_training]
+    nemotron_levels: [medium, mixed]
+    ot_exclude_task_prefixes: [swesmith]
+    candidate_pool_per_source: 9000
+    max_incomplete_fraction: 0.15   # trajectories without final task_complete kept for recovery behaviour
+  asi:
+    max_tokens: 32768
+    target_count: 1000
+    jupyter_fraction: 0.15
+    nemotron_subsets: ["medium/scientific_computing", "mixed/scientific_computing",
+                       "medium/data_science", "mixed/data_science", "medium/model_training"]
+    candidate_pool: 8000
+    embed_threshold: 0.85
+    # named-method blacklist (research_datasets.md §2 E-ASI); matched case-insensitively on word boundaries
+    method_blacklist: ["lid-driven cavity", "ghia", "kosterlitz", "xy model", "neal's funnel", "gillespie",
+                       "de young-keizer", "young-keizer", "sapt", "metadynamics", "ball-berry", "farquhar",
+                       "topmodel", "richards equation", "rnea", "pose graph", "contact process", "glauber",
+                       "vpfm", "marcus theory", "marcus rate", "vtst", "lkh", "max-3-sat", "homotopy continuation",
+                       "conformal mapping", "conformal map", "ukf", "bearing-only", "particle filter",
+                       "occupancy grid", "iterative closest point", "lattice boltzmann", "michaelis-menten cme",
+                       "ip3r", "go-model", "gō-model", "directed percolation", "symplectic integrator",
+                       "lidar-imu", "nnls deblur", "icp"]
+    opencode:
+      model_api_id: Qwen/Qwen3.6-35B-A3B
+      provider_id: bench
+      workdir: /app
+      date: "Tue Oct 13 2026"
+  hle:
+    max_tokens: 32768
+    target_count: 2000
+    mix: {nemotron_math_aops: 0.40, nemotron_science_mcq: 0.30, nemotron_science_rqa: 0.15, osr2_nonstem: 0.15}
+    candidate_pool_per_source: 12000
+    embed_threshold: 0.90
+    heldout_count: 300          # held-out items from the same sources -> HLE dev set

@@ -1,0 +1,13 @@
+inherit: e_swe.yaml
+# Side experiment E-SWE-v2: identical recipe to E-SWE (LoRA r32, lr 1e-4, 2 epochs, 64K packs, token-matched
+# ~15.05M train tokens); only the training data changes (nvidia/Open-SWE-Traces mini-swe-agent trajectories,
+# Go/TS+JS/Python, built by src/data/build_swe_v2.py). The 4 standard val sets are kept (comparable curves);
+# the new set's own val split is added as a 5th.
+data:
+  train:
+    _replace: true
+    e_swe_v2: /scratch/eh3323/apex/data/processed/swe_v2/train.jsonl
+  val:
+    e_swe_v2: /scratch/eh3323/apex/data/processed/swe_v2/val.jsonl
+output:
+  run_id: e_swe_v2_r32

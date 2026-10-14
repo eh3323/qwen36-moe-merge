@@ -1,0 +1,47 @@
+# weights / caches / secrets
+*.safetensors
+*.bin
+*.pt
+*.pth
+*.ckpt
+*.gguf
+*.sif
+__pycache__/
+*.py[cod]
+.venv/
+.env
+.env.*
+*.key
+*.pem
+id_rsa*
+.netrc
+wandb/
+.DS_Store
+.ipynb_checkpoints/
+.claude/
+# large raw data stays on /scratch; only manifests are committed
+data/raw/
+data/processed/
+*.parquet
+*.arrow
+*.tar
+*.tar.gz
+*.tgz
+*.zip
+# model weights live on HF Hub, not in git
+models/*
+!models/README.md
+# raw eval outputs (benchmark questions/answers, agent trajectories) are not redistributed;
+# only aggregated summaries (md/csv/json) under results/ are committed
+results/**/*.jsonl
+results/**/trajectories/
+results/**/raw/
+*.traj
+*.traj.json
+# ASI-Bench seed31415 ships reference answers: never commit anything from it
+*seed31415*/
+**/reference/
+# job logs (keep the hand-written worklog)
+*.log
+*.out
+*.err

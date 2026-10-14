@@ -1,0 +1,19 @@
+inherit: base.yaml
+# Throughput / memory probe on synthetic packed data (random tokens, 2K-16K-token docs packed into 32K).
+# 1 pack per GPU per optimizer step; no eval, no checkpoints, no final save.
+data:
+  synthetic: {n_samples: 768, min_len: 2048, max_len: 16384}
+  max_seq_len: 32768
+  val: {_replace: true}
+train:
+  epochs: 1
+  global_batch_tokens: 32768     # -> packs_per_step = world (accum 1)
+  max_steps: 25
+  eval_every: 0
+  eval_at_start: false
+  save_every: 0
+  skip_final_save: true
+  no_resume: true
+output:
+  root: /scratch/eh3323/apex/runs/_throughput
+  run_id: tp_test

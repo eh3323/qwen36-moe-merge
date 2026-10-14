@@ -1,0 +1,17 @@
+inherit: e_tb.yaml
+# Side experiment E-TB-v2: E-TB recipe (LoRA r32, lr 1e-4, 2 epochs, ~15M training tokens = same compute);
+# only the training data changes: TermGrade test-verified Terminus-2 trajectories (reward == 1, hard tasks),
+# expanded PER TURN so the training context equals the Terminus-2 eval prompt (no earlier-turn thinking,
+# preserve_thinking=false, loss on the final assistant turn only; per-record "render"/"loss" fields honoured by
+# src/train/data.py). Built by `python -m src.data.build_tb_v2 build --per-turn`. Per-turn samples are as long
+# as the trajectory prefix (<= 64K), so packs are 64K (as E-SWE). The 4 standard val sets are kept unchanged
+# (comparable curves); the per-turn val split of 20 held-out tasks is added as a 5th.
+data:
+  train:
+    _replace: true
+    e_tb_v2: /scratch/eh3323/apex/data/processed/tb_v2_turns/train.jsonl
+  val:
+    e_tb_v2_turns: /scratch/eh3323/apex/data/processed/tb_v2_turns/val.jsonl
+  max_seq_len: 65536
+output:
+  run_id: e_tb_v2_r32
