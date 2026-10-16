@@ -52,9 +52,36 @@ def table(body: str) -> str:
     return out.replace("only", "）") if "（仅含" in out else out
 
 
+def keep_cols(tbl: str, keep: list[str]) -> str:
+    """Keep only the columns whose header is in `keep` (in table order)."""
+    rows = [[c.strip() for c in l.strip().strip("|").split("|")] for l in tbl.splitlines()]
+    idx = [i for i, h in enumerate(rows[0]) if h in keep]
+    return "\n".join("| " + " | ".join(r[i] for i in idx) + " |" if k != 1 else "|" + "---|" * len(idx)
+                     for k, r in enumerate(rows))
+
+
+SHORT = [(" （历史）", "（历史）"), ("v4（全部 TB2 运行） vs Base（全部 TB2 运行）", "v4 vs Base（全部 TB2 运行）"),
+         ("E-TB v1（历史） vs Base（集群 TB2）", "E-TB v1（历史） vs Base（集群）")]
+
+
+def short(tbl: str) -> str:
+    for a, b in SHORT:
+        tbl = tbl.replace(a, b)
+    return tbl
+
+
 def plain(body: str) -> str:
     """Non-table text lines of a section (e.g. the historical / calibration notes)."""
     return [l for l in body.splitlines() if l.strip() and not l.startswith("|")]
+
+
+def bullet(note: str) -> str:
+    """One note line of section (a) -> a bullet; the historical-runs note becomes one sub-bullet per run."""
+    head = "Historical runs (not in the matrix): "
+    if note.startswith(head):
+        runs = [r.strip().rstrip(".") for r in note[len(head):].split("; ")]
+        return "- 不在矩阵中的运行：\n" + "\n".join(f"  - {r.replace(': ', '：', 1)}" for r in runs)
+    return "- " + note.replace("HLE RMS calibration error (official hle_eval, β=100): ", "HLE 校准误差（官方 hle_eval，RMS，β=100）：")
 
 
 def main() -> None:
@@ -63,17 +90,18 @@ def main() -> None:
     a, b = section(src, r"\(a\) Score matrix"), section(src, r"\(b\) Δ vs Base")
     b1, b2 = section(src, r"\(b′\) Sensitivity"), section(src, r"\(b2\) All comparisons")
     d, d1 = section(src, r"\(d\) Per-run scores"), section(src, r"\(d′\) Per-run scores")
+    c = section(src, r"\(c\) Failure rates")
     notes = [table("|" + l)[1:] for l in plain(a) if l.startswith(("Historical", "HLE RMS"))]
     block = f"""{BEGIN}
 <!-- 由 analysis/readme_results.py 从 analysis/results_tables.md（{gen}）复制，勿手改；完整版含失败率与 token 用量见该文件 -->
 
 ### 8.1 分数矩阵
 
-主指标为百分制，env_error 按 0 分计入（§9）。多次运行时为均值 ± 标准差（ddof=1）及次数。TB2 只用 Nebius VM 上的运行（所有模型同一节点、同一设置，§11 第 21 条）；集群上的 TB2 运行见 8.3。“—”表示不在该模型的评测范围内。
+主指标为百分制，env_error 按 0 分计入（§9）。多次运行时为均值 ± 标准差（ddof=1）及次数。TB2 只用 Nebius VM 上的运行（所有模型同一节点、同一设置，§11 第 21 条）；集群上的 TB2 运行见下方列表和 8.4。“—”表示不在该模型的评测范围内。
 
 {table(a)}
 
-{chr(10).join("- " + n.replace("Historical runs (not in the matrix): ", "不在矩阵中的运行：").replace("HLE RMS calibration error (official hle_eval, β=100): ", "HLE 校准误差（官方 hle_eval，RMS，β=100）：") for n in notes)}
+{chr(10).join(bullet(short(n)) for n in notes)}
 
 ### 8.2 相对 Base 的差值（95% CI）
 
@@ -89,7 +117,9 @@ def main() -> None:
 
 McNemar 精确检验只在两边每题都只有一个二元结果（单次运行）时给出。
 
-{table(b2)}
+{short(keep_cols(table(b2), ["比较（B vs A）", "Benchmark", "任务数", "A", "B", "Δ = B − A [95% CI], p", "McNemar（A 独赢 : B 独赢）", "env_error A / B"]))}
+
+剔除 env_error 后的 Δ 见 8.2 的敏感性分析和 `analysis/results_tables.md` (b2)。
 
 ### 8.4 每次运行的分数
 
@@ -100,6 +130,12 @@ TB2（89 题）。模型名行是 Nebius VM 上的运行（Docker、TP=2）；�
 SWE-bench Pro HARD-51（51 题，全部重新判分后）。
 
 {table(d1)}
+
+### 8.5 运行失败率
+
+每个模型 × benchmark 的全部（任务, 运行）中各状态的比例（`results/summary.csv`）。env_error 是环境或框架失败（沙箱起不来、上下文溢出、HLE 无预测等），按 0 分计入主指标；timeout 是 agent 超时，算模型失败；fail 是正常结束但没解出。token 用量和 agent 时长见 `analysis/results_tables.md` (c)。
+
+{short(keep_cols(table(c).replace("| Model |", "| 模型 |"), ["模型", "Benchmark", "runs", "task-attempts", "score", "score excl. env", "env_error", "timeout", "fail"])).replace("| runs | task-attempts | score | score excl. env |", "| 次数 | 任务×次数 | 得分 | 剔除 env_error 后 |")}
 {END}"""
     readme = open(README).read()
     if BEGIN in readme:

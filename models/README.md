@@ -5,9 +5,14 @@
 | 模型 | 仓库 | revision | 内容 |
 |---|---|---|---|
 | Base | [Qwen/Qwen3.6-35B-A3B](https://huggingface.co/Qwen/Qwen3.6-35B-A3B) | `995ad96e` | 官方基座，未改动 |
-| 专家与对照（LoRA） | [eh3323/Qwen3.6-35B-A3B-apex-lora-experts](https://huggingface.co/eh3323/Qwen3.6-35B-A3B-apex-lora-experts) | `e08bd952` | 子目录 `e_swe_v2/`、`e_tb_v2/`、`e_asi/`、`e_hle/`（进入合版）、`mixed/`（对照）、`e_swe_v1/`、`e_tb_v1/`（历史版本） |
 | **最终合版 v4** | [eh3323/Qwen3.6-35B-A3B-apex-merged-v4](https://huggingface.co/eh3323/Qwen3.6-35B-A3B-apex-merged-v4) | `223a1b15` | 完整权重（bf16，26 个分片）+ `merge_info.json` |
-| 折叠后的完整权重 | [e_asi-folded](https://huggingface.co/eh3323/Qwen3.6-35B-A3B-apex-e_asi-folded)、[mixed-folded](https://huggingface.co/eh3323/Qwen3.6-35B-A3B-apex-mixed-folded)、[e_tb_v2-folded](https://huggingface.co/eh3323/Qwen3.6-35B-A3B-apex-e_tb_v2-folded) | `3476649b`、`816e1ec6`、`9281bb8c` | 基座 + 对应 adapter 折叠成的稠密权重（bf16），租用节点上评测时直接加载 |
+| 专家与对照（LoRA） | [eh3323/Qwen3.6-35B-A3B-apex-lora-experts](https://huggingface.co/eh3323/Qwen3.6-35B-A3B-apex-lora-experts) | `e08bd952` | 7 个 adapter，子目录见下 |
+| E-ASI（折叠） | [eh3323/Qwen3.6-35B-A3B-apex-e_asi-folded](https://huggingface.co/eh3323/Qwen3.6-35B-A3B-apex-e_asi-folded) | `3476649b` | 基座 + E-ASI 的完整权重 |
+| Mixed（折叠） | [eh3323/Qwen3.6-35B-A3B-apex-mixed-folded](https://huggingface.co/eh3323/Qwen3.6-35B-A3B-apex-mixed-folded) | `816e1ec6` | 基座 + Mixed 的完整权重 |
+| E-TB v2（折叠） | [eh3323/Qwen3.6-35B-A3B-apex-e_tb_v2-folded](https://huggingface.co/eh3323/Qwen3.6-35B-A3B-apex-e_tb_v2-folded) | `9281bb8c` | 基座 + E-TB v2 的完整权重 |
+
+- LoRA 仓库的子目录：`e_swe_v2/`、`e_tb_v2/`、`e_asi/`、`e_hle/`（进入 v4）、`mixed/`（对照）、`e_swe_v1/`、`e_tb_v1/`（历史版本）。
+- “折叠”指把单个 adapter 用 `merge_and_unload()` 加回基座得到的稠密权重（bf16），租用节点上评测时直接加载。为了和多专家的“合版”区分，这里不叫 merged。
 
 许可证：Apache-2.0，继承自基座。
 

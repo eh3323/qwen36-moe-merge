@@ -75,15 +75,20 @@ permissive licences are used.
 | swe_hero_oh | nvidia/SWE-Hero-openhands-trajectories @150bc119 | CC-BY-4.0 (+ repo licences) | Qwen3-Coder-480B-A35B | E-SWE secondary |
 | nemotron_terminal | nvidia/Nemotron-Terminal-Corpus @a1667c4f | CC-BY-4.0 | DeepSeek-V3.2 (MIT) | E-TB, E-ASI |
 | ot_agent_100k | open-thoughts/OpenThoughts-Agent-SFT-100K @45fb28fc | Apache-2.0 | GLM-4.7-AWQ (MIT) | E-TB |
-| jupyter_agent | jupyter-agent/jupyter-agent-dataset @10a8dd46 (6/103 `thinking` shards) | Apache-2.0 (Kaggle ToS caveat) | Qwen3-Coder-480B / Qwen3-32B | E-ASI |
+| jupyter_agent | jupyter-agent/jupyter-agent-dataset @10a8dd46 ¹ | Apache-2.0 ² | Qwen3-Coder-480B / Qwen3-32B | E-ASI |
 | nemotron_science | nvidia/Nemotron-Science-v1 @82e1af46 (MCQ, RQA) | CC-BY-4.0 | gpt-oss-120b (Apache-2.0) | E-HLE |
-| nemotron_math_v2 | nvidia/Nemotron-Math-v2 @8e793210, **streamed** `data/high.part_00.jsonl`, AoPS rows only | CC-BY-4.0 (AoPS; CC-BY-SA StackExchange rows skipped) | gpt-oss-120b | E-HLE |
-| osr2 | nvidia/OpenScienceReasoning-2 @174b02c9, **streamed** two-pass (`input` column of all 9 row groups, full rows from the ≤2 richest), non-STEM slice | CC-BY-4.0 | DeepSeek-R1-0528 (MIT) | E-HLE |
+| nemotron_math_v2 | nvidia/Nemotron-Math-v2 @8e793210 ³ | CC-BY-4.0 (AoPS rows) | gpt-oss-120b | E-HLE |
+| osr2 | nvidia/OpenScienceReasoning-2 @174b02c9 ⁴ | CC-BY-4.0 | DeepSeek-R1-0528 (MIT) | E-HLE |
 | swe_rebench_v2 | nebius/SWE-rebench-V2 @10483de0 | CC-BY-4.0 | – | SWE dev |
 | tblite | open-thoughts/OpenThoughts-TBLite @7b701113 | Apache-2.0 | – | TB dev |
 | scienceagentbench | osunlp/ScienceAgentBench @9c6e96c9 | CC-BY-4.0 | – | ASI dev |
 | gpqa | Idavidrein/gpqa @83022cef (gated) | CC-BY-4.0 | – | HLE dev |
-| embed_model | BAAI/bge-small-en-v1.5 | MIT | – | embedding decontamination (CPU) |
+| embed_model | BAAI/bge-small-en-v1.5 | MIT | – | decontamination (CPU) |
+
+- ¹ Only the 6 of 103 `thinking` shards.
+- ² Kaggle ToS caveat on the underlying notebooks.
+- ³ **Streamed** `data/high.part_00.jsonl`, AoPS rows only; the CC-BY-SA StackExchange rows are skipped.
+- ⁴ **Streamed** two-pass: the `input` column of all 9 row groups, full rows from the ≤2 richest; non-STEM slice.
 
 **Excluded by decision:**
 - Closed-model teachers or ToS risk: SWE-smith-trajectories, R2E-Gym-SFT, SWE-Gym SFT, tmax-sft (contains
@@ -118,13 +123,16 @@ Other format details:
 
 | OpenHands call | Converted to |
 |---|---|
-| `execute_bash` | Same command. Prefixed with `cd <cwd> &&` when OpenHands' persistent cwd ≠ `/app`, because mini-swe-agent runs each command in a fresh subshell. Status trailers are stripped and the exit code becomes `returncode`. Echoed command lines are removed. |
+| `execute_bash` | Same command, prefixed with `cd <cwd> &&` when needed ¹ |
 | `view` (file) | `nl -ba file [| sed -n 'a,bp']`. Same `cat -n` format. |
 | `view` (directory) | `find … -maxdepth 2 -not -path '*/.*' \| sort` |
 | `create` | `cat <<'EOF' > file` |
-| `str_replace` / `insert` | A `python3` heredoc that does an exact, unique replacement and prints the same numbered snippet OpenHands showed. OpenHands error messages are mapped to that script's errors. |
+| `str_replace` / `insert` | A `python3` heredoc doing an exact, unique replacement ² |
 | `think`, `task_tracker` | Folded into `reasoning_content` |
 | `finish` | Submit command |
+
+- ¹ Added when OpenHands' persistent cwd ≠ `/app`, because mini-swe-agent runs each command in a fresh subshell. Status trailers are stripped, the exit code becomes `returncode`, and echoed command lines are removed.
+- ² It prints the same numbered snippet OpenHands showed; OpenHands error messages are mapped to that script's errors.
 
 Other conversion rules:
 - **Dropped turns.** A failed editor call that has no faithful shell equivalent is removed, and its
@@ -346,10 +354,14 @@ equals the union of the expert manifests.
 
 | expert | dev set | manifest |
 |---|---|---|
-| SWE | 50 SWE-rebench-V2 tasks: 20 Go / 20 Python / 10 TS-JS; medium/hard; LLM-QA confidence ≥ 0.9, no detected issues; one task per repo, preferring repos absent from the trajectory corpora. **These repos are excluded from E-SWE training.** | `dev_swe.csv` |
-| TB | OpenThoughts-TBLite minus `grpc-plant-position-server` (near-duplicate of TB2 `kv-store-grpc`) and any TB1-unsafe or TB2 name. Its names are excluded from E-TB training. | `dev_tb.csv` |
+| SWE | 50 SWE-rebench-V2 tasks (20 Go / 20 Python / 10 TS-JS) ¹ | `dev_swe.csv` |
+| TB | OpenThoughts-TBLite, minus overlaps with TB1 / TB2 ² | `dev_tb.csv` |
 | ASI | 35 ScienceAgentBench tasks, round-robin over domains | `dev_asi.csv` |
-| HLE | GPQA-Diamond (gated: request access, then re-run `download --only gpqa` and `dev_sets`) + 300 held-out items | `dev_hle_gpqa_diamond.csv`, `dev_hle_heldout.csv` |
+| HLE | GPQA-Diamond ³ + 300 held-out items | `dev_hle_gpqa_diamond.csv`, `dev_hle_heldout.csv` |
+
+- ¹ Medium/hard; LLM-QA confidence ≥ 0.9, no detected issues; one task per repo, preferring repos absent from the trajectory corpora. **These repos are excluded from E-SWE training.**
+- ² Drops `grpc-plant-position-server` (near-duplicate of TB2 `kv-store-grpc`) and any TB1-unsafe or TB2 name. The remaining names are excluded from E-TB training.
+- ³ Gated: request access, then re-run `download --only gpqa` and `dev_sets`.
 
 ## 7. Manifests (`data/manifests/`)
 

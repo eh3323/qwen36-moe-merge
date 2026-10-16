@@ -18,15 +18,18 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 CSS = """
 @page { size: A4; margin: 11mm 12mm; }
 body { font-family: "PingFang SC", "Noto Sans CJK SC", "Helvetica Neue", Arial, sans-serif;
-       font-size: 8.6pt; line-height: 1.32; color: #111; }
+       font-size: 8.9pt; line-height: 1.36; color: #111; }
 h1 { font-size: 13pt; margin: 0 0 3pt; }
-h2 { font-size: 10pt; margin: 6pt 0 2pt; border-bottom: 0.5pt solid #999; }
-p, li { margin: 1.5pt 0; }
+h2 { font-size: 10.5pt; margin: 8pt 0 3pt; border-bottom: 0.5pt solid #999; }
+p, li { margin: 2pt 0; }
 ul, ol { margin: 1pt 0 1pt 14pt; padding: 0; }
-table { border-collapse: collapse; width: 100%; font-size: 7.6pt; margin: 3pt 0; }
-th, td { border: 0.4pt solid #888; padding: 1.2pt 3pt; text-align: center; }
+table { border-collapse: collapse; width: 100%; font-size: 7.9pt; margin: 4pt 0; }
+th, td { border: 0.4pt solid #888; padding: 1.5pt 3pt; text-align: center; }
 th:first-child, td:first-child { text-align: left; }
-img { display: block; max-width: 100%; max-height: 38mm; margin: 2pt auto; }
+img { display: block; max-width: 100%; max-height: 40mm; margin: 5pt auto 4pt; }
+.row { display: flex; align-items: center; gap: 8pt; margin: 6pt 0; }
+.row .fail { flex: 0 0 44%; } .row .fail table { margin: 0; } .row .fail td { white-space: nowrap; }
+.row .fig { flex: 1; } .row img { max-height: 48mm; margin: 0 auto; }
 code { font-size: 7.6pt; }
 """
 
@@ -37,6 +40,9 @@ def main() -> int:
     a = ap.parse_args()
     md = (ROOT / "report.md").read_text(encoding="utf-8")
     body = markdown.markdown(md, extensions=["tables"])
+    # Put the failure-rate table and the figure that follows it side by side (uses the page width).
+    body = re.sub(r"(<table>(?:(?!<table>).)*?运行失败率.*?</table>)\s*(<p><img[^>]*></p>)",
+                  r'<div class="row"><div class="fail">\1</div><div class="fig">\2</div></div>', body, count=1, flags=re.S)
     html = f'<!doctype html><html lang="zh"><head><meta charset="utf-8"><style>{CSS}</style></head><body>{body}</body></html>'
     out_html = ROOT / "report.html"
     out_html.write_text(html, encoding="utf-8")

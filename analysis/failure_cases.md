@@ -10,16 +10,22 @@
 
 ### 0.1 数据范围
 
-| 基准 | 纳入的运行 | 说明 |
-|---|---|---|
-| SWE-bench Pro HARD-51 | **v4**：`merged_v4__swepro__r1/r2/r3`；**Base**：`base__swepro__r1/r2/r3`；**E-SWE v2**：`e_swe_v2__swepro__r1`；**Mixed**：`mixed__swepro__r1` | mini_toolcall（单个 bash 工具），250 步上限，50 分钟预算；agent 与 regrade 分成两个 job。51 道题都能起沙箱（env_error 为 0） |
-| HLE | **v4 实测判分**：`merged/hle/merged_v4__hle__s1`；对照 Base `base__hle__s1`、E-HLE `e_hle__hle__s1`、Mixed `mixed__hle__s1`、v3 `merged__hle__s1` | **本次已用 v4 实际判分结果，替换了 `failure_cases_v4.md` 里的 v3 代理。** v4 判分完成 2459/2500，1 题 pending（`674818a0d2dbfbb2e99bd257`，Math/exactMatch），40 题三轮后仍无预测 |
-| TB2（Terminus-2 / Harbor） | **v4 集群**：`merged/tb2/merged_v4__tb2__a1`（87/89 已判分，2 题还在写）、`__a2`（部分，46/58，仅作上下文）；**Base 集群**：`base__tb2__a1`、`__a2`（各 89/89）；**E-TB v2 / Mixed / v4**：Nebius 云上运行仍在跑，仅作上下文（§0.2、§6） | v4 a1 的 2 道未判分题（winning-avg-corewars、write-compressor）当作未完成；下面 v4 a1 口径按已判分的 87 题，成功率按 89 题分母报告 |
-| ASI-Bench B3（seed31415，opencode agent） | 四个模型的 agent 运行都在 RunPod 上（README §11 第 19 条），归档与评分在集群 `results/*/asi/` | harness/环境案例（§7.1）、E-ASI 的一个模型行为案例（§7.2）、v4 的 4 个案例（§7.3，S1–S4） |
+- **SWE-bench Pro HARD-51**
+  - 纳入的运行：**v4**：`merged_v4__swepro__r1/r2/r3`；**Base**：`base__swepro__r1/r2/r3`；**E-SWE v2**：`e_swe_v2__swepro__r1`；**Mixed**：`mixed__swepro__r1`
+  - 说明：mini_toolcall（单个 bash 工具），250 步上限，50 分钟预算；agent 与 regrade 分成两个 job。51 道题都能起沙箱（env_error 为 0）
+- **HLE**
+  - 纳入的运行：**v4 实测判分**：`merged/hle/merged_v4__hle__s1`；对照 Base `base__hle__s1`、E-HLE `e_hle__hle__s1`、Mixed `mixed__hle__s1`、v3 `merged__hle__s1`
+  - 说明：**本次已用 v4 实际判分结果，替换了 `failure_cases_v4.md` 里的 v3 代理。** v4 判分完成 2459/2500，1 题 pending（`674818a0d2dbfbb2e99bd257`，Math/exactMatch），40 题三轮后仍无预测
+- **TB2（Terminus-2 / Harbor）**
+  - 纳入的运行：**v4 集群**：`merged/tb2/merged_v4__tb2__a1`（89/89）、`__a2`（截止时未跑完，不计入，仅作上下文）；**Base 集群**：`base__tb2__a1`、`__a2`（各 89/89）；**Nebius 同条件运行**（Base、E-TB v2、Mixed、v4）见 §0.2、§6
+  - 说明：快照时 v4 a1 还有 2 道题（winning-avg-corewars、write-compressor）没判分，最终两题都是 timeout；下面的案例按快照时已判分的 87 题分析，成功率按 89 题分母报告（与最终结果相同）
+- **ASI-Bench B3（seed31415，opencode agent）**
+  - 纳入的运行：四个模型的 agent 运行都在 RunPod 上（README §11 第 19 条），归档与评分在集群 `results/*/asi/`
+  - 说明：harness/环境案例（§7.1）、E-ASI 的一个模型行为案例（§7.2）、v4 的 4 个案例（§7.3，S1–S4）
 
-### 0.2 云上运行的地位
+### 0.2 云上（Nebius）运行的地位
 
-TB2 的 E-TB v2、Mixed、以及 v4 的第二条云上运行放在 Nebius VM（8×H100，Docker 原生后端），到快照时都没跑完（base_cloud a1 82/89、a2 71/89；merged_v4_cloud a1 58/89；e_tb_v2_cloud a1 71/89；mixed_cloud a1 84/89）。它们**只作为上下文**出现在个别案例里，不进入主计数，因为分母不全、与集群后端不同条件（Docker vs 打补丁的 singularity）。
+TB2 的 Nebius VM 运行（8×H100，Docker 原生后端；Base 2 次、E-TB v2、Mixed、v4 各 1 次）是 README §8 主表用的同条件比较，最终结果见 §6。本文 §2.3 和 §5 的逐题案例写于 01:00 EDT 的快照，当时云上运行都没跑完（base_cloud a1 82/89、a2 71/89；merged_v4_cloud a1 58/89；e_tb_v2_cloud a1 71/89；mixed_cloud a1 84/89），所以 TB2 案例用的是集群运行（Docker vs 打补丁的 singularity，条件不同），云上运行只在个别案例中作上下文。
 
 ### 0.3 缩写与根因类别
 
@@ -153,7 +159,7 @@ TB2 的 E-TB v2、Mixed、以及 v4 的第二条云上运行放在 Nebius VM（8
 
 ### 2.3 TB2（v4 集群 a1 对 Base 集群 a1/a2）
 
-成功率（reward=1 的 trial / 89）：**Base a1 42.7%（38/89）、a2 40.4%（36/89）；v4 a1 38.2%（34/89，已判分 87 题，2 题还在写）**。v4 a2 为部分运行（已判分 46/58，22 成功），只作上下文。
+成功率（reward=1 的 trial / 89）：**Base a1 42.7%（38/89）、a2 40.4%（36/89）；v4 a1 38.2%（34/89；快照后补完的 2 题均为 timeout）**。v4 a2 截止时未跑完，不计入，只作上下文（快照时已判分 46/58，22 成功）。
 
 逐题配对（v4 a1 vs Base，McNemar 不一致对）：vs Base a1 = 12 : 8（Base 独赢 : v4 独赢），vs Base a2 = 12 : 10，都不显著。方向与 SWE/HLE 一致（v4 略低于 Base）。
 
@@ -478,7 +484,7 @@ Nebius 上的运行全部完成后（README §11 第 21 条），同一台 8×H1
   ```
 - **根因**：MODEL（上下文超限是模型行为，题目要求把这一类计为模型失败）。这里只列 E-ASI 一例；Base 的 4 例作对照。
 
-### 7.3 v4 的 ASI 案例（评分完成后补写）
+### 7.3 v4 的 ASI 案例
 
 v4 的 ASI B3 为 7.53（60 题，无效题计 0），Base 10.03，v4 − Base −2.50 [−6.79, +2.52]，不显著；E-ASI 7.75、Mixed 7.39（README §8.2）。
 
@@ -549,13 +555,11 @@ v4 的 ASI B3 为 7.53（60 题，无效题计 0），Base 10.03，v4 − Base �
 - **已用实测、非代理**：
   - SWE：v4 r1/r2/r3 全部 trial（agent + regrade），Base 3 次，E2/Mixed 各 1 次。
   - HLE：**v4 实际判分**（`merged_v4__hle__s1`，2459/2500 判分，1 pending、40 无预测），替换了 `failure_cases_v4.md` 的 v3 代理。所有配对统计用 `summarize.py compare --bench hle`（env=zero，10000 bootstrap，seed 0）。
-  - TB2：v4 集群 a1（87/89 判分），对照 Base 集群 a1/a2（各 89/89）。
-  - ASI harness：Base/E-ASI/Mixed 的 RunPod pod2 归档。
-- **仍是代理 / 部分 / 待补**：
+  - TB2：v4 集群 a1（快照时 87/89 判分，最终 89/89），对照 Base 集群 a1/a2（各 89/89）；Nebius 同条件运行全部完成（§6）。
+  - ASI：四个模型在 RunPod（pod1、pod2）上的运行归档，以及集群上的本地评分（§7）。
+- **仍是代理或部分数据**：
   - HLE 的 v3 列只作对照（去掉 E-TB v2 的消融）。
-  - TB2 v4 a1 的 2 道题（winning-avg-corewars、write-compressor）未判分，按未完成处理；v4 a2 为部分运行，只作上下文。Base 的 TB2 取消计数因日志时间差不可比（§2.3 脚注）。
-  - TB2 的 E-TB v2 / Mixed / v4 云上运行未跑完，只作方向性上下文（§6），不进主计数。
-  - **ASI 的 v4 模型案例未写**（§7.3 占位），v4 评分完成后补。
+  - TB2 v4 a1 的 2 道题（winning-avg-corewars、write-compressor）快照时未判分，没有做逐题分析（最终都是 timeout）；v4 a2 为部分运行，只作上下文。Base 的 TB2 取消计数因日志时间差不可比（§2.3 脚注）。
 - **每个数字都来自本轮只读抽查**。未能核实项：
   1. SWE 的空补丁（A1–A6）内容是否正确无法复评（只读，不能重 regrade）。
   2. C4 的"整个最后一个文件都没应用"是据 C3 推断，未在容器内复现。

@@ -2,40 +2,67 @@
 
 > 状态：已完成（2026-10-16）。所有结果表格都由 `analysis/make_tables.py` 从逐任务结果（`results/**/*.jsonl`）重新生成，`analysis/readme_results.py` 把它们复制进 §8。
 >
-> 代码仓库：<https://github.com/eh3323/qwen36-moe-merge> · 一页报告：[`report.md`](report.md)（PDF：[`report.pdf`](report.pdf)） · 失败案例：[`analysis/failure_cases.md`](analysis/failure_cases.md)
+> 代码仓库：<https://github.com/eh3323/qwen36-moe-merge> · 一页报告：[`report.pdf`](report.pdf)（源文件 [`report.md`](report.md)） · 失败案例：[`analysis/failure_cases.md`](analysis/failure_cases.md)
+
+## 术语与模型版本
+
+| 名称 | 含义 |
+|---|---|
+| **Base** | 原始发布权重 Qwen3.6-35B-A3B @995ad96e，未做任何微调 |
+| **专家**（E-xxx） | 针对单个 benchmark 训练的 LoRA adapter，挂在 Base 上使用 |
+| E-SWE / E-TB / E-ASI / E-HLE | 分别针对 SWE-bench Pro / Terminal-Bench 2.0 / ASI-Bench / HLE |
+| 专家的 **v1 / v2** | 同一专家的训练数据版本：v1 测试表现差，换数据重训得到 v2 |
+| **合版**（merge） | 把多个专家的权重增量 ΔW 合成一个模型；本项目用 TIES |
+| **Merged v3 / v4** | 合版模型的编号，组成见下表；**v4 是最终提交的模型** |
+| **Mixed** | 对照组：把各专家的训练数据合在一起训练的单个 LoRA，不经过合版 |
+| **折叠**（folded） | 把单个 LoRA 加回基座得到的完整权重（`merge_and_unload`），只涉及一个 adapter |
+
+**合版的各个版本**。v3、v4 的编号延续了合版配置的迭代次序（前两次只有配置名），与专家的 v1 / v2 无关。
+
+| 合版 | 包含的专家 | 状态 |
+|---|---|---|
+| 第 1 次：`ties_l1_d0.5` | E-SWE v1 + E-TB v1 + E-ASI + E-HLE | 只用于在开发集上选超参，没有生成模型 |
+| 第 2 次：`ties_l1_d0.5_sweV2` | E-SWE **v2** + E-TB v1 + E-ASI + E-HLE | 预注册；E-TB v1 被剔除后放弃，未评测 |
+| **Merged v3** | E-SWE v2 + E-ASI + E-HLE（去掉 E-TB） | 消融，只评 HLE |
+| **Merged v4（最终）** | E-SWE v2 + E-TB **v2** + E-ASI + E-HLE | 四项全部评测 |
+
+**融合程度**（所有版本相同，`configs/merge/ties.yaml`）：
+- 每个专家、每个模块只保留幅值最大的 50% 元素（density 0.5），其余置零；
+- 同一位置按符号投票，只对与多数同号的专家取平均（不是相加），各专家权重相同；
+- 缩放 λ=1，即合并后的增量原样加回基座；
+- 只合并 LoRA 覆盖的 250 个共享模块（注意力、Gated DeltaNet、shared expert）。256 个 routed experts 和 router 与 Base 完全相同；
+- 在开发集上，第 1 次合版平均保留了单个专家 val loss 降幅的 83%（§3）。v4 在测试集上的表现见 §8。
 
 ## 0. 速览
 
-**主结果**：最终合版模型 Merged v4 与本次实测 Base 的对比。宏平均 = 四项百分制主指标等权平均；Δ 的 95% CI 用同一批任务的配对 bootstrap 计算（§9）。
+**主结果**：最终合版模型 v4 与本次实测 Base 的对比。宏平均 = 四项百分制主指标等权平均；Δ 的单位是百分点，95% CI 用同一批任务的配对 bootstrap 计算（§9）。
 
-| Benchmark（主指标） | Base | Merged v4 | Δ（v4 − Base，pp） | 95% CI |
-|---|---|---|---|---|
-| SWE-bench Pro HARD-51（resolved %，3 次均值 ± std） | 21.57 ± 5.19 | 16.34 ± 4.93 | −5.23 | [−12.42, +1.31] |
-| Terminal-Bench 2.0（成功率 %，Nebius 同条件运行） | 44.94 ± 3.18（2 次） | 41.57（1 次） | −3.37 | [−8.99, +2.25] |
-| HLE（准确率 %，n=2500） | 20.80 | 19.21 | −1.60 | [−3.16, −0.08] |
-| ASI-Bench B3（0–100） | 10.03 | 7.53 | −2.50 | [−6.79, +2.52] |
-| **宏平均** | **24.33** | **21.16** | **−3.18** | **[−5.75, −0.67]** |
+| Benchmark | 主指标 | Base | v4 | Δ（v4 − Base） | 95% CI |
+|---|---|---|---|---|---|
+| SWE-bench Pro HARD-51 | resolved % | 21.57 ± 5.19（3 次） | 16.34 ± 4.93（3 次） | −5.23 | [−12.42, +1.31] |
+| Terminal-Bench 2.0 | 成功率 % | 44.94 ± 3.18（2 次） | 41.57（1 次） | −3.37 | [−8.99, +2.25] |
+| HLE（n=2500） | 准确率 % | 20.80 | 19.21 | −1.60 | [−3.16, −0.08] |
+| ASI-Bench B3 | 得分（0–100） | 10.03 | 7.53 | −2.50 | [−6.79, +2.52] |
+| **宏平均** | | **24.33** | **21.16** | **−3.18** | **[−5.75, −0.67]** |
 
-- TB2 把集群和 Nebius 的运行合在一起：Base 43.26 ± 2.83（4 次），v4 39.89 ± 2.38（2 次），Δ −3.37 [−8.99, +1.97]（§8.4）。
-- 对照：v4 相对 Mixed（数据并集上训练的单个 LoRA）宏平均 +4.16 [+1.12, +7.28]，p=0.006；Mixed 相对 Base −7.32 [−10.65, −4.10]（§8.2）。
-
+- TB2 一行只用 Nebius VM 上同条件的运行。把集群上的运行也算进来：Base 43.26 ± 2.83（4 次），v4 39.89 ± 2.38（2 次），Δ −3.37 [−8.99, +1.97]（§8.4）。
+- 对照：v4 相对 Mixed 宏平均 +4.16 [+1.12, +7.28]，p=0.006；Mixed 相对 Base −7.32 [−10.65, −4.10]（§8.2）。
 - **目标**：宏平均 +3pp，+5pp 为优秀参考。这是题目给出的挑战目标，不是已验证能够达到的门槛。结论：**未达到**。v4 相对 Base 的宏平均为 −3.18（p=0.012），四项都低于 Base，其中 HLE 显著；单项退步照实列出（§8、§10）。
-- **最终模型**：v4 = E-SWE v2、E-TB v2、E-ASI、E-HLE 四个 LoRA 专家的 TIES 合版（density 0.5，λ=1，`configs/merge/ties_v4.yaml`）。v4 在 2026-10-15 01:45 EDT 定稿，当时 v3 和 v4 都**还没有任何测试分数**。之前的迭代中有几步看过测试结果（§4）。
+- **最终模型**：v4 = E-SWE v2、E-TB v2、E-ASI、E-HLE 四个 LoRA 专家的 TIES 合版（`configs/merge/ties_v4.yaml`）。v4 在 2026-10-15 01:45 EDT 定稿，当时 v3 和 v4 都**还没有任何测试分数**。之前的迭代中有几步看过测试结果（§4）。
 - **已确立的发现**：
   1. E-TB v1 在 TB2 上显著差于 Base（不一致对 17:2，McNemar p≈0.0007），已从合版中剔除。
   2. E-SWE v1 学到了教师的 OpenHands 风格，但没有学会根据测试结果修正。
   3. Terminus-2 存在一个上下文溢出后的摘要死循环，这是 harness 层面的失败模式。
   4. Base 在 HLE 上严重过度自信：平均自报置信度 97.3%，准确率 20.8%。
 
-| 项目 | 内容 |
-|---|---|
-| 基座 | [Qwen/Qwen3.6-35B-A3B](https://huggingface.co/Qwen/Qwen3.6-35B-A3B) @ `995ad96eacd98c81ed38be0c5b274b04031597b0`（MoE：总参数约 35B，每次激活约 3B；Apache-2.0）。没有降到 7B，理由见 §5 |
-| 专家 | 每个 benchmark 一个 LoRA 专家（r=32，每个约 1500 万训练 token）。合版用 E-SWE v2 / E-TB v2 / E-ASI / E-HLE；E-SWE v1、E-TB v1 是历史版本 |
-| 合版 | 在稠密 ΔW 空间合并：TIES（最终）。18 个候选（Base、4 个单专家、Mixed，以及 12 个 Linear / TIES / DARE 合版）在独立开发集的 val loss 上比较（§3） |
-| 对照 | Mixed：用专家训练数据的并集、相同超参训练的单个 LoRA（数据版本见 §2） |
-| 评测 | SWE-bench Pro HARD-51、Terminal-Bench 2.0（Harbor + Terminus-2）、HLE（2500 题，完整多模态）、ASI-Bench seed31415 B3 |
-| 硬件 | NYU Torch 集群：NVIDIA H200 141GB；E-TB v2 的训练用 B200，部分评测作业用 RTX PRO 6000 96GB |
-| 模型权重 | Hugging Face：LoRA 专家 [eh3323/Qwen3.6-35B-A3B-apex-lora-experts](https://huggingface.co/eh3323/Qwen3.6-35B-A3B-apex-lora-experts)，最终合版 [eh3323/Qwen3.6-35B-A3B-apex-merged-v4](https://huggingface.co/eh3323/Qwen3.6-35B-A3B-apex-merged-v4)。revision、merge recipe 和加载方法见 §13 与 [`models/README.md`](models/README.md) |
+**实验概要**：
+- **基座**：[Qwen/Qwen3.6-35B-A3B](https://huggingface.co/Qwen/Qwen3.6-35B-A3B) @ `995ad96eacd98c81ed38be0c5b274b04031597b0`。MoE，总参数约 35B，每个 token 激活约 3B，Apache-2.0。没有降到 7B，理由见 §5。
+- **专家**：每个 benchmark 一个 LoRA 专家（r=32，每个约 1500 万训练 token）。合版用 E-SWE v2 / E-TB v2 / E-ASI / E-HLE；E-SWE v1、E-TB v1 是历史版本。
+- **合版**：在稠密 ΔW 空间合并，最终用 TIES。超参从 18 个候选（Base、4 个单专家、Mixed，以及 12 个 Linear / TIES / DARE 合版）中按独立开发集的 val loss 选出（§3）。
+- **对照**：Mixed，用专家训练数据的并集、相同超参训练的单个 LoRA（数据版本见 §2.1）。
+- **评测**：SWE-bench Pro HARD-51、Terminal-Bench 2.0（Harbor + Terminus-2）、HLE（2500 题，完整多模态）、ASI-Bench seed31415 B3。
+- **硬件**：NYU Torch 集群的 H200 141GB（E-TB v2 训练用 B200，部分评测用 RTX PRO 6000 96GB）；另租 RunPod 2×H200（ASI）和 Nebius 8×H100（TB2）。
+- **模型权重**：LoRA 专家 [eh3323/Qwen3.6-35B-A3B-apex-lora-experts](https://huggingface.co/eh3323/Qwen3.6-35B-A3B-apex-lora-experts)，最终合版 [eh3323/Qwen3.6-35B-A3B-apex-merged-v4](https://huggingface.co/eh3323/Qwen3.6-35B-A3B-apex-merged-v4)。revision、merge recipe 和加载方法见 §13 与 [`models/README.md`](models/README.md)。
 
 ## 1. 研究问题
 
@@ -48,19 +75,20 @@
 
 ### 2.1 模型
 
-| 模型 | 训练数据（条数 / 训练 token） | 是否进入最终合版 | 说明 |
-|---|---|---|---|
-| Base | — | — | Qwen3.6-35B-A3B @995ad96e |
-| E-SWE v1（历史） | nebius SWE-rebench-OpenHands + SWE-Hero，只有 Python（432 / 15.05M） | 否 | 只跑了 SWE r1（41 道有效题） |
-| **E-SWE v2** | nvidia/Open-SWE-Traces 的 mini-swe-agent 轨迹，Go / TS+JS / Python（383 / 14.97M） | **是** | 配方与 v1 相同，只换数据（`data/README.md` §9） |
-| E-TB v1（历史） | Nemotron-Terminal-Corpus + OpenThoughts-Agent（973 / 15.02M） | 否 | TB2 a1 上显著退步后剔除（§4） |
-| **E-TB v2** | TermGrade 中经 verifier 判定通过的 Terminus-2 轨迹，按轮展开（1,215 / 15.02M） | **是** | 修正了训练与推理的 thinking 格式不一致（`data/README.md` §10） |
-| **E-ASI** | Nemotron-Terminal 科学计算子集 + jupyter-agent（868 / 14.93M） | **是** | |
-| **E-HLE** | Nemotron-Math-v2 AoPS + Nemotron-Science + OpenScienceReasoning-2（1838 / 15.1M） | **是** | 纯文本 QA，HLE 官方答案格式 |
-| Mixed（对照） | E-SWE v1 + E-TB v1 + E-ASI + E-HLE 四份数据的并集（约 60M） | — | 训练时 v2 数据还不存在，所以用的是 **v1** 的 SWE 和 TB 数据（`configs/train/mixed.yaml`） |
-| Merged v3（消融） | TIES：E-SWE v2 + E-ASI + E-HLE | — | `configs/merge/ties_v3.yaml`，只评 HLE |
-| **Merged v4（最终）** | TIES：E-SWE v2 + E-TB v2 + E-ASI + E-HLE | — | `configs/merge/ties_v4.yaml`，名称 `ties_l1_d0.5_v4` |
-| `ties_l1_d0.5_sweV2`（预注册，未评测） | TIES：E-SWE v2 + E-TB v1 + E-ASI + E-HLE | — | `configs/merge/ties_swe_v2.yaml`；E-TB v1 被剔除后改为 v3 |
+| 模型 | 训练数据 | 条数 / token | 进入 v4 | 备注 |
+|---|---|---|---|---|
+| Base | — | — | — | Qwen3.6-35B-A3B @995ad96e |
+| E-SWE v1（历史） | SWE-rebench-OpenHands + SWE-Hero（只有 Python） | 432 / 15.05M | 否 | 只跑了 SWE r1 |
+| **E-SWE v2** | Open-SWE-Traces 的 mini-swe-agent 轨迹（Go / TS / JS / Python） | 383 / 14.97M | **是** | 配方同 v1，只换数据 |
+| E-TB v1（历史） | Nemotron-Terminal-Corpus + OpenThoughts-Agent | 973 / 15.02M | 否 | TB2 上显著退步，已剔除 |
+| **E-TB v2** | TermGrade 中 verifier 判定通过的 Terminus-2 轨迹 | 1,215 / 15.02M | **是** | 按轮展开，修正 thinking 格式 |
+| **E-ASI** | Nemotron-Terminal 科学计算子集 + jupyter-agent | 868 / 14.93M | **是** | |
+| **E-HLE** | Nemotron-Math-v2 AoPS、Nemotron-Science、OpenScienceReasoning-2 | 1,838 / 15.1M | **是** | 纯文本 QA，HLE 答案格式 |
+| Mixed（对照） | E-SWE v1、E-TB v1、E-ASI、E-HLE 四份数据的并集 | 约 60M | — | 用的是 v1 数据，见下 |
+
+- 数据来源、许可证和教师模型见 §7 与 `data/README.md`（E-SWE v2 见 §9，E-TB v2 见 §10）。
+- **Mixed 用 v1 数据**：Mixed 训练时 v2 数据还不存在，所以 SWE 和 TB 部分用的是 v1 数据（`configs/train/mixed.yaml`）。因此 v4 与 Mixed 的比较只在 ASI 和 HLE 上是同数据对照，SWE 和 TB 上还混有数据版本的差异（§11 第 9 条）。
+- 合版模型（v3、v4 和两个未评测的合版配置）的组成见开头的“术语与模型版本”。配置分别是 `configs/merge/ties_v3.yaml`、`ties_v4.yaml`（模型名 `ties_l1_d0.5_v4`）和 `ties_swe_v2.yaml`。
 
 ### 2.2 训练配置
 
@@ -92,20 +120,37 @@ LoRA 目标模块共 250 个，约 3830 万参数：
 - `metrics.jsonl`（逐步的 loss、学习率、tok/s、显存和 val loss）、`throughput.json`；
 - Slurm 日志 `lora-<expert>-<job>.out`、`gpuutil-<job>.csv`（nvidia-smi 采样）、`checkpoints/*.state.json`（保存过的 checkpoint 的步数和累计 token）、`adapter_config.json`、`lora_targets.txt`。
 
-下表由 `logs/train/summary.csv` 整理（每次运行一行，列比下表全）；loss 曲线见 `curves/<run_id>.png`。
+下面两张表由 `logs/train/summary.csv` 整理（每次运行一行，列比下表全）；loss 曲线见 `curves/<run_id>.png`。
 
 公共设置：1 张 GPU，种子 1234，LoRA r=32 / α=64 / dropout 0.05，峰值 lr 1e-4（3% warmup 后 cosine 到 1e-5），2 个 epoch，每 10 步存一次 checkpoint、只保留最近 2 个，最终取 `adapter_final`。adapter 都是 250 个模块、38,338,560 个参数，文件约 153 MB。
 
-| 模型 | run_id | GPU / 节点 / Slurm job | max_seq_len | 墙钟（min） | GPU 小时 | 优化步数（warmup） | 训练 token（2 epoch） | 吞吐中位数（tok/s） | 峰值显存（GiB） | train loss（末 10 步均值） | 域内 val loss（第 0 步 → 最终） |
-|---|---|---|---|---|---|---|---|---|---|---|---|
-| E-SWE v1 | `e_swe_r32` | H200 / gh105 / 19741877 | 64K | 85.7 | 1.43 | 124（4） | 30.11M | 7,923 | 96.3 | 0.1876 | e_swe：0.3468 → 0.1796 |
-| E-SWE v2 | `e_swe_v2_r32` | H200 / gh101 / 19816112 | 64K | 90.6 | 1.51 | 130（4） | 29.93M | 7,533 | 96.3 | 0.5365 | e_swe_v2：0.6806 → 0.5103 |
-| E-TB v1 | `e_tb_r32` | H200 / gh105 / 19742097 | 32K | 75.2 | 1.25 | 116（3） | 30.05M | 8,482 | 82.8 | 0.3495 | e_tb：0.5280 → 0.3128 |
-| E-TB v2 | `e_tb_v2_r32` | B200 / gb004 / 19829387 | 64K | 63.0 | 1.05 | 116（3） | 30.05M | 10,147 | 96.3 | 0.3657 | e_tb_v2_turns：0.4831 → 0.4027 |
-| E-ASI | `e_asi_r32` | H200 / gh105 / 19742098 | 32K | 76.1 | 1.27 | 125（4） | 29.86M | 8,407 | 82.8 | 0.3201 | e_asi：0.5849 → 0.3397 |
-| E-HLE | `e_hle_r32` | H200 / gh115 / 19752117 | 32K | 76.0 | 1.27 | 118（4） | 30.25M | 8,239 | 82.9 | 0.7061 | e_hle：0.7691 → 0.6816 |
-| Mixed | `mixed_r32` | H200 / gh116 / 19752119 | 64K | 273.0 | 4.55 | 462（14） | 120.26M | 8,358 | 96.3 | 0.4811 | e_swe 0.3468 → 0.1813；e_tb 0.5281 → 0.3056；e_asi 0.5851 → 0.3315；e_hle 0.7691 → 0.6811 |
-| **合计** | | | | **739.5** | **12.32** | | | | | | |
+**资源与时长**
+
+| 模型 | run_id | GPU · 节点 | Slurm job | 序列长度 | 墙钟（min） | GPU 小时 | 步数（warmup） | 训练 token | 吞吐（tok/s） | 峰值显存（GiB） |
+|---|---|---|---|---|---|---|---|---|---|---|
+| E-SWE v1 | `e_swe_r32` | H200 · gh105 | 19741877 | 64K | 85.7 | 1.43 | 124（4） | 30.11M | 7,923 | 96.3 |
+| E-SWE v2 | `e_swe_v2_r32` | H200 · gh101 | 19816112 | 64K | 90.6 | 1.51 | 130（4） | 29.93M | 7,533 | 96.3 |
+| E-TB v1 | `e_tb_r32` | H200 · gh105 | 19742097 | 32K | 75.2 | 1.25 | 116（3） | 30.05M | 8,482 | 82.8 |
+| E-TB v2 | `e_tb_v2_r32` | B200 · gb004 | 19829387 | 64K | 63.0 | 1.05 | 116（3） | 30.05M | 10,147 | 96.3 |
+| E-ASI | `e_asi_r32` | H200 · gh105 | 19742098 | 32K | 76.1 | 1.27 | 125（4） | 29.86M | 8,407 | 82.8 |
+| E-HLE | `e_hle_r32` | H200 · gh115 | 19752117 | 32K | 76.0 | 1.27 | 118（4） | 30.25M | 8,239 | 82.9 |
+| Mixed | `mixed_r32` | H200 · gh116 | 19752119 | 64K | 273.0 | 4.55 | 462（14） | 120.26M | 8,358 | 96.3 |
+| **合计** | | | | | **739.5** | **12.32** | | | | |
+
+**loss**（train loss 为最后 10 步的均值；val loss 为域内验证集上第 0 步与最终的值）
+
+| 模型 | train loss | 验证集 | val loss 第 0 步 | val loss 最终 |
+|---|---|---|---|---|
+| E-SWE v1 | 0.1876 | `e_swe` | 0.3468 | 0.1796 |
+| E-SWE v2 | 0.5365 | `e_swe_v2` | 0.6806 | 0.5103 |
+| E-TB v1 | 0.3495 | `e_tb` | 0.5280 | 0.3128 |
+| E-TB v2 | 0.3657 | `e_tb_v2_turns` | 0.4831 | 0.4027 |
+| E-ASI | 0.3201 | `e_asi` | 0.5849 | 0.3397 |
+| E-HLE | 0.7061 | `e_hle` | 0.7691 | 0.6816 |
+| Mixed | 0.4811 | `e_swe` | 0.3468 | 0.1813 |
+| Mixed | | `e_tb` | 0.5281 | 0.3056 |
+| Mixed | | `e_asi` | 0.5851 | 0.3315 |
+| Mixed | | `e_hle` | 0.7691 | 0.6811 |
 
 - **口径**：墙钟 = Slurm 作业时长（sacct Elapsed，含模型加载、val 和保存）；GPU 小时来自 `logs/resources/gpu_hours.csv`（sbatch 脚本内计时，与墙钟差几秒）。训练 token 是 2 个 epoch 的总数，每个 epoch 约 15M（Mixed 约 60M）。吞吐是第 4 步之后各步 tok/s 的中位数。峰值显存是 PyTorch 的 max allocated（reserved 和 nvidia-smi 峰值见 `summary.csv`）。
 - **验证集**：E-SWE v1、E-TB v1、E-ASI 训练时 HLE 验证集还没建好，这三次只有 SWE / TB / ASI 三个验证集，没有 HLE val loss。E-HLE 和 Mixed 有 4 个；两个 v2 专家另有自己的第 5 个验证集（`e_swe_v2`、`e_tb_v2_turns`）。
@@ -142,8 +187,8 @@ LoRA 折叠进基座后的完整权重约 67GB（bf16），合版模型也是这
 
 | 方法 | 稀疏化 | 合并 |
 |---|---|---|
-| Linear（任务算术） | 无 | τ = λ Σ w_t τ_t；λ=1/K 即简单平均 |
-| TIES | 每个专家、每个模块保留幅值 top-density 的元素 | 符号投票 γ = sign(Σ w_t τ̂_t)；只对与 γ 同号的专家取加权平均（disjoint mean），再乘 λ |
+| Linear（任务算术） | 无 | τ = λ Σ w_t τ_t（λ=1/K 即简单平均） |
+| TIES | 每个专家每个模块保留幅值前 density 的元素 | 符号投票后只对同号专家加权平均，再乘 λ |
 | DARE-Linear / DARE-TIES | 以概率 p 随机丢弃，幸存元素放大 1/(1−p) | 同 Linear / TIES |
 
 **参数冲突的处理（TIES）**：
@@ -195,14 +240,20 @@ benchmark 上的合版消融只做了 v3 与 v4 在 HLE 上的对比（v4 = v3 �
 
 完整时间线见 `logs/worklog.md`。下表列出所有影响最终模型的决定，以及当时是否看过测试集结果。
 
-| 时间（EDT） | 决策 | 依据 | 是否用到测试结果 |
+| 时间（EDT） | 决策 | 依据 | 用到测试结果 |
 |---|---|---|---|
-| 2026-10-13 14:50–15:10 | 方案定为 4 个专家 + 合版，与单模型混训对照；每个专家约 1500 万 token | 算力与时间预算 | 否 |
-| 2026-10-14 ~11:50（选择作业 19807941 结束） | 合版超参定为 TIES、λ=1、density 0.5 | 开发集 val loss 保留率（§3），当时用的是 E-SWE v1 / E-TB v1；与 `ties_l1_d0.2` 实际打平，按平均 val loss 决出 | 否 |
-| 2026-10-14 ~13:10–14:25 | 用新数据训练 E-SWE v2，并在合版中替换 E-SWE v1（`ties_swe_v2.yaml`） | E-SWE v1 在 SWE r1 上没有超过 Base（5:1，不显著），轨迹分析见 §10 | **是**：换数据的动机来自测试结果 |
-| 2026-10-14 ~18:00 | 合版去掉 E-TB v1。预注册的 `ties_l1_d0.5_sweV2` 不再评测，改为 v3 | TB2 a1 上 E-TB v1 显著差于 Base（不一致对 17:2，McNemar p≈0.0007） | **是** |
-| 2026-10-14 ~18:15 | 新增 v4 = v3 + E-TB v2（v4 的评测作业在 E-TB v2 训练前就已提交，依赖训练完成；E-TB v2 于 21:08 训完，在所有验证集上 val loss 都下降，21:10 构建 v4） | E-TB v2 的设计（修 thinking 不一致）；训完后的验证集 loss | 否。但训练 E-TB v2 的动机来自 E-TB v1 的测试结果 |
-| 2026-10-15 01:45 | **最终合版定为 v4**。v3 只保留 HLE 作对照；取消 v3 的 TB2/SWE/ASI 评测和 E-SWE v1 的 SWE 重复运行 | 算力与时间：H200 排队太长，按原计划比较 v3/v4 会把最终结果拖到 16 号以后 | **否**：当时 v3 和 v4 都没有任何测试分数（HLE 只完成了生成，还没判分） |
+| 10-13 14:50 | 4 个专家 + 合版，混训单模型作对照 | 算力与时间预算 | 否 |
+| 10-14 ~11:50 | 合版超参定为 TIES、λ=1、density 0.5 | 开发集 val loss 保留率（§3）¹ | 否 |
+| 10-14 ~13:10 | 用新数据训练 E-SWE v2，替换 E-SWE v1 | E-SWE v1 在 SWE r1 没有超过 Base² | **是** |
+| 10-14 ~18:00 | 合版去掉 E-TB v1，改为 v3 | E-TB v1 在 TB2 上显著差于 Base³ | **是** |
+| 10-14 ~18:15 | 新增 v4 = v3 + E-TB v2⁴ | E-TB v2 修正了 thinking 格式 | 否（重训动机来自 E-TB v1 的测试） |
+| 10-15 01:45 | **最终模型定为 v4**，v3 只评 HLE | H200 排队太长，来不及比较 v3 / v4⁵ | **否**：v3 / v4 都还没有分数 |
+
+- ¹ 选择作业 19807941。当时的专家组合是 E-SWE v1 / E-TB v1；与 `ties_l1_d0.2` 实际打平，按平均 val loss 决出。
+- ² 不一致对 5:1，不显著，轨迹分析见 §10。新配置为 `ties_swe_v2.yaml`。
+- ³ TB2 a1，不一致对 17:2，McNemar p≈0.0007。预注册的 `ties_l1_d0.5_sweV2` 因此不再评测。
+- ⁴ v4 的评测作业在 E-TB v2 训练前就已提交，依赖训练完成。E-TB v2 于 21:08 训完，在所有验证集上 val loss 都下降，21:10 构建 v4。
+- ⁵ 按原计划比较 v3 / v4 会把最终结果拖到 16 号以后。同时取消 v3 的 TB2 / SWE / ASI 评测和 E-SWE v1 的 SWE 重复运行。决定时 HLE 只完成了生成，还没有判分。
 
 **说明**：
 - `configs/merge/ties_v4.yaml` 的注释里写着原计划“按四项宏平均在 v3/v4 之间择优”。那样做属于 test-informed 选择。这个计划已被 10-15 01:45 的决定取代，没有执行。
@@ -232,12 +283,32 @@ benchmark 上的合版消融只做了 v3 与 v4 在 HLE 上的对比（v4 = v3 �
 
 所有版本在训练前锁定（2026-10-13，`configs/eval/benchmarks.yaml`），harness 参数集中在 `configs/eval/harness.env`。
 
-| Benchmark | 来源与版本 | Split / 任务 | 主指标 | Agent 与设置 |
+| Benchmark | 数据版本 | Split / 任务 | 主指标 | Agent / 评测器 |
 |---|---|---|---|---|
-| SWE-bench Pro v2-hard | `ScaleAI/SWE-bench_Pro` @2d52cb3d（config `hard`）；`scaleapi/SWE-bench_Pro-os` @66f92766 | HARD-51（`v2/hard51_ids.txt`，51 题） | resolved rate（官方 patch_replay 判分） | mini-swe-agent 2.4.6，`mini_toolcall.yaml`（单个 bash 工具），host 端驱动。每题最多 250 步、50 分钟（提前 60 s 软停，部分补丁照常判分）。Agent 阶段沙箱断网（`--net --network none`），判分阶段按协议联网。容器内存上限 4GB（题目设置） |
-| Terminal-Bench 2.0 | `laude-institute/terminal-bench-2` @2fd12b88（含 TB2.1 的任务修复）；Harbor @4778ceba | 89 个任务 | 成功率，Base 和最终模型取 5 次运行的均值 ± 标准差 | Terminus-2。3 小时超时，每个 trial 32 CPU / 48GB RAM（名义值，见 §11），T=1.0、top_p=0.95、top_k=20、max_tokens=80K（81920），256K 上下文。Terminus-2 的 `max_input_tokens`=262144−81920=180224 |
-| HLE | `cais/hle` @5a81a4c7 | test 全部 2500 题（含 342 道图像题，完整多模态，不做 text-only） | 准确率（n=2500，无预测计错）+ 校准误差 | 不用工具。官方 `hle_eval` @22ed3074 预测脚本。补丁只增加了：采样参数、请求超时（7200 s）、增量 checkpoint、记录 finish_reason 和 reasoning（不送给判分模型），以及冒烟测试用的 `--ids` 子集（`patches/hle_eval_apex.patch`）。T=1.0、top_p=0.95、top_k=20、presence_penalty=1.5，max_completion_tokens 81920。答案抽取和判分都用官方未修改的 `run_judge_results.py`，判分模型 o3-mini-2025-01-31 |
-| ASI-Bench | `apexin-ai/ASI-Bench` @8859f9b；`Apexintelligence-AI/ASI-Bench-seed31415` @0fa1421 | seed31415，B3 档，60 个实例 | B3 得分（0–100，各实例 final_score/max_score 的均值） | 官方 adapter `opencode_cli`（opencode 1.17.15），`linux_ns` 沙箱：用户/挂载/网络命名空间隔离，只有 loopback，经 Unix socket 访问模型。超时 10800 s。参考答案对 agent 隐藏，用 `asibench score --repo seed31415` 本地评分。13/60 个实例需要 LLM 判分，用官方设置的 GPT-5.5。这是**本地评分，不是官方分数** |
+| SWE-bench Pro v2-hard | `ScaleAI/SWE-bench_Pro` @2d52cb3d | HARD-51（51 题） | resolved rate | mini-swe-agent 2.4.6 |
+| Terminal-Bench 2.0 | `laude-institute/terminal-bench-2` @2fd12b88 | 89 个任务 | 成功率 | Harbor @4778ceba + Terminus-2 |
+| HLE | `cais/hle` @5a81a4c7 | test 全部 2500 题 | 准确率 + 校准误差 | 官方 `hle_eval` @22ed3074，不用工具 |
+| ASI-Bench | `ASI-Bench-seed31415` @0fa1421 | B3 档，60 个实例 | B3 得分（0–100） | `opencode_cli`（opencode 1.17.15） |
+
+**各 benchmark 的具体设置**：
+- **SWE-bench Pro**
+  - 数据另含 `scaleapi/SWE-bench_Pro-os` @66f92766（config `hard`）；任务清单 `v2/hard51_ids.txt`。
+  - 官方 patch_replay 判分。mini-swe-agent 用 `mini_toolcall.yaml`（单个 bash 工具），host 端驱动。
+  - 每题最多 250 步、50 分钟（提前 60 s 软停，已有补丁照常判分）。
+  - Agent 阶段沙箱断网（`--net --network none`），判分阶段按协议联网。容器内存上限 4GB（题目设置）。
+- **Terminal-Bench 2.0**
+  - 任务版本含 TB2.1 的任务修复。Base 和最终模型按题目要求取多次运行的均值 ± 标准差。
+  - 3 小时超时，每个 trial 32 CPU / 48GB RAM（名义值，见 §11）。
+  - T=1.0、top_p=0.95、top_k=20、max_tokens=80K（81920），256K 上下文；Terminus-2 的 `max_input_tokens` = 262144 − 81920 = 180224。
+- **HLE**
+  - 342 道图像题照常评测（完整多模态，不做 text-only）。无预测按错误计入。
+  - 补丁 `patches/hle_eval_apex.patch` 只增加：采样参数、请求超时（7200 s）、增量 checkpoint、记录 finish_reason 和 reasoning（不送给判分模型），以及冒烟测试用的 `--ids` 子集。
+  - T=1.0、top_p=0.95、top_k=20、presence_penalty=1.5，max_completion_tokens 81920。
+  - 答案抽取和判分都用官方未修改的 `run_judge_results.py`，判分模型 o3-mini-2025-01-31。
+- **ASI-Bench**
+  - 代码 `apexin-ai/ASI-Bench` @8859f9b。得分为各实例 final_score / max_score 的均值。
+  - `linux_ns` 沙箱：用户 / 挂载 / 网络命名空间隔离，只有 loopback，经 Unix socket 访问模型；超时 10800 s。实际评测在 RunPod 上进行，没有这层隔离（§11 第 19 条）。
+  - 参考答案对 agent 隐藏，用 `asibench score --repo seed31415` 本地评分；13/60 个实例需要 LLM 判分，用官方设置的 GPT-5.5。这是**本地评分，不是官方分数**。
 
 **所有模型在同一 benchmark 内的设置完全一致**：
 - 服务：vLLM 0.30.0，bf16，TP=1（多卡时做数据并行），`max_model_len`=262144，`--seed 0`，prefix caching；reasoning parser `qwen3`，tool parser `qwen3_coder`。
@@ -250,15 +321,18 @@ TB2 的设置对齐模型卡。凡是模型卡没有给出的设置（SWE、HLE�
 
 ## 7. 训练数据（详见 `data/README.md`）
 
-| 专家 | 来源（许可证 / 教师模型） | 条数 / 训练 token | 格式 |
-|---|---|---|---|
-| E-SWE v1 | nebius/SWE-rebench-openhands-trajectories（只取 resolved）+ nvidia/SWE-Hero（CC-BY-4.0 / Qwen3-Coder-480B） | 432 / 15.05M | mini_toolcall（单个 bash 工具） |
-| E-SWE v2 | nvidia/Open-SWE-Traces @1db67417 mini-swe-agent 轨迹（CC-BY-4.0 / Qwen3.8-27B thinking） | 383 / 14.97M | mini_toolcall |
-| E-TB v1 | nvidia/Nemotron-Terminal-Corpus（CC-BY-4.0 / DeepSeek-V3.2）+ OpenThoughts-Agent-SFT-100K（Apache-2.0 / GLM-4.7） | 973 / 15.02M | Terminus-2 JSON |
-| E-TB v2 | ai-and/termgrade-trajectories @7d584d63（Apache-2.0 / DeepSeek-V4-Pro、GLM-5.2、Qwen3.6-27B、Gemma-4-31B），只取 reward==1 | 1,215 / 15.02M（按轮展开；其中 label token 3.50M） | Terminus-2 JSON，按轮展开、与评测 prompt 逐字节一致 |
-| E-ASI | Nemotron-Terminal 的科学计算、数据科学、模型训练子集 + jupyter-agent（Apache-2.0 / Qwen3-Coder） | 868 / 14.93M | opencode 的 bash 工具调用 |
-| E-HLE | Nemotron-Math-v2 AoPS + Nemotron-Science-v1 + OpenScienceReasoning-2（CC-BY-4.0 / gpt-oss-120b、DeepSeek-R1） | 1838 / 15.1M | HLE 官方答案格式 |
+| 专家 | 数据集 | 许可证 | 教师模型 | 条数 / token | 格式 |
+|---|---|---|---|---|---|
+| E-SWE v1 | SWE-rebench-openhands-trajectories（只取 resolved）+ SWE-Hero | CC-BY-4.0 | Qwen3-Coder-480B | 432 / 15.05M | mini_toolcall |
+| E-SWE v2 | Open-SWE-Traces @1db67417（mini-swe-agent 轨迹） | CC-BY-4.0 | Qwen3.8-27B thinking | 383 / 14.97M | mini_toolcall |
+| E-TB v1 | Nemotron-Terminal-Corpus + OpenThoughts-Agent-SFT-100K | CC-BY-4.0 / Apache-2.0 | DeepSeek-V3.2 / GLM-4.7 | 973 / 15.02M | Terminus-2 JSON |
+| E-TB v2 | termgrade-trajectories @7d584d63（只取 reward==1） | Apache-2.0 | 4 个开源模型¹ | 1,215 / 15.02M² | Terminus-2 JSON，按轮展开 |
+| E-ASI | Nemotron-Terminal 科学计算子集 + jupyter-agent | Apache-2.0 | Qwen3-Coder | 868 / 14.93M | opencode bash 工具调用 |
+| E-HLE | Nemotron-Math-v2 AoPS、Nemotron-Science-v1、OpenScienceReasoning-2 | CC-BY-4.0 | gpt-oss-120b / DeepSeek-R1 | 1,838 / 15.1M | HLE 官方答案格式 |
 
+- 完整的数据集 id（含组织名）、revision 和许可证说明见 `data/README.md` §3。
+- ¹ DeepSeek-V4-Pro、GLM-5.2、Qwen3.6-27B、Gemma-4-31B。
+- ² 按轮展开后的条数，其中 label token 3.50M；格式与评测时的 prompt 逐字节一致。
 - **按 token 对齐，不按条数对齐**：每个专家约 1500 万训练 token，让各专家的优化量相同。agent 轨迹长，所以条数少。
 - **只用开源权重、宽松许可证的教师模型**。闭源 API 生成的轨迹、非商用许可证的数据、所有 HLE 衍生数据集都已排除。
 - **去污染**：
@@ -276,7 +350,7 @@ TB2 的设置对齐模型卡。凡是模型卡没有给出的设置（SWE、HLE�
 
 ### 8.1 分数矩阵
 
-主指标为百分制，env_error 按 0 分计入（§9）。多次运行时为均值 ± 标准差（ddof=1）及次数。TB2 只用 Nebius VM 上的运行（所有模型同一节点、同一设置，§11 第 21 条）；集群上的 TB2 运行见 8.3。“—”表示不在该模型的评测范围内。
+主指标为百分制，env_error 按 0 分计入（§9）。多次运行时为均值 ± 标准差（ddof=1）及次数。TB2 只用 Nebius VM 上的运行（所有模型同一节点、同一设置，§11 第 21 条）；集群上的 TB2 运行见下方列表和 8.4。“—”表示不在该模型的评测范围内。
 
 | Benchmark | Base | E-SWE v2 | E-TB v2 | E-ASI | E-HLE | Mixed | v4 |
 |---|---|---|---|---|---|---|---|
@@ -286,8 +360,15 @@ TB2 的设置对齐模型卡。凡是模型卡没有给出的设置（SWE、HLE�
 | ASI-Bench B3 | 10.03 (n=1) | — | — | 7.75 (n=1) | — | 7.39 (n=1) | 7.53 (n=1) |
 | **宏平均（4 项）** | **24.33** | — | — | — | — | **17.02** | **21.16** |
 
-- 不在矩阵中的运行：E-SWE v1 （历史）: SWE-Pro 9.80 (n=1); E-TB v1 （历史）: TB2 24.72 (n=1); v3 （历史）: HLE 17.36 (n=1); Base（集群 TB2）: TB2 41.57 ± 1.59 (n=2); v4（集群 TB2）: TB2 38.20 (n=1); Base（全部 TB2 运行）: TB2 43.26 ± 2.83 (n=4); v4（全部 TB2 运行）: TB2 39.89 ± 2.38 (n=2).
-- HLE 校准误差（官方 hle_eval，RMS，β=100）：Base 73.9, E-HLE 35.9, v3 （历史） 61.3, v4 64.3, Mixed 36.2.
+- 不在矩阵中的运行：
+  - E-SWE v1（历史）：SWE-Pro 9.80 (n=1)
+  - E-TB v1（历史）：TB2 24.72 (n=1)
+  - v3（历史）：HLE 17.36 (n=1)
+  - Base（集群 TB2）：TB2 41.57 ± 1.59 (n=2)
+  - v4（集群 TB2）：TB2 38.20 (n=1)
+  - Base（全部 TB2 运行）：TB2 43.26 ± 2.83 (n=4)
+  - v4（全部 TB2 运行）：TB2 39.89 ± 2.38 (n=2)
+- HLE 校准误差（官方 hle_eval，RMS，β=100）：Base 73.9, E-HLE 35.9, v3（历史） 61.3, v4 64.3, Mixed 36.2.
 
 ### 8.2 相对 Base 的差值（95% CI）
 
@@ -315,29 +396,31 @@ TB2 的设置对齐模型卡。凡是模型卡没有给出的设置（SWE、HLE�
 
 McNemar 精确检验只在两边每题都只有一个二元结果（单次运行）时给出。
 
-| 比较（B vs A） | Benchmark | 任务数 | A | B | Δ = B − A [95% CI], p | McNemar（A 独赢 : B 独赢） | env_error A / B | Δ（剔除 env_error） |
-|---|---|---|---|---|---|---|---|---|
-| v4 vs Base | Terminal-Bench 2.0 | 89 | 44.94 | 41.57 | −3.37 [−8.99, +2.25], p=0.263 | — | 6 / 0 | −3.61 [−9.64, +1.81], p=0.258 |
-| v4 vs Base | SWE-bench Pro HARD-51 | 51 | 21.57 | 16.34 | −5.23 [−12.42, +1.31], p=0.108 | — | 0 / 0 | −5.23 [−12.42, +1.31], p=0.108 |
-| v4 vs Base | HLE | 2499 | 20.81 | 19.21 | −1.60 [−3.16, −0.08], p=0.042 | 214:174, p=0.048 | 3 / 40 | −1.42 [−3.01, +0.12], p=0.078 |
-| v4 vs Base | ASI-Bench B3 | 60 | 10.03 | 7.53 | −2.50 [−6.79, +2.52], p=0.292 | — | 1 / 1 | −2.59 [−6.98, +2.70], p=0.297 |
-| Mixed vs Base | Terminal-Bench 2.0 | 89 | 44.94 | 30.34 | −14.61 [−23.60, −6.18], p=0.0006 | — | 6 / 0 | −16.87 [−25.90, −8.43], p<0.0002 |
-| Mixed vs Base | SWE-bench Pro HARD-51 | 51 | 21.57 | 13.73 | −7.84 [−17.65, +1.31], p=0.096 | — | 0 / 0 | −7.84 [−17.65, +1.31], p=0.096 |
-| Mixed vs Base | HLE | 2500 | 20.80 | 16.60 | −4.20 [−5.80, −2.60], p<0.0002 | 259:154, p<1e-6 | 3 / 6 | −4.21 [−5.78, −2.61], p<0.0002 |
-| Mixed vs Base | ASI-Bench B3 | 60 | 10.03 | 7.39 | −2.64 [−5.83, +0.39], p=0.088 | — | 1 / 2 | −2.73 [−5.99, +0.45], p=0.091 |
-| v4 vs Mixed | Terminal-Bench 2.0 | 89 | 30.34 | 41.57 | +11.24 [+3.37, +20.22], p=0.011 | 3:13, p=0.021 | 0 / 0 | +11.24 [+3.37, +20.22], p=0.011 |
-| v4 vs Mixed | SWE-bench Pro HARD-51 | 51 | 13.73 | 16.34 | +2.61 [−5.23, +10.46], p=0.567 | — | 0 / 0 | +2.61 [−5.23, +10.46], p=0.567 |
-| v4 vs Mixed | HLE | 2499 | 16.57 | 19.21 | +2.64 [+1.12, +4.16], p=0.001 | 154:220, p=7.6e-04 | 6 / 40 | +2.81 [+1.26, +4.36], p<0.0002 |
-| v4 vs Mixed | ASI-Bench B3 | 60 | 7.39 | 7.53 | +0.14 [−3.46, +4.67], p=0.990 | — | 2 / 1 | +0.14 [−3.62, +4.84], p=0.996 |
-| E-SWE v2 vs Base | SWE-bench Pro HARD-51 | 51 | 21.57 | 27.45 | +5.88 [−4.58, +16.34], p=0.239 | — | 0 / 0 | +5.88 [−4.58, +16.34], p=0.239 |
-| E-TB v2 vs Base | Terminal-Bench 2.0 | 89 | 44.94 | 38.20 | −6.74 [−14.61, +0.56], p=0.080 | — | 6 / 0 | −7.23 [−15.06, +0.00], p=0.074 |
-| E-ASI vs Base | ASI-Bench B3 | 60 | 10.03 | 7.75 | −2.29 [−7.33, +3.67], p=0.408 | — | 1 / 2 | −2.36 [−7.60, +4.00], p=0.416 |
-| E-HLE vs Base | HLE | 2500 | 20.80 | 16.92 | −3.88 [−5.48, −2.24], p<0.0002 | 263:166, p=3.0e-06 | 3 / 4 | −3.89 [−5.49, −2.29], p<0.0002 |
-| E-SWE v1 （历史） vs Base | SWE-bench Pro HARD-51 | 51 | 21.57 | 9.80 | −11.76 [−20.92, −3.27], p=0.005 | — | 0 / 10 | −12.20 [−23.58, −2.44], p=0.021 |
-| E-TB v1 （历史） vs Base（集群 TB2） | Terminal-Bench 2.0 | 89 | 41.57 | 24.72 | −16.85 [−26.40, −7.87], p<0.0002 | — | 12 / 3 | −19.08 [−29.61, −8.55], p=0.0006 |
-| v4（全部 TB2 运行） vs Base（全部 TB2 运行） | Terminal-Bench 2.0 | 89 | 43.26 | 39.89 | −3.37 [−8.99, +1.97], p=0.248 | — | 13 / 5 | −2.43 [−7.99, +3.12], p=0.440 |
-| v3 （历史） vs Base | HLE | 2500 | 20.80 | 17.36 | −3.44 [−5.04, −1.84], p<0.0002 | 245:159, p=2.2e-05 | 3 / 24 | −3.40 [−4.97, −1.82], p<0.0002 |
-| v3 （历史） vs v4 | HLE | 2499 | 19.21 | 17.33 | −1.88 [−3.44, −0.36], p=0.020 | 214:167, p=0.018 | 40 / 24 | −2.01 [−3.57, −0.49], p=0.012 |
+| 比较（B vs A） | Benchmark | 任务数 | A | B | Δ = B − A [95% CI], p | McNemar（A 独赢 : B 独赢） | env_error A / B |
+|---|---|---|---|---|---|---|---|
+| v4 vs Base | Terminal-Bench 2.0 | 89 | 44.94 | 41.57 | −3.37 [−8.99, +2.25], p=0.263 | — | 6 / 0 |
+| v4 vs Base | SWE-bench Pro HARD-51 | 51 | 21.57 | 16.34 | −5.23 [−12.42, +1.31], p=0.108 | — | 0 / 0 |
+| v4 vs Base | HLE | 2499 | 20.81 | 19.21 | −1.60 [−3.16, −0.08], p=0.042 | 214:174, p=0.048 | 3 / 40 |
+| v4 vs Base | ASI-Bench B3 | 60 | 10.03 | 7.53 | −2.50 [−6.79, +2.52], p=0.292 | — | 1 / 1 |
+| Mixed vs Base | Terminal-Bench 2.0 | 89 | 44.94 | 30.34 | −14.61 [−23.60, −6.18], p=0.0006 | — | 6 / 0 |
+| Mixed vs Base | SWE-bench Pro HARD-51 | 51 | 21.57 | 13.73 | −7.84 [−17.65, +1.31], p=0.096 | — | 0 / 0 |
+| Mixed vs Base | HLE | 2500 | 20.80 | 16.60 | −4.20 [−5.80, −2.60], p<0.0002 | 259:154, p<1e-6 | 3 / 6 |
+| Mixed vs Base | ASI-Bench B3 | 60 | 10.03 | 7.39 | −2.64 [−5.83, +0.39], p=0.088 | — | 1 / 2 |
+| v4 vs Mixed | Terminal-Bench 2.0 | 89 | 30.34 | 41.57 | +11.24 [+3.37, +20.22], p=0.011 | 3:13, p=0.021 | 0 / 0 |
+| v4 vs Mixed | SWE-bench Pro HARD-51 | 51 | 13.73 | 16.34 | +2.61 [−5.23, +10.46], p=0.567 | — | 0 / 0 |
+| v4 vs Mixed | HLE | 2499 | 16.57 | 19.21 | +2.64 [+1.12, +4.16], p=0.001 | 154:220, p=7.6e-04 | 6 / 40 |
+| v4 vs Mixed | ASI-Bench B3 | 60 | 7.39 | 7.53 | +0.14 [−3.46, +4.67], p=0.990 | — | 2 / 1 |
+| E-SWE v2 vs Base | SWE-bench Pro HARD-51 | 51 | 21.57 | 27.45 | +5.88 [−4.58, +16.34], p=0.239 | — | 0 / 0 |
+| E-TB v2 vs Base | Terminal-Bench 2.0 | 89 | 44.94 | 38.20 | −6.74 [−14.61, +0.56], p=0.080 | — | 6 / 0 |
+| E-ASI vs Base | ASI-Bench B3 | 60 | 10.03 | 7.75 | −2.29 [−7.33, +3.67], p=0.408 | — | 1 / 2 |
+| E-HLE vs Base | HLE | 2500 | 20.80 | 16.92 | −3.88 [−5.48, −2.24], p<0.0002 | 263:166, p=3.0e-06 | 3 / 4 |
+| E-SWE v1（历史） vs Base | SWE-bench Pro HARD-51 | 51 | 21.57 | 9.80 | −11.76 [−20.92, −3.27], p=0.005 | — | 0 / 10 |
+| E-TB v1（历史） vs Base（集群） | Terminal-Bench 2.0 | 89 | 41.57 | 24.72 | −16.85 [−26.40, −7.87], p<0.0002 | — | 12 / 3 |
+| v4 vs Base（全部 TB2 运行） | Terminal-Bench 2.0 | 89 | 43.26 | 39.89 | −3.37 [−8.99, +1.97], p=0.248 | — | 13 / 5 |
+| v3（历史） vs Base | HLE | 2500 | 20.80 | 17.36 | −3.44 [−5.04, −1.84], p<0.0002 | 245:159, p=2.2e-05 | 3 / 24 |
+| v3（历史） vs v4 | HLE | 2499 | 19.21 | 17.33 | −1.88 [−3.44, −0.36], p=0.020 | 214:167, p=0.018 | 40 / 24 |
+
+剔除 env_error 后的 Δ 见 8.2 的敏感性分析和 `analysis/results_tables.md` (b2)。
 
 ### 8.4 每次运行的分数
 
@@ -364,9 +447,39 @@ SWE-bench Pro HARD-51（51 题，全部重新判分后）。
 | Mixed | 13.73 | — | — | 13.73 (n=1) | 0 | 0 |
 | v4 | 15.69 | 21.57 | 11.76 | 16.34 ± 4.93 (n=3) | 0 / 0 / 0 | 0 / 1 / 4 |
 | E-SWE v1 （历史） | 9.80 | — | — | 9.80 (n=1) | 10 | 0 |
+
+### 8.5 运行失败率
+
+每个模型 × benchmark 的全部（任务, 运行）中各状态的比例（`results/summary.csv`）。env_error 是环境或框架失败（沙箱起不来、上下文溢出、HLE 无预测等），按 0 分计入主指标；timeout 是 agent 超时，算模型失败；fail 是正常结束但没解出。token 用量和 agent 时长见 `analysis/results_tables.md` (c)。
+
+| 模型 | Benchmark | 次数 | 任务×次数 | 得分 | 剔除 env_error 后 | env_error | timeout | fail |
+|---|---|---|---|---|---|---|---|---|
+| Base | Terminal-Bench 2.0 | 2 | 178 | 44.94 | 47.34 | 5.1% | 19.1% | 30.9% |
+| Base | SWE-bench Pro HARD-51 | 3 | 153 | 21.57 | 21.57 | 0.0% | 0.0% | 78.4% |
+| Base | HLE | 1 | 2500 | 20.80 | 20.82 | 0.1% | 0.2% | 78.9% |
+| Base | ASI-Bench B3 | 1 | 60 | 10.03 | 10.20 | 1.7% | 0.0% | 38.3% |
+| E-SWE v2 | SWE-bench Pro HARD-51 | 1 | 51 | 27.45 | 27.45 | 0.0% | 25.5% | 47.1% |
+| E-TB v2 | Terminal-Bench 2.0 | 1 | 89 | 38.20 | 38.20 | 0.0% | 25.8% | 36.0% |
+| E-ASI | ASI-Bench B3 | 1 | 60 | 7.75 | 8.02 | 3.3% | 0.0% | 56.7% |
+| E-HLE | HLE | 1 | 2500 | 16.92 | 16.95 | 0.2% | 0.1% | 82.8% |
+| Mixed | Terminal-Bench 2.0 | 1 | 89 | 30.34 | 30.34 | 0.0% | 14.6% | 55.1% |
+| Mixed | SWE-bench Pro HARD-51 | 1 | 51 | 13.73 | 13.73 | 0.0% | 0.0% | 86.3% |
+| Mixed | HLE | 1 | 2500 | 16.60 | 16.64 | 0.2% | 0.2% | 83.0% |
+| Mixed | ASI-Bench B3 | 1 | 60 | 7.39 | 7.65 | 3.3% | 0.0% | 36.7% |
+| v4 | Terminal-Bench 2.0 | 1 | 89 | 41.57 | 41.57 | 0.0% | 29.2% | 29.2% |
+| v4 | SWE-bench Pro HARD-51 | 3 | 153 | 16.34 | 16.34 | 0.0% | 3.3% | 80.4% |
+| v4 | HLE | 1 | 2500 | 19.21 | 19.52 | 1.6% | 0.2% | 79.0% |
+| v4 | ASI-Bench B3 | 1 | 60 | 7.53 | 7.66 | 1.7% | 0.0% | 53.3% |
+| E-SWE v1（历史） | SWE-bench Pro HARD-51 | 1 | 51 | 9.80 | 12.20 | 19.6% | 0.0% | 70.6% |
+| E-TB v1（历史） | Terminal-Bench 2.0 | 1 | 89 | 24.72 | 25.58 | 3.4% | 21.3% | 50.6% |
+| v3（历史） | HLE | 1 | 2500 | 17.36 | 17.53 | 1.0% | 0.1% | 81.6% |
+| Base（集群 TB2） | Terminal-Bench 2.0 | 2 | 178 | 41.57 | 45.40 | 8.4% | 18.5% | 31.5% |
+| v4（集群 TB2） | Terminal-Bench 2.0 | 1 | 89 | 38.20 | 40.48 | 5.6% | 28.1% | 28.1% |
+| Base（全部 TB2 运行） | Terminal-Bench 2.0 | 4 | 356 | 43.26 | 46.39 | 6.7% | 18.8% | 31.2% |
+| v4（全部 TB2 运行） | Terminal-Bench 2.0 | 2 | 178 | 39.89 | 41.04 | 2.8% | 28.6% | 28.6% |
 <!-- results:end -->
 
-### 8.5 评测早期的单次比较
+### 8.6 评测早期的单次比较
 
 以下结果来自评测早期（v1 专家），用于说明剔除 E-TB v1、重训 v2 专家的依据（§4）。
 
@@ -512,16 +625,22 @@ SWE-bench Pro HARD-51（51 题，全部重新判分后）。
 
 ## 13. 模型（Hugging Face）
 
-| 模型 | 链接 | Revision | 内容 |
+| 模型 | Hugging Face 仓库 | Revision | 内容 |
 |---|---|---|---|
-| E-SWE v2 | [eh3323/Qwen3.6-35B-A3B-apex-lora-experts](https://huggingface.co/eh3323/Qwen3.6-35B-A3B-apex-lora-experts)，子目录 `e_swe_v2/` | `e08bd952` | LoRA adapter + 配置 |
-| E-TB v2 | 同上，`e_tb_v2/` | 同上 | LoRA adapter + 配置 |
-| E-ASI | 同上，`e_asi/` | 同上 | LoRA adapter + 配置 |
-| E-HLE | 同上，`e_hle/` | 同上 | LoRA adapter + 配置 |
-| E-SWE v1 / E-TB v1（历史） | 同上，`e_swe_v1/`、`e_tb_v1/` | 同上 | LoRA adapter |
-| Mixed | 同上，`mixed/` | 同上 | LoRA adapter |
-| **Merged v4（最终）** | [eh3323/Qwen3.6-35B-A3B-apex-merged-v4](https://huggingface.co/eh3323/Qwen3.6-35B-A3B-apex-merged-v4) | `223a1b15` | 合并后的完整权重（bf16，26 个分片）+ `merge_info.json`；配置 `configs/merge/ties_v4.yaml`，解析后的完整配置 `logs/merge/configs/ties_l1_d0.5_v4.resolved.yaml` |
-| 折叠后的完整权重（E-ASI、Mixed、E-TB v2） | [e_asi-folded](https://huggingface.co/eh3323/Qwen3.6-35B-A3B-apex-e_asi-folded)、[mixed-folded](https://huggingface.co/eh3323/Qwen3.6-35B-A3B-apex-mixed-folded)、[e_tb_v2-folded](https://huggingface.co/eh3323/Qwen3.6-35B-A3B-apex-e_tb_v2-folded) | `3476649b`、`816e1ec6`、`9281bb8c` | 租用节点（RunPod、Nebius）评测时直接下载的稠密权重，等同于基座加对应 adapter 后 `merge_and_unload()`；其他专家可以用 LoRA 自行折叠（`scripts/merge_submit.sh single`） |
+| **Merged v4（最终）** | [eh3323/Qwen3.6-35B-A3B-apex-merged-v4](https://huggingface.co/eh3323/Qwen3.6-35B-A3B-apex-merged-v4) | `223a1b15` | 完整权重（bf16，26 个分片）+ `merge_info.json` |
+| E-SWE v2 / E-TB v2 / E-ASI / E-HLE | [eh3323/Qwen3.6-35B-A3B-apex-lora-experts](https://huggingface.co/eh3323/Qwen3.6-35B-A3B-apex-lora-experts) | `e08bd952` | LoRA adapter，子目录 `e_swe_v2/`、`e_tb_v2/`、`e_asi/`、`e_hle/` |
+| Mixed | 同上 | 同上 | LoRA adapter，子目录 `mixed/` |
+| E-SWE v1 / E-TB v1（历史） | 同上 | 同上 | LoRA adapter，子目录 `e_swe_v1/`、`e_tb_v1/` |
+| E-ASI（折叠） | [eh3323/Qwen3.6-35B-A3B-apex-e_asi-folded](https://huggingface.co/eh3323/Qwen3.6-35B-A3B-apex-e_asi-folded) | `3476649b` | 基座 + E-ASI 的完整权重 |
+| Mixed（折叠） | [eh3323/Qwen3.6-35B-A3B-apex-mixed-folded](https://huggingface.co/eh3323/Qwen3.6-35B-A3B-apex-mixed-folded) | `816e1ec6` | 基座 + Mixed 的完整权重 |
+| E-TB v2（折叠） | [eh3323/Qwen3.6-35B-A3B-apex-e_tb_v2-folded](https://huggingface.co/eh3323/Qwen3.6-35B-A3B-apex-e_tb_v2-folded) | `9281bb8c` | 基座 + E-TB v2 的完整权重 |
+
+**仓库命名**：统一为 `<基座名>-apex-<内容>`，`apex` 是本项目的标记。
+- `merged-v4`：多专家 TIES 合版的最终模型；
+- `lora-experts`：全部 LoRA adapter（只含增量，需与基座一起加载）；
+- `<专家>-folded`：单个 LoRA 用 `merge_and_unload()` 加回基座后的完整权重，供租用节点（RunPod、Nebius）上的 vLLM 直接加载评测。为了和多专家“合版”区分，这里称为折叠。其他专家可用 `scripts/merge_submit.sh single` 自行折叠。
+
+v4 的合版配置为 `configs/merge/ties_v4.yaml`，解析后的完整配置在 `logs/merge/configs/ties_l1_d0.5_v4.resolved.yaml`。
 
 所有模型都基于 `Qwen/Qwen3.6-35B-A3B` @995ad96e。所有仓库均已公开（专家和合版两个仓库创建时为私有，提交前用 `scripts/hf_upload.py public` 设为公开；折叠权重仓库创建即公开）。加载方法、merge recipe 和许可证见 [`models/README.md`](models/README.md)。
 
@@ -529,17 +648,17 @@ SWE-bench Pro HARD-51（51 题，全部重新判分后）。
 
 | 阶段 | 内容 | GPU | GPU 小时 | 费用（美元） |
 |---|---|---|---|---|
-| 数据与冒烟测试 | 数据作业借用的 GPU 节点、早期冒烟测试 | H200 | 2.2 | 集群 |
-| 训练 | 7 次 LoRA 训练（§2.2），不含吞吐测试 | H200（6 次）/ B200（1 次） | 12.3 | 集群 |
-| 合版 | val loss 选择、冲突分析、折叠专家和合版模型¹ | H200 等 | 0.9 | 集群 |
-| 评测（集群） | vLLM 服务 + 沙箱：HLE 全部、SWE 全部、TB2 集群运行 | H200 / RTX PRO 6000 | 93.3² | 集群 |
-| 评测（RunPod） | ASI agent 阶段，两台 2×H200（§11 第 19 条） | H200 | 见账单 | 190.38 |
-| 评测（Nebius） | TB2 同条件运行，一台 8×H100（§11 第 21 条） | H100 | 71.9 | 324.65 |
-| 判分 API | HLE（o3-mini）与 ASI（GPT-5.5）评委 | — | — | 49.00 |
-| **合计** | | | **集群 108.9 + Nebius 71.9 + RunPod** | **564.03（实际支出）** |
+| 数据与冒烟测试 | 数据作业、早期冒烟测试 | H200 | 2.2 | 集群 |
+| 训练 | 7 次 LoRA 训练（§2.2） | H200 / B200 | 12.3 | 集群 |
+| 合版 | 选择、冲突分析、折叠与合版¹ | H200 等 | 0.9 | 集群 |
+| 评测（集群） | HLE、SWE 全部，TB2 集群运行 | H200 / RTX PRO 6000 | 93.3² | 集群 |
+| 评测（RunPod） | ASI agent 阶段，2 台 2×H200 | H200 | 见账单 | 190.38 |
+| 评测（Nebius） | TB2 同条件运行，1 台 8×H100 | H100 | 71.9 | 324.65 |
+| 判分 API | HLE（o3-mini）、ASI（GPT-5.5） | — | — | 49.00 |
+| **合计** | | | **集群 108.9 + Nebius 71.9** | **564.03** |
 
 - ¹ 不含 1 次失败的选择作业（19806573，282 s，`$HOME` 下的 Triton 缓存超出配额），也不含评测作业内构建 v3 / v4 的两次 `ensure_merged`（83 s、209 s，计入评测）。
-- ² 截至 10-16 05:30 EDT（含仍在运行、最终不计入的集群 v4 TB2 a2）。逐作业见 `logs/resources/sacct_gpu_jobs.csv`。
+- ² 截至 10-16 05:30 EDT（含仍在运行、最终不计入的集群 v4 TB2 a2）。逐作业见 `logs/resources/sacct_gpu_jobs.csv`。RunPod 按台时计费，GPU 小时以账单为准；训练不含吞吐测试。
 - **实际支出**：Nebius $324.65（71.89 H100 GPU 小时，含磁盘），RunPod $190.38（10-15、10-16 两天），OpenAI $49.00（两张账单），合计 $564.03。集群不按小时计费；若按 Nebius 的 H100 实际单价（$4.50/GPU 小时）折算，集群的 108.9 GPU 小时约合 $490。
 - **主动工作时长**：约 43 小时。从 2026-10-13 08:11 EDT 收到邮件到 10-16 早上提交约 70 小时墙钟，按每天 9 小时吃饭睡觉扣除。决策与时间线见 `logs/worklog.md`。
 - **数据来源**：
@@ -624,30 +743,48 @@ python src/eval/summarize.py compare --a base --b <merged run> --bench asi --lev
 | E-TB v2 | `e_tb_v2` |
 | Merged v4 | `merged_v4` |
 | Merged v3 | `merged` |
-| Nebius 上的 TB2（§11 第 21 条） | `base_cloud`、`merged_v4_cloud`（a1 由 harbor 作业 a1 + a1b 合成）、`mixed_cloud`、`e_tb_v2_cloud` |
+| Nebius 上的 TB2 | `base_cloud`、`merged_v4_cloud`、`mixed_cloud`、`e_tb_v2_cloud` |
+
+Nebius 上 v4 的 a1 由 harbor 作业 a1 和 a1b 合成（§11 第 21 条）。
 
 ## 16. 日志与结果文件
 
-| 内容 | 位置 | 格式 / 查看方法 |
+所有文本文件都可以直接用编辑器或 `less` 查看；JSONL 每行一个 JSON 对象，可用 `jq` 或 pandas 读取。
+
+| 内容 | 位置 | 格式 |
 |---|---|---|
 | 工作时间线与决策记录 | `logs/worklog.md` | Markdown |
-| 训练记录 | `logs/train/<run_id>/`：`config.yaml`（配置快照）、`launch_command.txt`、`metadata.json`、`summary.json`、`metrics.jsonl`、`throughput.json`、Slurm 日志、`gpuutil-<job>.csv`、`checkpoints/*.state.json`；汇总表 `logs/train/summary.csv`；吞吐测试 `logs/train/_throughput/` | JSON / JSONL / CSV。`metrics.jsonl`：每步的 loss、学习率、tok/s、峰值显存；val loss 在第 0 步和之后每 20 步 |
-| loss 曲线 | `curves/<run_id>.png`（train loss、各验证集 val loss、学习率，标出 checkpoint）、`curves/merge_ablation.png`（合版候选的平均 val loss 与保留率）；源数据 `curves/source/*.csv`（含 `runs.csv`、`merge_select.csv`） | `python3 curves/plot_curves.py` 生成（只依赖标准库和 matplotlib） |
-| 合版选择 | `analysis/merge_select/`：`table.md`、`table.csv`、`rows.jsonl`（每个候选一行：各验证集的 loss 与 target token 数），由 `scripts/merge_pull_analysis.sh` 拉回 | Markdown / CSV / JSONL。冲突分析：`analysis/merge_conflicts_v1/`（`summary.json`、`pairwise.csv`、`per_module.csv`、热力图） |
-| 合版作业记录 | `logs/merge/`：`configs/`（作业所用配置，以及从 `merge_info.json` 还原的 `*.resolved.yaml` 完整配置）、`merge_info/`（每个折叠专家和合版模型的 `merge_info.json`）、`slurm/`（作业日志）、`merge_jobs.csv`（作业、节点、耗时、状态）、v4 构建日志 `build-ties_l1_d0.5_v4-job19840891.log`、v4 的 vLLM 启动命令 | YAML / JSON / CSV / 文本 |
-| 依赖锁定 | `env/{train,serve,eval,hle,asi,data,dl}.freeze.txt`（`uv pip freeze`）、`env/env.sh`；`configs/train/train.lock.txt`、`configs/serve.lock.txt` | 文本 |
-| 模型与报告 | `models/README.md`（HF 链接、merge recipe、加载方法）、`report.md`（一页报告草稿） | Markdown |
-| 逐任务结果（归一化） | `results/{base,experts,merged,mixed}/<bench>/<run_id>.jsonl` | 每行一个（任务, 运行）：status、score、token、时长、错误。HLE 只含 id、类别、答案类型、finish_reason、置信度，不含题目和回答文本 |
-| 汇总表 | `results/summary.csv` | `summarize.py table` 的输出 |
-| 失败案例与置信区间 | `analysis/failure_cases.md`、`analysis/ci.json`、`analysis/results_tables.md` | Markdown / JSON |
-| 原始评测输出（不入库） | 集群上的 `$APEX/results/<group>/<bench>/<run_id>/`：Harbor jobs 与轨迹、`llm_requests.jsonl`、`run_meta.json`、HLE 预测与判分文件、ASI 本地评分 JSON | 包含 benchmark 题目和答案（HLE、ASI 参考答案），按 `.gitignore` 不再分发 |
-| 评测 / 服务日志（不入库） | `$APEX/logs/<run_id>/`、`$APEX/logs/allinone-<RUN>-<job>/`、`$APEX/logs/serve-<RUN>-<job>/`（`vllm_cmd.txt`、`vllm.log`、`serve_env_freeze.txt`） | 文本 |
-| GPU 小时 | `logs/resources/gpu_hours.csv`（训练）、`logs/resources/gpu_hours_merge.csv`（合版）；集群上为 `$APEX/logs/gpu_hours*.csv` | CSV |
+| 训练记录 | `logs/train/<run_id>/`，汇总 `logs/train/summary.csv` | YAML / JSON / JSONL / CSV / 文本 |
+| loss 曲线 | `curves/<run_id>.png`、`curves/merge_ablation.png`，源数据 `curves/source/*.csv` | PNG / CSV |
+| 合版选择与冲突分析 | `analysis/merge_select/`、`analysis/merge_conflicts_v1/` | Markdown / CSV / JSONL / JSON |
+| 合版作业记录 | `logs/merge/` | YAML / JSON / CSV / 文本 |
+| 评测日志 | `logs/eval/`（见下） | 文本 / JSON |
+| GPU 小时与资源 | `logs/resources/` | CSV |
+| 依赖锁定 | `env/*.freeze.txt`、`configs/train/train.lock.txt`、`configs/serve.lock.txt` | 文本 |
+| 逐任务结果 | `results/{base,experts,merged,mixed}/<bench>/<run_id>.jsonl` | JSONL |
+| 汇总表 | `results/summary.csv`、`analysis/results_tables.md` | CSV / Markdown |
+| 失败案例与置信区间 | `analysis/failure_cases.md`、`analysis/ci.json` | Markdown / JSON |
+| 模型与报告 | `models/README.md`、`report.pdf`（源文件 `report.md`） | Markdown / PDF |
+
+**各目录的内容**：
+- **训练** `logs/train/<run_id>/`：`config.yaml`（配置快照）、`launch_command.txt`、`metadata.json`、`summary.json`、`metrics.jsonl`（每步的 loss、学习率、tok/s、峰值显存；val loss 在第 0 步和之后每 20 步）、`throughput.json`、Slurm 日志、`gpuutil-<job>.csv`、`checkpoints/*.state.json`。吞吐测试在 `logs/train/_throughput/`。
+- **loss 曲线**：`curves/<run_id>.png` 画 train loss、各验证集 val loss 和学习率，并标出 checkpoint；`curves/merge_ablation.png` 是合版候选的平均 val loss 与保留率。用 `python3 curves/plot_curves.py` 从源数据重新生成（只依赖标准库和 matplotlib）。
+- **合版**：`analysis/merge_select/` 有 `table.md`、`table.csv`、`rows.jsonl`（每个候选各验证集的 loss）；`logs/merge/` 有作业所用配置和还原出的 `*.resolved.yaml`、每个模型的 `merge_info.json`、Slurm 日志、`merge_jobs.csv`、v4 的构建日志和 vLLM 启动命令。
+- **评测** `logs/eval/`（错误、重试、超时和重启都在这些日志里）：
+  - `slurm/`：集群评测作业的 Slurm 输出，文件名 `<作业名>-<job id>.out`；
+  - `runs/<run_id>/`：每次运行的 harness 日志（`harbor.log`、`hle_pred.log`、`asibench_run.log` 等）和模型代理日志 `proxy.log`；目录名带 `.failed_*` 的是失败后重跑的旧尝试；
+  - `run_meta/`：每次运行的 `run_meta.json`（harness 配置及其 sha256、模型目录、GPU 型号）；
+  - `serve/serve-<RUN>-<job>/`：vLLM 启动命令 `vllm_cmd.txt` 和服务日志；
+  - `runpod/pod{1,2}/`：RunPod 上 ASI 运行的日志；文件名带 `.killed_*`、`.died_*` 的是被中断的尝试（§11 第 19 条）；
+  - `nebius/`：Nebius 上 TB2 的 harbor 日志、`run_meta`、v4 a1 / a1b 的任务划分，以及打包时排除的超大文件清单（§11 第 21 条）。
+- **逐任务结果**：每行一个（任务, 运行）：status、score、token、时长、错误。HLE 只含 id、类别、答案类型、finish_reason 和置信度，不含题目和回答文本。失败任务清单即其中 status 不是 success 的行；`analysis/results_tables.md` (c) 按状态汇总。
+- **资源**：`logs/resources/gpu_hours.csv`（训练）、`gpu_hours_merge.csv`（合版）、`sacct_gpu_jobs.csv`（每个用到 GPU 的作业）。
+- **不入库的原始输出**：集群上 `$APEX/results/<group>/<bench>/<run_id>/` 存有 Harbor 轨迹、`llm_requests.jsonl`、HLE 预测与判分文件、ASI 本地评分 JSON。这些文件包含 benchmark 题目和答案（HLE、ASI 参考答案），按 `.gitignore` 不分发。Nebius 的原始输出打包为 `cloud_tb2_raw.tgz`（272MB，sha256 `563d9be2fb0c992f81206073d68c3afc139fd3e50fec8e756b55d7b917cd68fd`），保存在集群 `$APEX/results/cloud_tb2/`。
 
 ## 17. 目录结构
 
 ```
-README.md, report.md, LICENSE                 report.md / report.pdf 为一页报告
+README.md, report.pdf, report.md, LICENSE    一页报告（PDF）及其源文件
 configs/   train/ merge/ eval/ data/          训练、合版、评测、数据配置（含锁定版本）
            serve.lock.txt, train/train.lock.txt  推理 / 训练依赖锁定文件
 env/       *.freeze.txt, env.sh               7 个环境的 uv pip freeze、环境变量与缓存路径
@@ -659,14 +796,20 @@ patches/                                      对 Harbor / ASI-Bench / hle_eval 
 logs/      worklog.md                         时间线与决策记录
            train/<run_id>/, train/summary.csv 训练记录（配置快照、启动命令、指标、资源）
            merge/                             合版作业的配置、merge_info、Slurm 日志
-           resources/                         GPU 小时（gpu_hours*.csv）
+           eval/                              评测日志（Slurm、harness、代理、vLLM、RunPod、Nebius）
+           resources/                         GPU 小时（gpu_hours*.csv、sacct_gpu_jobs.csv）
 curves/    plot_curves.py, *.png, source/*.csv   loss 曲线、合版消融图及源数据
 results/   {base,experts,merged,mixed}/       逐任务结果与汇总
 analysis/  failure_cases.md, merge_select/    失败案例、合版选择、置信区间
 models/    README.md                          HF 链接、merge recipe、加载方法
 ```
 
-与模板仓库推荐目录的差别：Slurm 作业单独放在 `slurm/`；`results/` 多一个 `mixed/` 分组。
+与模板仓库推荐目录的差别：
+- 模板按 SFT / 第二阶段组织，本题是多专家 + 合版，所以 `results/` 分为 `base/`、`experts/`、`merged/`、`mixed/`，每次运行是一个 `<run_id>.jsonl` 文件，而不是目录；
+- 日志按阶段分目录：`logs/train/<run_id>/`、`logs/merge/`、`logs/eval/`、`logs/resources/`，而不是统一的 `logs/<run_id>/`；
+- 依赖锁定文件是 `env/*.freeze.txt` 和 `configs/**/*.lock.txt`（不是 `requirements.lock`）；
+- 失败案例在 `analysis/failure_cases.md`，置信区间在 `analysis/ci.json`（模板中为 `failures.md`、`uncertainty.json`）；
+- Slurm 作业单独放在 `slurm/`。
 
 ## 18. 参考资料
 
