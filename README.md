@@ -637,13 +637,15 @@ SWE-bench Pro HARD-51（51 题，全部重新判分后）。
 
 | 模型 | Hugging Face 仓库 | Revision | 内容 |
 |---|---|---|---|
-| **Merged v4（最终）** | [eh3323/Qwen3.6-35B-A3B-apex-merged-v4](https://huggingface.co/eh3323/Qwen3.6-35B-A3B-apex-merged-v4) | `223a1b15` | 完整权重（bf16，26 个分片）+ `merge_info.json` |
-| E-SWE v2 / E-TB v2 / E-ASI / E-HLE | [eh3323/Qwen3.6-35B-A3B-apex-lora-experts](https://huggingface.co/eh3323/Qwen3.6-35B-A3B-apex-lora-experts) | `e08bd952` | LoRA adapter，子目录 `e_swe_v2/`、`e_tb_v2/`、`e_asi/`、`e_hle/` |
+| **Merged v4（最终）** | [eh3323/Qwen3.6-35B-A3B-apex-merged-v4](https://huggingface.co/eh3323/Qwen3.6-35B-A3B-apex-merged-v4) | `babefb71` | 完整权重（bf16，26 个分片）+ `merge_info.json` |
+| E-SWE v2 / E-TB v2 / E-ASI / E-HLE | [eh3323/Qwen3.6-35B-A3B-apex-lora-experts](https://huggingface.co/eh3323/Qwen3.6-35B-A3B-apex-lora-experts) | `242a1fef` | LoRA adapter，子目录 `e_swe_v2/`、`e_tb_v2/`、`e_asi/`、`e_hle/` |
 | Mixed | 同上 | 同上 | LoRA adapter，子目录 `mixed/` |
 | E-SWE v1 / E-TB v1（历史） | 同上 | 同上 | LoRA adapter，子目录 `e_swe_v1/`、`e_tb_v1/` |
-| E-ASI（折叠） | [eh3323/Qwen3.6-35B-A3B-apex-e_asi-folded](https://huggingface.co/eh3323/Qwen3.6-35B-A3B-apex-e_asi-folded) | `3476649b` | 基座 + E-ASI 的完整权重 |
-| Mixed（折叠） | [eh3323/Qwen3.6-35B-A3B-apex-mixed-folded](https://huggingface.co/eh3323/Qwen3.6-35B-A3B-apex-mixed-folded) | `816e1ec6` | 基座 + Mixed 的完整权重 |
-| E-TB v2（折叠） | [eh3323/Qwen3.6-35B-A3B-apex-e_tb_v2-folded](https://huggingface.co/eh3323/Qwen3.6-35B-A3B-apex-e_tb_v2-folded) | `9281bb8c` | 基座 + E-TB v2 的完整权重 |
+| E-ASI（折叠） | [eh3323/Qwen3.6-35B-A3B-apex-e_asi-folded](https://huggingface.co/eh3323/Qwen3.6-35B-A3B-apex-e_asi-folded) | `ada68b78` | 基座 + E-ASI 的完整权重 |
+| Mixed（折叠） | [eh3323/Qwen3.6-35B-A3B-apex-mixed-folded](https://huggingface.co/eh3323/Qwen3.6-35B-A3B-apex-mixed-folded) | `1de1a77b` | 基座 + Mixed 的完整权重 |
+| E-TB v2（折叠） | [eh3323/Qwen3.6-35B-A3B-apex-e_tb_v2-folded](https://huggingface.co/eh3323/Qwen3.6-35B-A3B-apex-e_tb_v2-folded) | `4ae247a7` | 基座 + E-TB v2 的完整权重 |
+
+各仓库的 revision 是 2026-10-16 更新模型卡之后的提交。与之前的提交（merged-v4 `223a1b15`、lora-experts `e08bd952`、e_asi-folded `3476649b`、mixed-folded `816e1ec6`、e_tb_v2-folded `9281bb8c`）相比只改了 `README.md`，权重文件完全相同。
 
 **仓库命名**：统一为 `<基座名>-apex-<内容>`，`apex` 是本项目的标记。
 - `merged-v4`：多专家 TIES 合版的最终模型；
