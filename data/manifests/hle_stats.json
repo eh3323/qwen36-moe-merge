@@ -1,0 +1,75 @@
+{
+ "expert": "hle",
+ "n_train": 1838,
+ "n_val": 28,
+ "train_tokens": 15124145,
+ "val_tokens": 182738,
+ "train_by_source": {
+  "osr2_nonstem": 275,
+  "nemotron_science_rqa": 275,
+  "nemotron_science_mcq": 552,
+  "nemotron_math_aops": 736
+ },
+ "train_tokens_by_source": {
+  "nemotron_math_aops": 10933558,
+  "nemotron_science_mcq": 1619321,
+  "nemotron_science_rqa": 1526545,
+  "osr2_nonstem": 1044721
+ },
+ "train_by_stratum": {
+  "osr2_nonstem": 275,
+  "nemotron_science_rqa": 275,
+  "nemotron_science_mcq": 552,
+  "nemotron_math_aops": 736
+ },
+ "mean_tokens": 8229,
+ "drops": {
+  "nemotron_science_mcq:short_reasoning": 39559,
+  "nemotron_science_mcq:convert:mcq_no_answer": 360,
+  "nemotron_science_mcq:too_long": 6,
+  "nemotron_science_mcq:too_long_est": 1,
+  "nemotron_science_mcq:convert:mcq_bad_options": 1,
+  "nemotron_science_mcq:decontam:hle_13gram": 2,
+  "nemotron_science_rqa:short_reasoning": 5805,
+  "nemotron_science_rqa:too_long": 133,
+  "nemotron_science_rqa:too_long_est": 1,
+  "nemotron_math_aops:not_aops_hard": 32913,
+  "nemotron_math_aops:convert:math_answer_mismatch": 6915,
+  "nemotron_math_aops:too_long": 1264,
+  "nemotron_math_aops:too_long_est": 608,
+  "osr2_nonstem:convert:osr_answer_mismatch": 1,
+  "nemotron_math_aops:dup_question": 1543,
+  "nemotron_science_mcq:decontam:embed_cos>=0.9": 3
+ },
+ "n_candidates": 30862,
+ "n_heldout_dev": 300,
+ "candidates_by_source": {
+  "nemotron_science_mcq": 11537,
+  "osr2_nonstem": 5954,
+  "nemotron_math_aops": 1550,
+  "nemotron_science_rqa": 11821
+ },
+ "confidence_hist": {
+  "40": 183,
+  "50": 371,
+  "55": 388,
+  "70": 245,
+  "20": 47,
+  "45": 208,
+  "60": 237,
+  "35": 47,
+  "25": 15,
+  "75": 16,
+  "65": 36,
+  "30": 73
+ },
+ "built_at": "2026-10-13 19:29:19",
+ "repair": {
+  "what": "rqa multi-line Answer -> clean_answer()",
+  "fixed": {
+   "train": 138,
+   "val": 3,
+   "heldout": 21
+  }
+ }
+}

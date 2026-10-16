@@ -1,0 +1,36 @@
+[asi] model reachable via bridge
+[asi] egress blocked (expected)
+
+Sandbox mode: --sandbox linux_ns  [Linux Namespace Sandbox]
+  Lightweight isolation using Linux namespaces (unshare + bind mounts). No Docker required; suitable for HPC clusters and RL training loops.
+  Pros:  No Docker dependency; ~5% disk overhead vs Docker; fast environment preparation; filesystem isolation via bind mounts.
+  Cons:  Linux only (not supported on macOS/Windows); requires user namespace privileges; less mature than Docker isolation; no built-in network policy.
+
+
+==============================================================
+  Agent Configuration (affects reproducibility)
+==============================================================
+  Agent    opencode_cli
+  Model    qwen3.6-35b-a3b
+  Effort   None (default)
+  Timeout  10800s
+  Tools    restricted
+  CLI      1.17.15  (/scratch/eh3323/apex/tools/bin/opencode)
+==============================================================
+
+============================================================
+  ASI-Bench Produce-Only Summary
+  Agent: OpenCodeCLIAdapter
+  Tasks: 2  |  Instances: 2
+============================================================
+  Scoring: submit to https://asibench.apexin.ai/
+
+  Unscored submissions (submit mode): 2
+
+  Model Calls:
+    Attempted: unknown (0 observed)
+    Responses: 0
+    Empty response rate: unknown
+
+  Total execution time: 0s
+============================================================

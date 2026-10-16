@@ -1,0 +1,53 @@
+Tip: There are many benchmarks available in Harbor's registry.
+Run `harbor datasets list` to see all available datasets.
+
+  2/2 Mean: 0.000 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 0:00:01 0:00:00
+
+terminal_bench2_repo • oracle
+┏━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━┓
+┃ Trials ┃ Exceptions ┃  Mean ┃
+┡━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━┩
+│      0 │          2 │ 0.000 │
+└────────┴────────────┴───────┘
+
+┏━━━━━━━━━━━━━━━━━━━┳━━━━━━━┓
+┃ Exception         ┃ Count ┃
+┡━━━━━━━━━━━━━━━━━━━╇━━━━━━━┩
+│ FileNotFoundError │     2 │
+└───────────────────┴───────┘
+
+Job Info
+Total runtime: 1s
+Results written to 
+/scratch/eh3323/apex/results/base/tb2/base__tb2__oracle/jobs/base__tb2__oracle/r
+esult.json
+Inspect results by running `harbor view 
+/scratch/eh3323/apex/results/base/tb2/base__tb2__oracle/jobs`
+Share results by running `harbor upload 
+/scratch/eh3323/apex/results/base/tb2/base__tb2__oracle/jobs/base__tb2__oracle`
+
+  2/2 Mean: 0.000 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 0:01:47 0:00:00
+
+terminal_bench2_repo • oracle
+┏━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━┓
+┃ Trials ┃ Exceptions ┃  Mean ┃
+┡━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━┩
+│      2 │          0 │ 0.000 │
+└────────┴────────────┴───────┘
+
+┏━━━━━━━━┳━━━━━━━┓
+┃ Reward ┃ Count ┃
+┡━━━━━━━━╇━━━━━━━┩
+│ 0.0    │     2 │
+└────────┴───────┘
+
+Job Info
+Total runtime: 1m 47s
+Results written to 
+/scratch/eh3323/apex/results/base/tb2/base__tb2__oracle/jobs/base__tb2__oracle/r
+esult.json
+Inspect results by running `harbor view 
+/scratch/eh3323/apex/results/base/tb2/base__tb2__oracle/jobs`
+Share results by running `harbor upload 
+/scratch/eh3323/apex/results/base/tb2/base__tb2__oracle/jobs/base__tb2__oracle`
+

@@ -1,0 +1,15 @@
+inherit: ties.yaml
+# Final merge v3 (2026-10-14): ties_l1_d0.5_sweV2 WITHOUT E-TB (v1). E-TB was significantly worse than Base on
+# its own benchmark (TB2 attempt 1, 69 common tasks: Base 34 vs E-TB 19 solved, discordant 17 vs 2, exact
+# McNemar p~7e-4), so its task vector is dropped (equivalently w_tb = 0). This choice uses test-set results
+# (disclosed in the README as test-informed selection). Same method/hyper-parameters as the val-loss winner
+# (ties, λ=1, density 0.5). v4 = this + E-TB-v2 once that expert is trained (configs/merge/ties_v4.yaml).
+name: ties_l1_d0.5_v3
+density: 0.5
+global_scale: 1.0
+experts:
+  _replace: true
+  e_swe: /scratch/eh3323/apex/runs/e_swe_v2_r32/adapter_final
+  e_asi: /scratch/eh3323/apex/runs/e_asi_r32/adapter_final
+  e_hle: /scratch/eh3323/apex/runs/e_hle_r32/adapter_final
+weights: {_replace: true, e_swe: 1.0, e_asi: 1.0, e_hle: 1.0}

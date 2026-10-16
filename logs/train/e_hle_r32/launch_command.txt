@@ -1,0 +1,11 @@
+# Launch command for e_hle_r32 (Slurm job 19752117).
+# 1) submit wrapper, run on the login node from $APEX/repo = /scratch/eh3323/apex/repo (reconstructed: it emits
+#    exactly the SubmitLine below; CONFIG/NGPUS/EXTRA_ARGS travel via --export=ALL and are not in SubmitLine):
+CONSTRAINT='h200|b200|rtx6000' scripts/train_submit.sh configs/train/e_hle.yaml 1 06:00:00
+#    -> exports CONFIG=configs/train/e_hle.yaml NGPUS=1 EXTRA_ARGS='' and submits:
+# 2) Slurm SubmitLine (sacct -j 19752117 -o SubmitLine):
+sbatch --constraint=h200|b200|rtx6000 --gres=gpu:1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=16 --mem=160G --time=06:00:00 --job-name=lora-e_hle --export=ALL slurm/train_lora.sbatch
+# 3) inside slurm/train_lora.sbatch (env: source /scratch/eh3323/apex/env.sh; envs/train venv):
+python -m src.train.sft_lora --config configs/train/e_hle.yaml --prepare-only
+srun --ntasks=1 --cpus-per-task=16 --cpu-bind=none --kill-on-bad-exit=1 --export=ALL \
+  bash -c 'export RANK=$SLURM_PROCID LOCAL_RANK=$SLURM_LOCALID WORLD_SIZE=$SLURM_NTASKS; exec python -u -m src.train.sft_lora --config configs/train/e_hle.yaml'

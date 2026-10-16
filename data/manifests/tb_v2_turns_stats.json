@@ -1,0 +1,50 @@
+{
+ "expert": "tb_v2_turns",
+ "variant_of": "tb_v2",
+ "sources": {
+  "ai-and/termgrade-trajectories": "7d584d63dd598d7e76d444ca23e1527fb5ebd6d9",
+  "ai-and/termgrade-environments": "3a34ba29ddcd4cbbcbf8840c64f67e853f9b8b0d"
+ },
+ "construction": "per-turn samples, earlier assistant turns without reasoning, loss on the last assistant turn only, rendered with preserve_thinking=false (= eval); round-robin over trajectories (<= 2/task, tier 1 first) until the token budget (context + target)",
+ "n_train": 1215,
+ "n_val": 55,
+ "n_train_tasks": 379,
+ "n_train_trajectories": 679,
+ "train_tokens_train_render": 15023527,
+ "val_tokens_train_render": 646905,
+ "train_tokens_verify_render": 15041087,
+ "token_budget": 15022992,
+ "rounds_used": 2,
+ "train_by_teacher": {
+  "gemma_think": 296,
+  "qwen": 686,
+  "glm": 165,
+  "deepseek": 68
+ },
+ "train_by_tier": {
+  "1": 906,
+  "2": 309
+ },
+ "turn_position": {
+  "median_k": 4,
+  "final_turn_share": 0.15
+ },
+ "drops": {
+  "task:too_easy": 500,
+  "task:unsolved_by_all": 11,
+  "task:decontam_tb2_13gram": 2,
+  "deepseek:not_verified_pass": 504,
+  "traj:convert:assistant_not_pure_json": 407,
+  "traj:too_long_est": 411,
+  "traj:too_long": 243,
+  "glm:not_verified_pass": 516,
+  "traj:convert:assistant_bad_commands": 2,
+  "traj:convert:no_reasoning_any_turn": 8,
+  "qwen:not_verified_pass": 2579,
+  "traj:convert:assistant_missing_fields": 10,
+  "traj:too_few_turns": 330,
+  "gemma_think:not_verified_pass": 2925,
+  "traj:convert:parse_errors": 3
+ },
+ "built_at": "2026-10-14 15:09:10"
+}

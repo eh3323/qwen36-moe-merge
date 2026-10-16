@@ -66,7 +66,10 @@ async def main_async(a: argparse.Namespace) -> None:
     ep = Endpoint(Path(a.endpoint_file))
     logf = open(a.log, "a", buffering=1) if a.log else None
     timeout = aiohttp.ClientTimeout(total=None, sock_connect=30, sock_read=a.read_timeout)
-    session = aiohttp.ClientSession(timeout=timeout, auto_decompress=False)
+    # limit=0: no client-side cap. aiohttp's default (100 connections) silently capped HLE (HLE_N=256) at 100
+    # concurrent requests: H200 at 20% KV usage (2026-10-15). Concurrency is the harness's setting, not ours.
+    session = aiohttp.ClientSession(timeout=timeout, auto_decompress=False,
+                                    connector=aiohttp.TCPConnector(limit=0))
 
     def log(rec: dict, t0: float) -> None:
         rec["latency_s"] = round(time.time() - t0, 3)
@@ -118,6 +121,10 @@ async def main_async(a: argparse.Namespace) -> None:
                     rec["waited_s"] = waited
                     log(rec, t0)
                     return resp
+                except asyncio.CancelledError:  # client went away: upstream request dropped with it
+                    rec["error"] = "client disconnected (cancelled)"
+                    log(rec, t0)
+                    raise
                 except aiohttp.ClientConnectorError as e:  # nothing sent upstream yet: safe to retry
                     rec["last_error"] = f"{type(e).__name__}: {e}"
                 except Exception as e:  # mid-request failure: report, never replay
@@ -135,7 +142,10 @@ async def main_async(a: argparse.Namespace) -> None:
 
     app = web.Application(client_max_size=1024 ** 3)
     app.router.add_route("*", "/{tail:.*}", handle)
-    runner = web.AppRunner(app, access_log=None)
+    # handler_cancellation: when a client disconnects (timeout, killed harness), cancel its handler, which closes the
+    # upstream connection, and vLLM aborts the generation. aiohttp >= 3.9 defaults to False: orphaned requests then
+    # keep queueing (100-connection pool) and generating for nobody (HLE, 2026-10-14).
+    runner = web.AppRunner(app, access_log=None, handler_cancellation=True)
     await runner.setup()
     host, port = a.listen.rsplit(":", 1)
     await web.TCPSite(runner, host, int(port)).start()

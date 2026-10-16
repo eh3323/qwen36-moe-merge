@@ -1,0 +1,7 @@
+[aio] host=gh118.hpc.nyu.edu ngpu=1 cpus=16 mem=380G benches=tb2 smoke=0
+[aio] sizing: TB2_N=16 SWE_N=32 ASI_PAR=8 HLE_N=128 (share 330G/lane)
+[aio] lane tb2 pid 1316078 -> /scratch/eh3323/apex/logs/allinone-base-19807673/tb2.log
+[aio] lanes finished rc=1
+[eval] done: /scratch/eh3323/apex/repo/results/base/tb2/base__tb2__a1.jsonl
+[eval] done: /scratch/eh3323/apex/repo/results/base/tb2/base__tb2__a2.jsonl
+[2026-10-15T02:41:14.154] error: Detected 3 oom_kill events in StepId=19807673.batch. Some of the step tasks have been OOM Killed.

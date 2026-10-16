@@ -94,7 +94,12 @@ class HostMiniSweAgentBudget(HostMiniSweAgent):
              "budget_exhausted": budget_hit, "agent_wall_sec": round(time.monotonic() - t0, 1),
              "error": err}, indent=1))
         r = await environment.exec(command=f"cd {cwd} && git add -A && git diff --cached", timeout_sec=120)
-        (self.logs_dir / "model.patch").write_text(r.stdout or "")
+        # the singularity exec server strips stdout; `git diff` output always ends with a newline, and without it
+        # `git apply` rejects the patch ("corrupt patch") whenever its last hunk ends in added lines (2026-10-15)
+        patch = r.stdout or ""
+        if patch and not patch.endswith("\n"):
+            patch += "\n"
+        (self.logs_dir / "model.patch").write_text(patch)
         await environment.exec(command=f"cd {cwd} && git reset -q", timeout_sec=60)
         try:
             context.n_input_tokens = getattr(model, "n_input_tokens", None) or context.n_input_tokens

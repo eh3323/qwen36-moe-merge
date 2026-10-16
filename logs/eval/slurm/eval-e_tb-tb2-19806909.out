@@ -1,0 +1,6 @@
+[aio] host=gh115.hpc.nyu.edu ngpu=1 cpus=16 mem=380G benches=tb2 smoke=0
+[aio] sizing: TB2_N=16 SWE_N=32 ASI_PAR=8 HLE_N=128 (share 330G/lane)
+[aio] lane tb2 pid 2592850 -> /scratch/eh3323/apex/logs/allinone-e_tb-19806909/tb2.log
+[2026-10-14T21:44:57.076] error: *** JOB 19806909 ON gh115 CANCELLED AT 2026-10-14T21:44:57 DUE to SIGNAL Terminated ***
+[aio] SIGTERM
+[2026-10-14T21:45:26.885] error: Detected 3 oom_kill events in StepId=19806909.batch. Some of the step tasks have been OOM Killed.

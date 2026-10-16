@@ -1,0 +1,9 @@
+inherit: ties.yaml
+# Final merge after replacing E-SWE by E-SWE-v2 (Open-SWE-Traces data, see data/README.md section 9).
+# Same method/hyper-parameters as the winner of configs/merge/select.yaml (ties, λ=1, density 0.5);
+# only the SWE expert changes (dict merge: the other three experts are inherited unchanged).
+name: ties_l1_d0.5_sweV2
+density: 0.5
+global_scale: 1.0
+experts:
+  e_swe: /scratch/eh3323/apex/runs/e_swe_v2_r32/adapter_final

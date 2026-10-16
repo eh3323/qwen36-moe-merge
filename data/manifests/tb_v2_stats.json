@@ -1,0 +1,100 @@
+{
+ "expert": "tb_v2",
+ "variant_of": "tb",
+ "sources": {
+  "ai-and/termgrade-trajectories": "7d584d63dd598d7e76d444ca23e1527fb5ebd6d9",
+  "ai-and/termgrade-environments": "3a34ba29ddcd4cbbcbf8840c64f67e853f9b8b0d"
+ },
+ "license": "Apache-2.0 (both datasets)",
+ "teachers": {
+  "deepseek": "deepseek-ai/DeepSeek-V4-Pro (MIT)",
+  "glm": "zai-org/GLM-5.2 (MIT)",
+  "qwen": "Qwen/Qwen3.6-27B (Apache-2.0)",
+  "gemma_think": "google/gemma-4-31B-it, thinking (Apache-2.0)"
+ },
+ "filters": {
+  "reward": "== 1 (pytest verifier), counts_toward_k, status scored, not capped",
+  "difficulty": "0 < pooled pass rate (6 configs) <= 0.5 (tier 1); <= 0.67 tier 2 only if needed",
+  "max_per_task": 2,
+  "min_assistant_turns": 3,
+  "max_tokens": 65536,
+  "decontam": "TB1-unsafe/TB2 names, TB2 13-gram (instruction+solution vs TB2 instruction/solution/tests, k>=3), 13-gram vs TBLite dev + E-TB val instructions (k>=3)",
+  "val": "20 held-out tier-1 tasks (stable hash), 1 trajectory each"
+ },
+ "n_train": 486,
+ "n_val": 20,
+ "n_train_tasks": 282,
+ "train_tokens": 15056322,
+ "val_tokens": 605723,
+ "token_budget": 15022992,
+ "train_by_teacher": {
+  "qwen": 278,
+  "gemma_think": 117,
+  "glm": 64,
+  "deepseek": 27
+ },
+ "train_tokens_by_teacher": {
+  "deepseek": 1492112,
+  "glm": 2805188,
+  "qwen": 8220011,
+  "gemma_think": 2539011
+ },
+ "train_by_tier": {
+  "1": 453,
+  "2": 33
+ },
+ "train_by_category": {
+  "python": 218,
+  "shell_text": 115,
+  "other": 88,
+  "system_admin": 36,
+  "network": 23,
+  "c_cpp": 4,
+  "db_sql": 2
+ },
+ "train_by_termgrade_split": {
+  "unseen": 374,
+  "train151": 65,
+  "heldout120": 47
+ },
+ "pooled_pass_of_train_tasks": {
+  "median": 0.2778,
+  "max": 0.5278
+ },
+ "turns": {
+  "median": 7.0,
+  "p90": 13
+ },
+ "mean_tokens": 30980,
+ "n_candidates": 1882,
+ "candidates_by_teacher": {
+  "qwen": 1246,
+  "gemma_think": 479,
+  "glm": 115,
+  "deepseek": 42
+ },
+ "tasks_kept": 491,
+ "tasks_by_tier": {
+  "1": 377,
+  "2": 114
+ },
+ "drops": {
+  "task:too_easy": 500,
+  "task:unsolved_by_all": 11,
+  "task:decontam_tb2_13gram": 2,
+  "deepseek:not_verified_pass": 504,
+  "traj:convert:assistant_not_pure_json": 407,
+  "traj:too_long_est": 411,
+  "traj:too_long": 243,
+  "glm:not_verified_pass": 516,
+  "traj:convert:assistant_bad_commands": 2,
+  "traj:convert:no_reasoning_any_turn": 8,
+  "qwen:not_verified_pass": 2579,
+  "traj:convert:assistant_missing_fields": 10,
+  "traj:too_few_turns": 330,
+  "gemma_think:not_verified_pass": 2925,
+  "traj:convert:parse_errors": 3,
+  "select:budget_reached_tasks": 97
+ },
+ "built_at": "2026-10-14 14:36:32"
+}

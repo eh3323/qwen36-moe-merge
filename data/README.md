@@ -54,13 +54,14 @@ the path contains `seed31415`. That ASI-Bench split ships reference answers and 
   chat_template=<repo chat_template.jinja>, preserve_thinking=True)` with the Qwen3.6 tokenizer.
 - **Why `preserve_thinking=True`.** By default the template drops `<think>` for assistant turns *before
   the last real user message*. We keep thinking in every assistant turn so that every trained turn
-  teaches reasoning (`configs/train/base.yaml: preserve_thinking: true`). How this matches inference
-  depends on the harness:
-  - **mini-swe-agent (E-SWE)** and **opencode (E-ASI)**: all agent turns come after the single user
-    query, so the stock template also keeps their thinking at inference. Training and inference match.
-  - **Terminus-2 (E-TB)**: every observation is a *user* message, and Harbor does not resend reasoning
-    (`interleaved_thinking=False`). At inference, earlier turns therefore have no thinking, while in
-    training they do. This is a known and accepted train/inference mismatch.
+  teaches reasoning (`configs/train/base.yaml: preserve_thinking: true`).
+- **Train/inference mismatch.** Eval uses `enable_thinking=true, preserve_thinking=false`
+  (`configs/eval/harness.env`), i.e. historical thinking is dropped at inference (for Terminus-2, Harbor
+  also does not resend reasoning: `interleaved_thinking=False`). The experts trained on full trajectories
+  with thinking kept in every earlier assistant turn therefore see a different context in training than at
+  inference. This applies to the v1 experts (E-SWE, E-TB, E-ASI), to E-SWE-v2 and to the mixed control.
+  It is a known mismatch. It is fixed only in E-TB-v2, which trains on per-turn samples rendered exactly
+  as at eval (section 10).
   - **E-HLE**: single turn, so the choice has no effect.
 
 ## 3. Sources
@@ -370,7 +371,8 @@ equals the union of the expert manifests.
   - Converted `str_replace` commands are synthetic Python heredocs; the teacher did not write them.
   - Training data is Python-only, while HARD-51 is about 60 % Go/TS.
 - **E-TB.** Nemotron-Terminal and OT-Agent are not success-filtered, following their papers. Thinking
-  history does not match Terminus-2 inference (section 2). Both are fixed for E-TB-v2 only (section 10).
+  history does not match inference (section 2; the same holds for the other full-trajectory agent
+  experts). Both are fixed for E-TB-v2 only (section 10).
 - **jupyter → script conversion.** Replaces stateful notebook execution with re-run semantics, and E2B
   output truncation is approximated.
 - **OSR-2 non-STEM selection.** A keyword heuristic; its yield was not measured before the build (the login-node test exceeded the 3 GB memory cap).
@@ -384,7 +386,7 @@ equals the union of the expert manifests.
 
 ## 9. Side experiment: E-SWE-v2 (`src/data/build_swe_v2.py`, `configs/train/e_swe_v2.yaml`)
 
-E-SWE did not beat Base on HARD-51. Its training data was 100% Python, while HARD-51 is about 60% Go/TS/JS. It also picked up OpenHands habits: repro scripts and test edits left in the repo. E-SWE-v2 keeps the E-SWE recipe and changes only the data: same schema, same locked `mini_toolcall.yaml` rendering, the same hyperparameters, and the same token budget (14.97M vs 15.05M train tokens, 64K max). It is an ablation and is **not** part of the merge or the mixed control.
+E-SWE did not beat Base on HARD-51. Its training data was 100% Python, while HARD-51 is about 60% Go/TS/JS. It also picked up OpenHands habits: repro scripts and test edits left in the repo. E-SWE-v2 keeps the E-SWE recipe and changes only the data: same schema, same locked `mini_toolcall.yaml` rendering, the same hyperparameters, and the same token budget (14.97M vs 15.05M train tokens, 64K max). It replaces E-SWE in the merges v3 and v4 (v4 is the final model; main README §4). It is not part of the mixed control, which was trained before the v2 data existed.
 
 - **Source.** `nvidia/Open-SWE-Traces` @ `1db67417…` (CC-BY-4.0), config v1.2, split `minisweagent`, folder `data/minisweagent/qwen38_27b/swe-rebench-v2` (22 shards, 5.48 GB, 53.7k rows). The teacher is Qwen3.8-27B in thinking mode (Apache-2.0, open weights). The trajectories are native mini-swe-agent: one `bash` tool, and the same observation template and escaping as our eval.
 - **Conversion.**
@@ -417,9 +419,9 @@ E-SWE did not beat Base on HARD-51. Its training data was 100% Python, while HAR
 - **Limitations.**
   - The leftover-file check is a heuristic.
   - Teacher text still reflects its own workflow, such as creating a patch file with an explicit file list.
-  - The training text keeps every turn's reasoning, while inference drops historical thinking (same as E-SWE).
+  - The training text keeps every turn's reasoning, while inference drops historical thinking (same as E-SWE; section 2).
 
-## 10. Side experiment: E-TB-v2 (`src/data/build_tb_v2.py`, `configs/train/e_tb_v2.yaml`, not trained yet)
+## 10. Side experiment: E-TB-v2 (`src/data/build_tb_v2.py`, `configs/train/e_tb_v2.yaml`; trained, part of the final merge v4)
 
 Why: E-TB scored below Base on TB2. Its data (Nemotron-Terminal-Corpus + OT-Agent-100K) is not
 success-filtered: "complete" only means the teacher declared `task_complete`, and 112 trajectories never did.
@@ -456,9 +458,10 @@ only the data.
 - **Known caveats:**
   - Horizons are still shorter than TB2's.
   - Python-heavy tasks (by a keyword heuristic): python 218, shell/text 115.
-  - The thinking train/eval mismatch of all experts (training keeps reasoning in every assistant turn, Terminus-2
-    at eval does not replay earlier turns' reasoning) is **fixed for E-TB-v2**; see the per-turn set below. The
-    full-trajectory `tb_v2` set above still has it and is not used for training.
+  - The thinking train/eval mismatch of the full-trajectory experts (section 2: training keeps reasoning in every
+    assistant turn, while eval uses `preserve_thinking=false` and drops historical thinking) is **fixed for
+    E-TB-v2**; see the per-turn set below. The full-trajectory `tb_v2` set above still has it and is not used
+    for training.
 - **Per-turn set `tb_v2_turns` (what E-TB-v2 trains on), `build --per-turn`:**
   - Every trajectory becomes samples k = messages up to assistant turn k. Earlier assistant turns keep only
     their visible JSON (no `reasoning_content`); turn k keeps its reasoning.
@@ -474,3 +477,10 @@ only the data.
     E-TB) is reached. Val: <= 3 turns from each of the 20 held-out tasks, as a 5th val set. The 4 standard val
     sets are unchanged.
   - Counts, label tokens and step counts: `manifests/tb_v2_turns_stats.json` and the token-cache log.
+- **Training (2026-10-14, run `e_tb_v2_r32`, records in `logs/train/e_tb_v2_r32/`):**
+  - 1,215 per-turn train samples, 15.02M tokens per epoch, of which 3.50M are label tokens.
+  - One B200, 116 optimizer steps (2 epochs), same hyperparameters as E-TB except 64K packs.
+  - Val loss went down on every val set: e_tb_v2_turns 0.483→0.403, e_tb 0.528→0.403, e_swe 0.347→0.310,
+    e_asi 0.584→0.467, e_hle 0.769→0.759.
+  - E-TB-v2 is part of the final merge v4 (E-TB was dropped from the merge after its TB2 regression; main
+    README §4).

@@ -1,0 +1,93 @@
+
+Sandbox mode: --sandbox task  [Task Environment Sandbox]
+  Isolated Python venv per task (via uv). Ensures correct package versions declared in task.yaml runtime.packages.
+  Pros:  Cross-platform (no Docker needed); deterministic Python dependencies; fast cached venv reuse.
+  Cons:  No filesystem or network isolation — agent still has full shell access and can read host files, reference answers, and other instances.
+
+
+==============================================================
+  Agent Configuration (affects reproducibility)
+==============================================================
+  Agent    opencode_cli
+  Model    qwen3.6-35b-a3b
+  Effort   None (default)
+  Timeout  10800s
+  Tools    restricted
+  CLI      1.17.15  (/scratch/eh3323/apex/tools/opencode-wrap/900000-mixed__asi__b3/opencode)
+==============================================================
+
+
+Sandbox mode: --sandbox task  [Task Environment Sandbox]
+  Isolated Python venv per task (via uv). Ensures correct package versions declared in task.yaml runtime.packages.
+  Pros:  Cross-platform (no Docker needed); deterministic Python dependencies; fast cached venv reuse.
+  Cons:  No filesystem or network isolation — agent still has full shell access and can read host files, reference answers, and other instances.
+
+
+==============================================================
+  Agent Configuration (affects reproducibility)
+==============================================================
+  Agent    opencode_cli
+  Model    qwen3.6-35b-a3b
+  Effort   None (default)
+  Timeout  10800s
+  Tools    restricted
+  CLI      1.17.15  (/scratch/eh3323/apex/tools/opencode-wrap/900000-mixed__asi__b3/opencode)
+==============================================================
+
+
+Sandbox mode: --sandbox task  [Task Environment Sandbox]
+  Isolated Python venv per task (via uv). Ensures correct package versions declared in task.yaml runtime.packages.
+  Pros:  Cross-platform (no Docker needed); deterministic Python dependencies; fast cached venv reuse.
+  Cons:  No filesystem or network isolation — agent still has full shell access and can read host files, reference answers, and other instances.
+
+
+==============================================================
+  Agent Configuration (affects reproducibility)
+==============================================================
+  Agent    opencode_cli
+  Model    qwen3.6-35b-a3b
+  Effort   None (default)
+  Timeout  10800s
+  Tools    restricted
+  CLI      1.17.15  (/scratch/eh3323/apex/tools/opencode-wrap/900000-mixed__asi__b3/opencode)
+==============================================================
+
+
+Sandbox mode: --sandbox task  [Task Environment Sandbox]
+  Isolated Python venv per task (via uv). Ensures correct package versions declared in task.yaml runtime.packages.
+  Pros:  Cross-platform (no Docker needed); deterministic Python dependencies; fast cached venv reuse.
+  Cons:  No filesystem or network isolation — agent still has full shell access and can read host files, reference answers, and other instances.
+
+
+==============================================================
+  Agent Configuration (affects reproducibility)
+==============================================================
+  Agent    opencode_cli
+  Model    qwen3.6-35b-a3b
+  Effort   None (default)
+  Timeout  10800s
+  Tools    restricted
+  CLI      1.17.15  (/scratch/eh3323/apex/tools/opencode-wrap/900000-mixed__asi__b3/opencode)
+==============================================================
+
+============================================================
+  ASI-Bench Produce-Only Summary
+  Agent: OpenCodeCLIAdapter
+  Tasks: 24  |  Instances: 24
+============================================================
+  Scoring: submit to https://asibench.apexin.ai/
+
+  Unscored submissions (submit mode): 24
+
+  Agent Behavior:
+    Avg turns: 21.8
+    Avg tool calls: 28.0 (bash: 598, edit: 36, invalid: 1, read: 14, task: 1, todowrite: 3, write: 19)
+    Avg thinking length: 0 chars
+
+  Model Calls:
+    Attempted: unknown (695 observed)
+    Responses: 694
+    Empty response rate: unknown
+
+  Total execution time: 60443s
+============================================================

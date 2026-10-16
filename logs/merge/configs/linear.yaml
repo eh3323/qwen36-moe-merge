@@ -1,0 +1,4 @@
+inherit: base.yaml
+# Task arithmetic: ΔW = λ Σ_t w_t ΔW_t. λ=0.25 == plain average; sweep λ ∈ {0.25, 0.5, 0.75, 1.0}.
+method: linear
+global_scale: 0.5

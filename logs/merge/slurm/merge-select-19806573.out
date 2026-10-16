@@ -1,0 +1,131 @@
+[select] 18 candidates, 0 already scored, 18 to run; val max_len=65536
+[attn] flash_attn(pip) unavailable: ModuleNotFoundError: No module named 'flash_attn'
+You are using version 1 of 'kernels-community/flash-attn3', but version 2 is available.
+Fetching 8 files:   0%|          | 0/8 [00:00<?, ?it/s]Fetching 8 files:  50%|█████     | 4/8 [00:01<00:01,  3.96it/s]Fetching 8 files: 100%|██████████| 8/8 [00:01<00:00,  7.87it/s]
+[attn] using hub:flash-attn3 (selftest max|diff|=3.91e-03)
+[gdn] patched HF Qwen3.5-MoE GatedDeltaNet -> FLA Triton kernels (varlen)
+Loading weights:   0%|          | 0/1026 [00:00<?, ?it/s]Loading weights:   0%|          | 1/1026 [00:02<34:45,  2.03s/it]Loading weights:   0%|          | 2/1026 [00:03<30:05,  1.76s/it]Loading weights:   1%|▏         | 13/1026 [00:04<04:24,  3.84it/s]Loading weights:   1%|▏         | 14/1026 [00:05<05:54,  2.85it/s]Loading weights:   3%|▎         | 30/1026 [00:08<03:21,  4.94it/s]Loading weights:   5%|▍         | 49/1026 [00:08<01:47,  9.10it/s]Loading weights:   5%|▍         | 51/1026 [00:09<02:26,  6.65it/s]Loading weights:   6%|▌         | 58/1026 [00:12<03:25,  4.71it/s]Loading weights:   7%|▋         | 75/1026 [00:12<01:48,  8.81it/s]Loading weights:   8%|▊         | 82/1026 [00:13<01:41,  9.34it/s]Loading weights:   8%|▊         | 85/1026 [00:14<02:24,  6.51it/s]Loading weights:  10%|▉         | 100/1026 [00:15<01:34,  9.75it/s]Loading weights:  10%|█         | 103/1026 [00:16<02:04,  7.41it/s]Loading weights:  11%|█         | 115/1026 [00:16<01:17, 11.83it/s]Loading weights:  12%|█▏        | 120/1026 [00:19<02:35,  5.84it/s]Loading weights:  12%|█▏        | 126/1026 [00:20<02:28,  6.05it/s]Loading weights:  13%|█▎        | 129/1026 [00:22<03:26,  4.35it/s]Loading weights:  14%|█▎        | 139/1026 [00:22<02:03,  7.21it/s]Loading weights:  14%|█▍        | 147/1026 [00:22<01:26, 10.15it/s]Loading weights:  15%|█▍        | 152/1026 [00:25<02:58,  4.90it/s]Loading weights:  16%|█▌        | 166/1026 [00:25<01:37,  8.83it/s]Loading weights:  17%|█▋        | 171/1026 [00:27<02:36,  5.47it/s]Loading weights:  18%|█▊        | 183/1026 [00:27<01:37,  8.68it/s]Loading weights:  18%|█▊        | 188/1026 [00:30<02:42,  5.16it/s]Loading weights:  19%|█▉        | 196/1026 [00:33<03:26,  4.01it/s]Loading weights:  20%|█▉        | 205/1026 [00:33<02:23,  5.71it/s]Loading weights:  21%|██        | 216/1026 [00:33<01:32,  8.72it/s]Loading weights:  22%|██▏       | 222/1026 [00:37<02:48,  4.78it/s]Loading weights:  23%|██▎       | 237/1026 [00:37<01:53,  6.95it/s]Loading weights:  23%|██▎       | 241/1026 [00:39<02:22,  5.52it/s]Loading weights:  25%|██▍       | 252/1026 [00:39<01:32,  8.38it/s]Loading weights:  25%|██▌       | 257/1026 [00:43<02:57,  4.34it/s]Loading weights:  26%|██▌       | 265/1026 [00:44<02:35,  4.90it/s]Loading weights:  26%|██▌       | 268/1026 [00:46<03:25,  3.68it/s]Loading weights:  27%|██▋       | 275/1026 [00:46<02:23,  5.22it/s]Loading weights:  28%|██▊       | 286/1026 [00:46<01:26,  8.51it/s]Loading weights:  28%|██▊       | 291/1026 [00:50<03:00,  4.06it/s]Loading weights:  30%|██▉       | 303/1026 [00:50<01:47,  6.75it/s]Loading weights:  30%|███       | 308/1026 [00:53<02:49,  4.22it/s]Loading weights:  31%|███▏      | 321/1026 [00:53<01:38,  7.19it/s]Loading weights:  32%|███▏      | 327/1026 [00:56<02:43,  4.27it/s]Loading weights:  33%|███▎      | 334/1026 [00:58<02:27,  4.68it/s]Loading weights:  33%|███▎      | 338/1026 [01:00<03:05,  3.71it/s]Loading weights:  34%|███▎      | 344/1026 [01:00<02:17,  4.97it/s]Loading weights:  35%|███▍      | 354/1026 [01:00<01:24,  7.94it/s]Loading weights:  35%|███▍      | 359/1026 [01:02<02:09,  5.15it/s]Loading weights:  36%|███▋      | 373/1026 [01:02<01:09,  9.41it/s]Loading weights:  37%|███▋      | 380/1026 [01:05<01:49,  5.90it/s]Loading weights:  38%|███▊      | 393/1026 [01:05<01:06,  9.52it/s]Loading weights:  39%|███▉      | 400/1026 [01:07<01:39,  6.26it/s]Loading weights:  39%|███▉      | 405/1026 [01:10<02:36,  3.96it/s]Loading weights:  40%|████      | 413/1026 [01:11<01:50,  5.53it/s]Loading weights:  42%|████▏     | 426/1026 [01:11<01:18,  7.63it/s]Loading weights:  42%|████▏     | 430/1026 [01:13<01:50,  5.38it/s]Loading weights:  43%|████▎     | 444/1026 [01:13<01:03,  9.19it/s]Loading weights:  44%|████▍     | 450/1026 [01:17<01:54,  5.05it/s]Loading weights:  45%|████▍     | 461/1026 [01:17<01:14,  7.60it/s]Loading weights:  46%|████▌     | 467/1026 [01:19<01:36,  5.78it/s]Loading weights:  46%|████▌     | 472/1026 [01:20<01:40,  5.52it/s]Loading weights:  46%|████▋     | 475/1026 [01:21<01:55,  4.77it/s]Loading weights:  48%|████▊     | 493/1026 [01:21<00:50, 10.50it/s]Loading weights:  49%|████▊     | 500/1026 [01:23<01:07,  7.76it/s]Loading weights:  50%|█████     | 513/1026 [01:24<00:55,  9.22it/s]Loading weights:  50%|█████     | 517/1026 [01:25<01:07,  7.56it/s]Loading weights:  52%|█████▏    | 529/1026 [01:25<00:42, 11.78it/s]Loading weights:  52%|█████▏    | 535/1026 [01:26<01:02,  7.87it/s]Loading weights:  53%|█████▎    | 541/1026 [01:28<01:18,  6.15it/s]Loading weights:  54%|█████▍    | 558/1026 [01:28<00:41, 11.30it/s]Loading weights:  55%|█████▍    | 564/1026 [01:29<00:50,  9.15it/s]Loading weights:  55%|█████▌    | 568/1026 [01:31<01:10,  6.46it/s]Loading weights:  57%|█████▋    | 582/1026 [01:31<00:39, 11.12it/s]Loading weights:  57%|█████▋    | 588/1026 [01:33<01:04,  6.81it/s]Loading weights:  58%|█████▊    | 597/1026 [01:34<00:47,  9.08it/s]Loading weights:  59%|█████▊    | 601/1026 [01:38<01:55,  3.68it/s]Loading weights:  59%|█████▉    | 604/1026 [01:41<02:43,  2.58it/s]Loading weights:  59%|█████▉    | 610/1026 [01:44<02:53,  2.39it/s]Loading weights:  61%|██████    | 625/1026 [01:44<01:22,  4.88it/s]Loading weights:  62%|██████▏   | 631/1026 [01:44<01:04,  6.17it/s]Loading weights:  62%|██████▏   | 637/1026 [01:47<01:26,  4.50it/s]Loading weights:  63%|██████▎   | 647/1026 [01:47<00:54,  6.89it/s]Loading weights:  64%|██████▎   | 652/1026 [01:48<00:59,  6.31it/s]Loading weights:  64%|██████▍   | 656/1026 [01:49<01:16,  4.82it/s]Loading weights:  65%|██████▍   | 666/1026 [01:50<00:46,  7.72it/s]Loading weights:  65%|██████▌   | 670/1026 [01:51<00:52,  6.77it/s]Loading weights:  66%|██████▌   | 673/1026 [01:53<01:25,  4.13it/s]Loading weights:  66%|██████▌   | 679/1026 [01:56<02:01,  2.85it/s]Loading weights:  68%|██████▊   | 697/1026 [01:56<00:49,  6.64it/s]Loading weights:  69%|██████▉   | 713/1026 [01:56<00:27, 11.20it/s]Loading weights:  71%|███████   | 731/1026 [01:56<00:16, 17.84it/s]Loading weights:  74%|███████▍  | 761/1026 [01:57<00:08, 32.97it/s]Loading weights:  76%|███████▌  | 781/1026 [01:57<00:05, 44.60it/s]Loading weights:  79%|███████▉  | 814/1026 [01:57<00:03, 70.57it/s]Loading weights:  82%|████████▏ | 841/1026 [01:57<00:01, 92.91it/s]Loading weights:  84%|████████▍ | 863/1026 [01:57<00:01, 110.24it/s]Loading weights:  86%|████████▋ | 885/1026 [01:57<00:01, 121.12it/s]Loading weights:  89%|████████▉ | 914/1026 [01:57<00:00, 148.00it/s]Loading weights:  92%|█████████▏| 941/1026 [01:57<00:00, 169.85it/s]Loading weights:  95%|█████████▍| 971/1026 [01:57<00:00, 190.56it/s]Loading weights:  97%|█████████▋| 997/1026 [01:58<00:00, 201.71it/s]Loading weights: 100%|█████████▉| 1021/1026 [01:58<00:00, 169.43it/s]Loading weights: 100%|██████████| 1026/1026 [01:58<00:00,  8.67it/s] 
+[model] loaded Qwen3_5MoeForConditionalGeneration experts_impl=grouped_mm attn_impl=apex_varlen
+[select] 250 adapted weights backed up (2.62 GiB)
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/scratch/eh3323/apex/repo/src/merge/merge_select.py", line 262, in <module>
+    main()
+  File "/scratch/eh3323/apex/repo/src/merge/merge_select.py", line 162, in main
+    res = evaluate()
+          ^^^^^^^^^^
+  File "/scratch/eh3323/apex/repo/src/merge/merge_select.py", line 139, in evaluate
+    ls, k = Mdl.forward_pack(text_model, lm_head, ids, lab, pos, cu, cu_cpu, ce_chunk)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/scratch/eh3323/apex/repo/src/train/modeling.py", line 314, in forward_pack
+    out = text_model(
+          ^^^^^^^^^^^
+  File "/scratch/eh3323/apex/envs/train/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1778, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/scratch/eh3323/apex/envs/train/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1789, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/scratch/eh3323/apex/envs/train/lib/python3.12/site-packages/transformers/utils/generic.py", line 1081, in wrapper
+    output = func(self, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/scratch/eh3323/apex/envs/train/lib/python3.12/site-packages/transformers/utils/output_capturing.py", line 287, in wrapper
+    outputs = func(self, *args, **kwargs)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/scratch/eh3323/apex/envs/train/lib/python3.12/site-packages/transformers/models/qwen3_5_moe/modeling_qwen3_5_moe.py", line 1392, in forward
+    hidden_states = decoder_layer(
+                    ^^^^^^^^^^^^^^
+  File "/scratch/eh3323/apex/envs/train/lib/python3.12/site-packages/transformers/modeling_layers.py", line 110, in __call__
+    return super().__call__(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/scratch/eh3323/apex/envs/train/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1778, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/scratch/eh3323/apex/envs/train/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1789, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/scratch/eh3323/apex/envs/train/lib/python3.12/site-packages/transformers/models/qwen3_5_moe/modeling_qwen3_5_moe.py", line 965, in forward
+    hidden_states = self.linear_attn(
+                    ^^^^^^^^^^^^^^^^^
+  File "/scratch/eh3323/apex/envs/train/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1778, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/scratch/eh3323/apex/envs/train/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1789, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/scratch/eh3323/apex/envs/train/lib/python3.12/site-packages/transformers/integrations/accelerate.py", line 1010, in wrapped
+    output = forward_func(self, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/scratch/eh3323/apex/envs/train/lib/python3.12/site-packages/transformers/models/qwen3_5_moe/modeling_qwen3_5_moe.py", line 631, in forward
+    core_attn_out, last_recurrent_state = torch_chunk_gated_delta_rule(
+                                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/scratch/eh3323/apex/repo/src/train/modeling.py", line 160, in chunk_fn
+    return fla_chunk(query, key, value, g=g, beta=beta, initial_state=initial_state,
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/scratch/eh3323/apex/envs/train/lib/python3.12/site-packages/torch/_dynamo/eval_frame.py", line 1298, in _fn
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/scratch/eh3323/apex/envs/train/lib/python3.12/site-packages/fla/ops/backends/__init__.py", line 214, in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/scratch/eh3323/apex/envs/train/lib/python3.12/site-packages/torch/_dynamo/eval_frame.py", line 1298, in _fn
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/scratch/eh3323/apex/envs/train/lib/python3.12/site-packages/fla/ops/gated_delta_rule/chunk.py", line 567, in chunk_gated_delta_rule
+    o, final_state = ChunkGatedDeltaRuleFunction.apply(
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/scratch/eh3323/apex/envs/train/lib/python3.12/site-packages/torch/autograd/function.py", line 596, in apply
+    return super().apply(*args, **kwargs)  # type: ignore[misc]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/scratch/eh3323/apex/envs/train/lib/python3.12/site-packages/fla/utils/_decorators.py", line 152, in wrapper
+    return fn(*processed_args, **processed_kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/scratch/eh3323/apex/envs/train/lib/python3.12/site-packages/torch/amp/autocast_mode.py", line 493, in decorate_fwd
+    return fwd(*args, **kwargs)  # pyrefly: ignore [not-callable]
+           ^^^^^^^^^^^^^^^^^^^^
+  File "/scratch/eh3323/apex/envs/train/lib/python3.12/site-packages/fla/ops/gated_delta_rule/chunk.py", line 282, in forward
+    q, q_rstd = l2norm_fwd(q)
+                ^^^^^^^^^^^^^
+  File "/scratch/eh3323/apex/envs/train/lib/python3.12/site-packages/torch/_dynamo/eval_frame.py", line 1298, in _fn
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/scratch/eh3323/apex/envs/train/lib/python3.12/site-packages/fla/ops/backends/__init__.py", line 214, in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/scratch/eh3323/apex/envs/train/lib/python3.12/site-packages/fla/modules/l2norm.py", line 178, in l2norm_fwd
+    l2norm_fwd_kernel[grid](
+  File "/scratch/eh3323/apex/envs/train/lib/python3.12/site-packages/triton/runtime/jit.py", line 370, in <lambda>
+    return lambda *args, **kwargs: self.run(grid=grid, warmup=False, *args, **kwargs)
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/scratch/eh3323/apex/envs/train/lib/python3.12/site-packages/fla/ops/utils/cache.py", line 378, in run
+    return super().run(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/scratch/eh3323/apex/envs/train/lib/python3.12/site-packages/triton/runtime/autotuner.py", line 238, in run
+    used_cached_result = self.check_disk_cache(key, pruned_configs, benchmark)
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/scratch/eh3323/apex/envs/train/lib/python3.12/site-packages/triton/runtime/autotuner.py", line 202, in check_disk_cache
+    bench_fn()
+  File "/scratch/eh3323/apex/envs/train/lib/python3.12/site-packages/triton/runtime/autotuner.py", line 229, in benchmark
+    timings = {config: self._bench(*args, config=config, **kwargs) for config in pruned_configs}
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/scratch/eh3323/apex/envs/train/lib/python3.12/site-packages/triton/runtime/autotuner.py", line 164, in _bench
+    return self.do_bench(kernel_call, quantiles=(0.5, 0.2, 0.8))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/scratch/eh3323/apex/envs/train/lib/python3.12/site-packages/triton/testing.py", line 149, in do_bench
+    fn()
+  File "/scratch/eh3323/apex/envs/train/lib/python3.12/site-packages/triton/runtime/autotuner.py", line 150, in kernel_call
+    self.fn.run(
+  File "/scratch/eh3323/apex/envs/train/lib/python3.12/site-packages/triton/runtime/jit.py", line 739, in run
+    kernel = self._do_compile(key, signature, device, constexprs, options, attrs, warmup)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/scratch/eh3323/apex/envs/train/lib/python3.12/site-packages/triton/runtime/jit.py", line 884, in _do_compile
+    kernel = self.compile(src, target=target, options=options.__dict__)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/scratch/eh3323/apex/envs/train/lib/python3.12/site-packages/triton/compiler/compiler.py", line 339, in compile
+    metadata_group[ir_filename] = fn_cache_manager.put(next_module, ir_filename)
+                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/scratch/eh3323/apex/envs/train/lib/python3.12/site-packages/triton/runtime/cache.py", line 120, in put
+    with open(temp_path, mode) as f:
+         ^^^^^^^^^^^^^^^^^^^^^
+OSError: [Errno 122] Disk quota exceeded: '/home/eh3323/.triton/cache/VLEWY7S34JECYE5EDF7BIIVMTSJPC3X5TH6H24ZKUNIEKCO6DIDQ/tmp.pid_3351827_346d296c-99d0-4d38-829e-a7a1ba9eed0f/l2norm_fwd_kernel.llir'

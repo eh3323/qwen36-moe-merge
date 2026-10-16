@@ -1,0 +1,27 @@
+host=cs682.hpc.nyu.edu date=2026-10-14T10:54:06-04:00 job=19806565
+egress 200 https://pypi.org/simple/pip/
+egress 404 https://files.pythonhosted.org
+egress 301 https://astral.sh/uv/0.9.5/install.sh
+egress 401 https://registry-1.docker.io/v2/
+egress 401 https://ghcr.io/v2/
+egress 200 https://github.com
+egress 200 https://proxy.golang.org
+egress 200 https://registry.npmjs.org/
+egress 200 https://huggingface.co
+egress 401 https://api.openai.com/v1/models
+egress 200 http://archive.ubuntu.com/ubuntu/
+egress 200 http://deb.debian.org/debian/
+--- local disks
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/nvme0n1p2   78G   12G   66G  16% /
+/dev/nvme0n1p3  816G   16G  800G   2% /state/partition1
+/dev/nvme0n1p3  816G   16G  800G   2% /state/partition1
+--- sandbox root: /state/partition1/eh3323-sbx-base__swepro__oracle-19806565  resolv.conf:
+search hpc.nyu.edu
+nameserver 128.122.0.11
+nameserver 128.122.0.71
+--- bind env: BASH_ENV= APPTAINER_BINDPATH=
+--- apptainer
+apptainer version 1.5.3-3.el8
+--- pasta: /scratch/eh3323/apex/tools/bin/pasta  unshare-userns: ok
+--- ip_unprivileged_port_start=1024

@@ -1,0 +1,17 @@
+host=33e9d0f2247d port=20000 ngpu=1 RUN=mixed MODEL_DIR=/scratch/eh3323/apex/models/merged/mixed_r32
+name, memory.total [MiB], driver_version
+NVIDIA H200, 143771 MiB, 580.178.04
+NVIDIA H200, 143771 MiB, 580.178.04
+endpoint written: /scratch/eh3323/apex/work/endpoints/mixed@900000.env
+RUN=mixed
+MODEL_DIR=/scratch/eh3323/apex/models/merged/mixed_r32
+ENDPOINT_HOST=33e9d0f2247d
+ENDPOINT_PORT=20000
+API_BASE=http://33e9d0f2247d:20000/v1
+SERVED_MODEL=qwen3.6-35b-a3b
+SERVE_JOB_ID=900000
+NGPU=1
+GPU_NAME='NVIDIA H200'
+STARTED=2026-10-16T00:49:26+00:00
+SERVE_LOGDIR=/scratch/eh3323/apex/logs/serve-mixed-900000
+SIGTERM (preemption?)

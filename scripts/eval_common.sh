@@ -33,7 +33,7 @@ node_local_dir() {
 
 group_of() {  # RUN -> results group dir
   case "$1" in
-    base) echo base ;; mixed) echo mixed ;; merged*) echo merged ;; e_*) echo experts ;;
+    base|base_*) echo base ;; mixed) echo mixed ;; merged*) echo merged ;; e_*) echo experts ;;
     *) echo "unknown RUN '$1'" >&2; return 1 ;;
   esac
 }
@@ -76,7 +76,10 @@ start_proxy() {
   local h=$(echo "${SLURM_JOB_ID:-$$}-$RUN_ID" | cksum | cut -d' ' -f1)
   local port=$(( 30000 + h % 20000 ))
   PROXY_UDS=/tmp/$USER-llmproxy-$h.sock
-  $EVAL_PY -I $REPO/src/eval/llm_proxy.py --endpoint-file $ENDPOINT_DIR/$EP_NAME.env \
+  # interpreter alias without "python" in its name, so agents' `pkill -f python3` cannot hit it (slurm/serve_model.sbatch)
+  local py=$APEX/envs/eval/bin/llm-proxy
+  [ -e "$py" ] || ln -s "$(readlink -f "$EVAL_PY")" "$py"
+  $py -I $REPO/src/eval/llm_proxy.py --endpoint-file $ENDPOINT_DIR/$EP_NAME.env \
     --listen 127.0.0.1:$port --uds $PROXY_UDS --log $RAW_DIR/llm_requests.jsonl \
     > $LOGDIR/proxy.log 2>&1 &
   PROXY_PID=$!
@@ -129,7 +132,15 @@ meta = {"run_id": os.environ["RUN_ID"], "run": os.environ["RUN"], "bench": os.en
         "host": os.uname().nodename, "started": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "harness_env_sha256": hashlib.sha256(harness.encode()).hexdigest(), "harness_env": harness,
         "endpoint": ep, **extra}
-pathlib.Path(out).write_text(json.dumps(meta, indent=1))
+p = pathlib.Path(out)
+if p.exists():  # resumed run (e.g. HLE continued on another GPU type): keep where earlier segments ran
+    try:
+        old = json.loads(p.read_text())
+        seg = {k: old.get(k) for k in ("slurm_job", "host", "started", "endpoint", "harness_env_sha256")}
+        meta["previous_segments"] = old.get("previous_segments", []) + [seg]
+    except Exception:
+        pass
+p.write_text(json.dumps(meta, indent=1))
 PY
 }
 

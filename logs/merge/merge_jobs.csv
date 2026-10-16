@@ -1,0 +1,15 @@
+job_id,kind,config_or_adapter,node,gpu,start,end,seconds (sacct Elapsed; merge_info.seconds for the two ensure_merged builds),state,output,log
+19751207,merge-single,runs/e_swe_r32/adapter_final,gh120,H200 (gh node),2026-10-13T20:03:18,2026-10-13T20:06:43,205,COMPLETED,models/merged/e_swe_r32,slurm/merge-single-19751207.out
+19756945,merge-single,runs/e_tb_r32/adapter_final,gh111,H200 (gh node),2026-10-13T21:33:17,2026-10-13T21:36:45,208,COMPLETED,models/merged/e_tb_r32,slurm/merge-single-19756945.out
+19756946,merge-single,runs/e_asi_r32/adapter_final,gl060,,2026-10-13T22:27:07,2026-10-13T22:31:00,233,COMPLETED,models/merged/e_asi_r32,slurm/merge-single-19756946.out
+19806571,merge-single,runs/e_hle_r32/adapter_final,gr105,,2026-10-14T10:50:24,2026-10-14T10:54:52,268,COMPLETED,models/merged/e_hle_r32,slurm/merge-single-19806571.out
+19806572,merge-single,runs/mixed_r32/adapter_final,gr105,,2026-10-14T10:50:24,2026-10-14T10:54:56,272,COMPLETED,models/merged/mixed_r32,slurm/merge-single-19806572.out
+19806574,merge-analysis,configs/merge/analysis.yaml,gr101,,2026-10-14T10:50:28,2026-10-14T10:51:25,57,COMPLETED,analysis/conflicts_e_swe_e_tb_e_asi_e_hle,slurm/merge-analysis-19806574.out
+19806573,merge-select,configs/merge/select.yaml,gh112,H200 (gh node),2026-10-14T11:03:01,2026-10-14T11:07:43,282,FAILED (Triton cache in $HOME hit disk quota),-,slurm/merge-select-19806573.out
+19807941,merge-select,configs/merge/select.yaml,gh112,H200 (gh node),2026-10-14T11:32:59,2026-10-14T11:50:01,1022,COMPLETED,analysis/merge_select (18 candidates),slurm/merge-select-19807941.out
+19811463,merge-experts,"configs/merge/ties.yaml + --set overrides (density=0.5, name=ties_l1_d0.5; resolved in merge_info/ties_l1_d0.5.json)",gr101,,2026-10-14T12:42:33,2026-10-14T12:46:08,215,COMPLETED,models/merged/ties_l1_d0.5,slurm/merge-experts-19811463.out
+19828849,merge-experts,configs/merge/ties_swe_v2.yaml,gl064,,2026-10-14T15:16:57,2026-10-14T15:20:47,230,COMPLETED,models/merged/ties_l1_d0.5_sweV2,slurm/merge-experts-19828849.out
+19828854,merge-single,runs/e_swe_v2_r32/adapter_final,gl011,,2026-10-14T15:20:49,2026-10-14T15:24:22,213,COMPLETED,models/merged/e_swe_v2_r32,slurm/merge-single-19828854.out
+19838352,merge-single,runs/e_tb_v2_r32/adapter_final,gr102,,2026-10-14T21:10:42,2026-10-14T21:14:07,205,COMPLETED,models/merged/e_tb_v2_r32,slurm/merge-single-19838352.out
+19838799,"ensure_merged (inside eval job, model redirect sweV2->v3)",configs/merge/ties_v3.yaml,gr101,,2026-10-14T19:47:45,2026-10-14T19:49:22 (merge_info written),82.5,COMPLETED (build log overwritten when the job was preempted+requeued),models/merged/ties_l1_d0.5_v3,merge_info/ties_l1_d0.5_v3.json
+19840891,"ensure_merged (inside eval job, MERGE_CONFIG)",configs/merge/ties_v4.yaml,gr103,NVIDIA RTX PRO 6000 Blackwell Server Edition,2026-10-14T21:10:42,2026-10-14T21:14:31 (merge_info written),208.8,COMPLETED,models/merged/ties_l1_d0.5_v4,build-ties_l1_d0.5_v4-job19840891.log

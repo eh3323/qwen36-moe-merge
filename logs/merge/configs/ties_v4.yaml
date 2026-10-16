@@ -1,0 +1,9 @@
+inherit: ties_v3.yaml
+# Final merge candidate v4: v3 + E-TB-v2 (TermGrade test-verified trajectories, per-turn thinking-consistent
+# training; data/README.md section 10). Same method/hyper-parameters (ties, λ=1, density 0.5).
+# FINAL merged model (decided 2026-10-15 01:45 EDT, before any v3/v4 test score existed; logs/worklog.md). The earlier
+# plan (pick v3 or v4 by the higher 4-benchmark macro average) was dropped for lack of compute time.
+name: ties_l1_d0.5_v4
+experts:
+  e_tb: /scratch/eh3323/apex/runs/e_tb_v2_r32/adapter_final
+weights: {e_tb: 1.0}

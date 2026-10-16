@@ -12,7 +12,12 @@
 
   summarize.py compare --a RUN_A --b RUN_B --bench tb2 [--level b3] [--env-policy zero|drop]
       paired bootstrap over tasks shared by both runs (per-task score = mean over attempts):
-      mean diff (B-A, points), 95% percentile CI, two-sided bootstrap p, n tasks, env errors.
+      mean diff (B-A, points), 95% percentile CI, two-sided bootstrap p, n tasks, env errors;
+      plus the exact McNemar test when both runs have one binary outcome per task.
+
+  summarize.py macro --a RUN_A --b RUN_B [--benches tb2,swepro,hle,asi@b3] [--env-policy zero|drop]
+      macro average over benchmarks (each benchmark weighs 1/k): paired bootstrap that resamples tasks
+      within each benchmark independently; per-benchmark and macro diff (B-A), 95% CI, two-sided p.
 
 Run ids follow <RUN>__<bench>__<tag>; tags 'smoke'/'oracle' are excluded unless --include-smoke.
 Stdlib only.
@@ -149,13 +154,67 @@ def per_task(rows: list[dict], run: str, bench: str, level: str | None, env_poli
     return {t: st.fmean(v) for t, v in acc.items()}, env
 
 
-def compare(a) -> None:
-    rows = load(a.results, a.include_smoke)
-    A, envA = per_task(rows, a.a, a.bench, a.level, a.env_policy)
-    B, envB = per_task(rows, a.b, a.bench, a.level, a.env_policy)
+def mcnemar(A: dict, B: dict, tasks: list[str]) -> dict | None:
+    """Exact two-sided McNemar (binomial on the discordant pairs) if every per-task score is 0 or 1."""
+    if any(A[t] not in (0.0, 1.0) or B[t] not in (0.0, 1.0) for t in tasks):
+        return None
+    b = sum(A[t] == 1.0 and B[t] == 0.0 for t in tasks)  # A right, B wrong
+    c = sum(A[t] == 0.0 and B[t] == 1.0 for t in tasks)  # B right, A wrong
+    n, k = b + c, min(b, c)
+    p = 1.0 if n == 0 else min(1.0, 2 * sum(math.comb(n, i) for i in range(k + 1)) / 2 ** n)
+    return {"A_only": b, "B_only": c, "p_exact": round(p, 6)}
+
+
+def paired(rows, a, run_a, run_b, bench, level):
+    A, envA = per_task(rows, run_a, bench, level, a.env_policy)
+    B, envB = per_task(rows, run_b, bench, level, a.env_policy)
     tasks = sorted(set(A) & set(B))
     if a.env_policy == "drop":
         tasks = [t for t in tasks if t not in envA and t not in envB]
+    return A, B, tasks, envA, envB
+
+
+def macro(a) -> None:
+    rows = load(a.results, a.include_smoke)
+    benches = []
+    for spec in a.benches.split(","):
+        bench, _, level = spec.partition("@")
+        A, B, tasks, envA, envB = paired(rows, a, a.a, a.b, bench, level or None)
+        if not tasks:
+            raise SystemExit(f"no shared tasks for {spec}")
+        benches.append((spec, [100 * A[t] for t in tasks], [100 * B[t] for t in tasks], len(envA), len(envB)))
+    rng = random.Random(a.seed)
+
+    def stat(idx):  # idx[j] = resampled task indices of benchmark j
+        per = [st.fmean(bB[i] - bA[i] for i in ix) for (_, bA, bB, _, _), ix in zip(benches, idx)]
+        return st.fmean(per), per
+    full = [list(range(len(b[1]))) for b in benches]
+    m0, per0 = stat(full)
+    boots = []
+    for _ in range(a.n_boot):
+        idx = [[rng.randrange(len(b[1])) for _ in b[1]] for b in benches]
+        boots.append(stat(idx))
+    def ci(vals):
+        v = sorted(vals)
+        return [round(v[int(0.025 * len(v))], 2), round(v[int(0.975 * len(v)) - 1], 2)]
+    def pval(vals):
+        return round(min(1.0, 2 * min(sum(x <= 0 for x in vals), sum(x >= 0 for x in vals)) / len(vals)), 4)
+    res = {"A": a.a, "B": a.b, "env_policy": a.env_policy, "n_boot": a.n_boot,
+           "macro_A": round(st.fmean(st.fmean(b[1]) for b in benches), 2),
+           "macro_B": round(st.fmean(st.fmean(b[2]) for b in benches), 2),
+           "macro_diff_B_minus_A": round(m0, 2), "macro_ci95": ci([b[0] for b in boots]),
+           "macro_p_two_sided": pval([b[0] for b in boots]), "benches": []}
+    for j, (spec, bA, bB, eA, eB) in enumerate(benches):
+        vals = [b[1][j] for b in boots]
+        res["benches"].append({"bench": spec, "n_tasks": len(bA), "mean_A": round(st.fmean(bA), 2),
+                               "mean_B": round(st.fmean(bB), 2), "diff": round(per0[j], 2), "ci95": ci(vals),
+                               "p_two_sided": pval(vals), "env_errors_A": eA, "env_errors_B": eB})
+    print(json.dumps(res, indent=1))
+
+
+def compare(a) -> None:
+    rows = load(a.results, a.include_smoke)
+    A, B, tasks, envA, envB = paired(rows, a, a.a, a.b, a.bench, a.level)
     if not tasks:
         raise SystemExit("no shared tasks")
     d = [100 * (B[t] - A[t]) for t in tasks]
@@ -169,7 +228,8 @@ def compare(a) -> None:
            "mean_B": round(100 * st.fmean(B[t] for t in tasks), 2),
            "diff_B_minus_A": round(st.fmean(d), 2), "ci95": [round(lo, 2), round(hi, 2)],
            "p_two_sided": round(min(p, 1.0), 4), "env_policy": a.env_policy,
-           "env_errors_A": len(envA), "env_errors_B": len(envB), "n_boot": a.n_boot}
+           "env_errors_A": len(envA), "env_errors_B": len(envB), "n_boot": a.n_boot,
+           "mcnemar": mcnemar(A, B, tasks)}
     print(json.dumps(res, indent=1))
 
 
@@ -186,11 +246,18 @@ def main() -> None:
     c.add_argument("--env-policy", choices=["zero", "drop"], default="zero")
     c.add_argument("--n-boot", type=int, default=10000)
     c.add_argument("--seed", type=int, default=0)
-    for p in (t, c):
+    m = sp.add_parser("macro")
+    m.add_argument("--a", required=True)
+    m.add_argument("--b", required=True)
+    m.add_argument("--benches", default="tb2,swepro,hle,asi@b3", help="comma list; ASI as asi@<level>")
+    m.add_argument("--env-policy", choices=["zero", "drop"], default="zero")
+    m.add_argument("--n-boot", type=int, default=10000)
+    m.add_argument("--seed", type=int, default=0)
+    for p in (t, c, m):
         p.add_argument("--results", default="results")
         p.add_argument("--include-smoke", action="store_true")
     a = ap.parse_args()
-    table(a) if a.cmd == "table" else compare(a)
+    {"table": table, "compare": compare, "macro": macro}[a.cmd](a)
 
 
 if __name__ == "__main__":

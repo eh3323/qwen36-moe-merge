@@ -1,0 +1,103 @@
+{
+ "expert": "swe_v2",
+ "n_train": 383,
+ "n_val": 10,
+ "train_tokens": 14965525,
+ "val_tokens": 415684,
+ "train_by_source": {
+  "open_swe_traces": 383
+ },
+ "train_tokens_by_source": {
+  "open_swe_traces": 14965525
+ },
+ "train_by_stratum": {
+  "go/hard": 116,
+  "python/hard": 87,
+  "tsjs/hard": 84,
+  "python/other": 27,
+  "go/other": 39,
+  "tsjs/other": 30
+ },
+ "mean_tokens": 39074,
+ "drops": {
+  "not_resolved": 31007,
+  "language_not_in_quota": 2944,
+  "dev_repo_holdout": 1754,
+  "convert:patch_txt_other_use": 9088,
+  "convert:git_history": 578,
+  "leftover_repo_files": 990,
+  "patch_txt_in_text": 3546,
+  "convert:residual_testbed_path": 501,
+  "actions<30": 1244,
+  "convert:patch_txt_in_observation": 87,
+  "too_long": 291,
+  "convert:unexpected_user_turn": 37,
+  "patch_edits_tests_or_scratch": 1,
+  "too_long_est": 28,
+  "convert:short_task": 3,
+  "turns>150": 4,
+  "decontam:swe_pro_org(ansible/*)": 6,
+  "decontam:swe_pro_13gram": 6
+ },
+ "source": {
+  "repo": "nvidia/Open-SWE-Traces",
+  "revision": "1db674173119d71df45c22007af99e214600711a",
+  "subdirs": [
+   "data/minisweagent/qwen38_27b/swe-rebench-v2"
+  ],
+  "license": "CC-BY-4.0",
+  "teacher": "Qwen3.8-27B (thinking, Apache-2.0)"
+ },
+ "filters": {
+  "resolved": 1,
+  "actions_min": 30,
+  "assistant_turns_max": 150,
+  "max_tokens": 65536,
+  "lang_frac": {
+   "go": 0.4,
+   "tsjs": 0.3,
+   "python": 0.3
+  },
+  "hard_frac": 0.75,
+  "hard": "reference_patch >=2 files or >=30 lines",
+  "max_per_instance": 1,
+  "max_per_repo": 36,
+  "dropped": "test/scratch files in model_patch, leftover repo files, git-history lookups, other patch.txt uses (commands, observations, assistant text), SWE-Pro repos/forks, dev repos, SWE-Pro 13-grams"
+ },
+ "token_budget": {
+  "e_swe_train_tokens": 15053600,
+  "budget_incl_val": 15360816
+ },
+ "n_candidates": 1599,
+ "rows_seen_by_language": {
+  "go": 13206,
+  "python": 12044,
+  "php": 2674,
+  "rust": 5804,
+  "java": 3149,
+  "js": 7371,
+  "ts": 9160,
+  "c": 220,
+  "cpp": 86
+ },
+ "candidates_by_stratum": {
+  "python/hard": 544,
+  "python/other": 279,
+  "go/other": 115,
+  "tsjs/hard": 279,
+  "go/hard": 138,
+  "tsjs/other": 244
+ },
+ "train_by_language_tokens": {
+  "go": 5928865,
+  "tsjs": 4976388,
+  "python": 4475956
+ },
+ "train_by_language_count": {
+  "go": 157,
+  "python": 118,
+  "tsjs": 118
+ },
+ "parallel_turn_samples": 356,
+ "built_at": "2026-10-14 13:29:42"
+}

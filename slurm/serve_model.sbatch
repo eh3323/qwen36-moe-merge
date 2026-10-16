@@ -20,7 +20,7 @@ set -uo pipefail
 source /scratch/eh3323/apex/env.sh
 source $APEX/repo/configs/eval/harness.env
 : "${RUN:?RUN=base|e_swe|e_tb|e_asi|e_hle|mixed|merged_*}" "${MODEL_DIR:?MODEL_DIR=<HF weights dir>}"
-NGPU=$(nvidia-smi -L | wc -l)
+NGPU=${NGPU_OVERRIDE:-$(nvidia-smi -L | wc -l)}
 PORT=$(( 20000 + SLURM_JOB_ID % 20000 ))
 HOST=$(hostname -f 2>/dev/null || hostname)
 LOGDIR=$APEX/logs/serve-${RUN}-${SLURM_JOB_ID}
@@ -46,6 +46,19 @@ cleanup() {
 trap cleanup EXIT
 trap 'echo "SIGTERM (preemption?)"; exit 143' TERM
 
+# Late binding, so that queued eval jobs keep their queue position when the model to evaluate changes:
+# $APEX/work/model_redirect/<basename of MODEL_DIR> = "<new model dir> <merge config>". The new model is built here
+# if missing (scripts/ensure_merged.sh, ~4 min on 1 GPU). The endpoint file (and so every run_meta.json) records
+# the MODEL_DIR actually served.
+REDIR=$APEX/work/model_redirect/$(basename "$MODEL_DIR")
+if [ -s "$REDIR" ]; then
+  read -r NEW_DIR NEW_CFG < "$REDIR"
+  echo "model redirect ($REDIR): $MODEL_DIR -> $NEW_DIR (config $NEW_CFG)"
+  bash $APEX/repo/scripts/ensure_merged.sh "$NEW_DIR" "$NEW_CFG" || { echo "ensure_merged failed"; exit 1; }
+  MODEL_DIR=$NEW_DIR
+elif [ ! -e "$MODEL_DIR/config.json" ] && [ -n "${MERGE_CONFIG:-}" ]; then  # jobs submitted before the merge exists
+  bash $APEX/repo/scripts/ensure_merged.sh "$MODEL_DIR" "$MERGE_CONFIG" || { echo "ensure_merged failed"; exit 1; }
+fi
 echo "host=$HOST port=$PORT ngpu=$NGPU RUN=$RUN MODEL_DIR=$MODEL_DIR"
 nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv
 DP_ARGS=(); [ "$NGPU" -gt 1 ] && DP_ARGS=(--data-parallel-size "$NGPU")
@@ -65,7 +78,12 @@ VLLM_ARGS=(
 )
 printf '%q ' vllm serve "${VLLM_ARGS[@]}" > "$LOGDIR/vllm_cmd.txt"; echo >> "$LOGDIR/vllm_cmd.txt"
 pip freeze 2>/dev/null > "$LOGDIR/serve_env_freeze.txt"
-vllm serve "${VLLM_ARGS[@]}" > "$LOGDIR/vllm.log" 2>&1 &
+# Same interpreter and venv under an alias whose process name and command line contain no "python": on rented container
+# hosts the ASI agents run without a PID namespace (scripts/asi_cloud.sh, ASI_SANDBOX=task) and can signal every
+# process; on 2026-10-15 two agents ran `pkill -f python3` and took vLLM down with their own scripts.
+SRV=$APEX/envs/serve/bin/vllm-srv
+[ -e "$SRV" ] || ln -s "$(readlink -f "$APEX/envs/serve/bin/python3")" "$SRV"
+"$SRV" "$APEX/envs/serve/bin/vllm" serve "${VLLM_ARGS[@]}" > "$LOGDIR/vllm.log" 2>&1 &
 VLLM_PID=$!
 
 # Utilization filler (cluster cancels H200 jobs <60% util over 2h); backs off when vLLM is busy.
@@ -93,6 +111,7 @@ API_BASE=http://$HOST:$PORT/v1
 SERVED_MODEL=$SERVED_MODEL_NAME
 SERVE_JOB_ID=$SLURM_JOB_ID
 NGPU=$NGPU
+GPU_NAME='$(nvidia-smi --query-gpu=name --format=csv,noheader | head -1)'
 STARTED=$(date -Is)
 SERVE_LOGDIR=$LOGDIR
 EOF

@@ -1,0 +1,47 @@
+[select] 18 candidates, 0 already scored, 18 to run; val max_len=65536
+[attn] flash_attn(pip) unavailable: ModuleNotFoundError: No module named 'flash_attn'
+You are using version 1 of 'kernels-community/flash-attn3', but version 2 is available.
+Fetching 8 files:   0%|          | 0/8 [00:00<?, ?it/s]Fetching 8 files:  38%|███▊      | 3/8 [00:00<00:00,  7.50it/s]Fetching 8 files: 100%|██████████| 8/8 [00:00<00:00, 19.75it/s]
+[attn] using hub:flash-attn3 (selftest max|diff|=3.91e-03)
+[gdn] patched HF Qwen3.5-MoE GatedDeltaNet -> FLA Triton kernels (varlen)
+Loading weights:   0%|          | 0/1026 [00:00<?, ?it/s]Loading weights:   0%|          | 1/1026 [00:00<02:16,  7.53it/s]Loading weights:   0%|          | 2/1026 [00:00<03:05,  5.51it/s]Loading weights:   1%|▏         | 13/1026 [00:00<00:27, 36.22it/s]Loading weights:   2%|▏         | 18/1026 [00:00<00:29, 33.64it/s]Loading weights:   3%|▎         | 31/1026 [00:00<00:18, 53.83it/s]Loading weights:   4%|▎         | 37/1026 [00:00<00:23, 41.90it/s]Loading weights:   5%|▍         | 49/1026 [00:01<00:17, 55.27it/s]Loading weights:   5%|▌         | 56/1026 [00:01<00:21, 45.77it/s]Loading weights:   6%|▌         | 62/1026 [00:01<00:29, 32.48it/s]Loading weights:   8%|▊         | 82/1026 [00:02<00:23, 40.92it/s]Loading weights:  10%|▉         | 100/1026 [00:02<00:20, 44.57it/s]Loading weights:  12%|█▏        | 118/1026 [00:02<00:15, 59.78it/s]Loading weights:  12%|█▏        | 126/1026 [00:02<00:17, 52.89it/s]Loading weights:  13%|█▎        | 133/1026 [00:03<00:21, 41.01it/s]Loading weights:  15%|█▍        | 151/1026 [00:03<00:15, 57.10it/s]Loading weights:  15%|█▌        | 159/1026 [00:03<00:17, 49.91it/s]Loading weights:  16%|█▋        | 169/1026 [00:03<00:15, 55.35it/s]Loading weights:  17%|█▋        | 176/1026 [00:03<00:17, 47.46it/s]Loading weights:  18%|█▊        | 187/1026 [00:03<00:15, 55.50it/s]Loading weights:  19%|█▉        | 194/1026 [00:04<00:17, 47.84it/s]Loading weights:  19%|█▉        | 200/1026 [00:04<00:23, 35.01it/s]Loading weights:  21%|██▏       | 220/1026 [00:04<00:14, 57.13it/s]Loading weights:  22%|██▏       | 228/1026 [00:04<00:15, 52.28it/s]Loading weights:  23%|██▎       | 238/1026 [00:04<00:13, 57.68it/s]Loading weights:  24%|██▍       | 245/1026 [00:05<00:16, 48.48it/s]Loading weights:  25%|██▍       | 256/1026 [00:05<00:13, 56.40it/s]Loading weights:  26%|██▌       | 263/1026 [00:05<00:14, 52.10it/s]Loading weights:  26%|██▌       | 269/1026 [00:05<00:17, 42.81it/s]Loading weights:  28%|██▊       | 290/1026 [00:05<00:12, 57.18it/s]Loading weights:  30%|███       | 308/1026 [00:06<00:11, 62.16it/s]Loading weights:  32%|███▏      | 326/1026 [00:06<00:10, 65.97it/s]Loading weights:  33%|███▎      | 335/1026 [00:06<00:12, 55.49it/s]Loading weights:  35%|███▍      | 358/1026 [00:06<00:08, 77.16it/s]Loading weights:  36%|███▌      | 367/1026 [00:07<00:10, 64.79it/s]Loading weights:  37%|███▋      | 376/1026 [00:07<00:13, 49.15it/s]Loading weights:  38%|███▊      | 394/1026 [00:07<00:09, 65.54it/s]Loading weights:  39%|███▉      | 403/1026 [00:08<00:15, 40.18it/s]Loading weights:  42%|████▏     | 427/1026 [00:08<00:09, 61.58it/s]Loading weights:  43%|████▎     | 437/1026 [00:08<00:10, 57.86it/s]Loading weights:  43%|████▎     | 446/1026 [00:08<00:12, 46.39it/s]Loading weights:  45%|████▌     | 463/1026 [00:08<00:09, 60.86it/s]Loading weights:  46%|████▌     | 472/1026 [00:09<00:11, 48.33it/s]Loading weights:  47%|████▋     | 479/1026 [00:09<00:12, 44.69it/s]Loading weights:  48%|████▊     | 496/1026 [00:09<00:11, 46.77it/s]Loading weights:  50%|█████     | 514/1026 [00:09<00:08, 62.95it/s]Loading weights:  51%|█████     | 523/1026 [00:10<00:08, 57.53it/s]Loading weights:  52%|█████▏    | 531/1026 [00:10<00:08, 59.62it/s]Loading weights:  53%|█████▎    | 539/1026 [00:10<00:09, 52.79it/s]Loading weights:  53%|█████▎    | 546/1026 [00:10<00:12, 39.90it/s]Loading weights:  55%|█████▌    | 565/1026 [00:10<00:07, 60.46it/s]Loading weights:  56%|█████▌    | 573/1026 [00:11<00:08, 53.54it/s]Loading weights:  57%|█████▋    | 583/1026 [00:11<00:07, 59.38it/s]Loading weights:  58%|█████▊    | 591/1026 [00:11<00:08, 52.67it/s]Loading weights:  59%|█████▊    | 601/1026 [00:11<00:07, 59.42it/s]Loading weights:  59%|█████▉    | 608/1026 [00:11<00:08, 49.68it/s]Loading weights:  60%|█████▉    | 614/1026 [00:12<00:11, 36.61it/s]Loading weights:  62%|██████▏   | 634/1026 [00:12<00:06, 59.71it/s]Loading weights:  63%|██████▎   | 642/1026 [00:12<00:07, 52.83it/s]Loading weights:  64%|██████▎   | 652/1026 [00:12<00:06, 58.79it/s]Loading weights:  64%|██████▍   | 660/1026 [00:12<00:07, 51.50it/s]Loading weights:  65%|██████▌   | 670/1026 [00:12<00:06, 58.15it/s]Loading weights:  66%|██████▌   | 677/1026 [00:13<00:07, 48.78it/s]Loading weights:  67%|██████▋   | 683/1026 [00:13<00:09, 35.38it/s]Loading weights:  83%|████████▎ | 849/1026 [00:13<00:00, 292.59it/s]Loading weights:  99%|█████████▉| 1019/1026 [00:13<00:00, 550.24it/s]Loading weights: 100%|██████████| 1026/1026 [00:13<00:00, 75.03it/s] 
+[model] loaded Qwen3_5MoeForConditionalGeneration experts_impl=grouped_mm attn_impl=apex_varlen
+[select] 250 adapted weights backed up (2.62 GiB)
+[select] base: e_swe=0.3468 e_tb=0.5281 e_asi=0.5851 e_hle=0.7691  (merge 0.0s, eval 268.7s)
+[select] expert:e_swe: e_swe=0.1798 e_tb=0.4613 e_asi=0.5284 e_hle=0.7734  (merge 0.4s, eval 29.1s)
+[select] expert:e_tb: e_swe=0.3172 e_tb=0.3129 e_asi=0.3863 e_hle=0.7411  (merge 0.4s, eval 29.1s)
+[select] expert:e_asi: e_swe=0.3213 e_tb=0.3510 e_asi=0.3397 e_hle=0.7480  (merge 0.5s, eval 29.1s)
+[select] expert:e_hle: e_swe=0.3136 e_tb=0.4048 e_asi=0.4605 e_hle=0.6817  (merge 0.4s, eval 29.1s)
+[select] adapter:mixed: e_swe=0.1817 e_tb=0.3057 e_asi=0.3316 e_hle=0.6811  (merge 0.3s, eval 29.1s)
+[select] linear_l0.25: e_swe=0.2499 e_tb=0.3425 e_asi=0.3831 e_hle=0.7092  (merge 0.3s, eval 29.1s)
+[select] linear_l0.5: e_swe=0.2243 e_tb=0.3332 e_asi=0.3634 e_hle=0.7096  (merge 0.2s, eval 29.1s)
+[select] linear_l0.75: e_swe=0.2303 e_tb=0.3691 e_asi=0.3942 e_hle=0.7329  (merge 0.3s, eval 29.1s)
+[select] linear_l1: e_swe=0.2554 e_tb=0.4378 e_asi=0.4599 e_hle=0.7763  (merge 0.2s, eval 29.1s)
+[select] ties_l0.5_d0.2: e_swe=0.2482 e_tb=0.3529 e_asi=0.3918 e_hle=0.7123  (merge 36.8s, eval 29.1s)
+[select] ties_l1_d0.2: e_swe=0.2136 e_tb=0.3314 e_asi=0.3609 e_hle=0.7074  (merge 36.7s, eval 29.1s)
+[select] ties_l1.5_d0.2: e_swe=0.2126 e_tb=0.3502 e_asi=0.3727 e_hle=0.7203  (merge 36.7s, eval 29.1s)
+[select] ties_l1_d0.1: e_swe=0.2214 e_tb=0.3326 e_asi=0.3656 e_hle=0.7074  (merge 36.5s, eval 29.1s)
+[select] ties_l1_d0.5: e_swe=0.2143 e_tb=0.3303 e_asi=0.3596 e_hle=0.7079  (merge 36.7s, eval 29.1s)
+[select] dare_ties_l0.5_p0.9: e_swe=0.2289 e_tb=0.3353 e_asi=0.3679 e_hle=0.7120  (merge 0.6s, eval 29.1s)
+[select] dare_ties_l1_p0.9: e_swe=0.2617 e_tb=0.4271 e_asi=0.4504 e_hle=0.7744  (merge 0.5s, eval 29.1s)
+[select] dare_linear_l0.5_p0.9: e_swe=0.2294 e_tb=0.3385 e_asi=0.3697 e_hle=0.7145  (merge 0.4s, eval 29.1s)
+| name | rel_delta_norm | L_e_swe | R_e_swe | L_e_tb | R_e_tb | L_e_asi | R_e_asi | L_e_hle | R_e_hle | L_mean | R_mean | R_min |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| adapter:mixed | 0.01906 | 0.1817 | 0.988 | 0.3057 | 1.034 | 0.3316 | 1.033 | 0.6811 | 1.007 | 0.375 | 1.015 | 0.988 |
+| ties_l1_d0.5 | 0.01302 | 0.2143 | 0.793 | 0.3303 | 0.919 | 0.3596 | 0.919 | 0.7079 | 0.7 | 0.403 | 0.833 | 0.7 |
+| ties_l1_d0.2 | 0.01352 | 0.2136 | 0.798 | 0.3314 | 0.914 | 0.3609 | 0.913 | 0.7074 | 0.706 | 0.4033 | 0.833 | 0.706 |
+| ties_l1_d0.1 | 0.01224 | 0.2214 | 0.751 | 0.3326 | 0.909 | 0.3656 | 0.895 | 0.7074 | 0.706 | 0.4067 | 0.815 | 0.706 |
+| linear_l0.5 | 0.01122 | 0.2243 | 0.733 | 0.3332 | 0.906 | 0.3634 | 0.903 | 0.7096 | 0.681 | 0.4076 | 0.806 | 0.681 |
+| dare_ties_l0.5_p0.9 | 0.0293 | 0.2289 | 0.706 | 0.3353 | 0.896 | 0.3679 | 0.885 | 0.712 | 0.653 | 0.411 | 0.785 | 0.653 |
+| dare_linear_l0.5_p0.9 | 0.03161 | 0.2294 | 0.703 | 0.3385 | 0.881 | 0.3697 | 0.878 | 0.7145 | 0.625 | 0.413 | 0.772 | 0.625 |
+| ties_l1.5_d0.2 | 0.02028 | 0.2126 | 0.803 | 0.3502 | 0.827 | 0.3727 | 0.865 | 0.7203 | 0.558 | 0.414 | 0.763 | 0.558 |
+| linear_l0.25 | 0.00561 | 0.2499 | 0.58 | 0.3425 | 0.863 | 0.3831 | 0.823 | 0.7092 | 0.686 | 0.4212 | 0.738 | 0.58 |
+| ties_l0.5_d0.2 | 0.00676 | 0.2482 | 0.591 | 0.3529 | 0.814 | 0.3918 | 0.787 | 0.7123 | 0.65 | 0.4263 | 0.711 | 0.591 |
+| linear_l0.75 | 0.01683 | 0.2303 | 0.698 | 0.3691 | 0.739 | 0.3942 | 0.778 | 0.7329 | 0.414 | 0.4316 | 0.657 | 0.414 |
+| expert:e_tb | 0.00963 | 0.3172 | 0.177 | 0.3129 | 1.0 | 0.3863 | 0.81 | 0.7411 | 0.32 | 0.4394 | 0.577 | 0.177 |
+| expert:e_hle | 0.00873 | 0.3136 | 0.199 | 0.4048 | 0.573 | 0.4605 | 0.508 | 0.6817 | 1.0 | 0.4651 | 0.57 | 0.199 |
+| expert:e_asi | 0.01047 | 0.3213 | 0.153 | 0.351 | 0.823 | 0.3397 | 1.0 | 0.748 | 0.241 | 0.44 | 0.554 | 0.153 |
+| expert:e_swe | 0.01048 | 0.1798 | 1.0 | 0.4613 | 0.31 | 0.5284 | 0.231 | 0.7734 | -0.049 | 0.4857 | 0.373 | -0.049 |
+| dare_ties_l1_p0.9 | 0.05859 | 0.2617 | 0.51 | 0.4271 | 0.47 | 0.4504 | 0.549 | 0.7744 | -0.061 | 0.4784 | 0.367 | -0.061 |
+| linear_l1 | 0.02244 | 0.2554 | 0.547 | 0.4378 | 0.42 | 0.4599 | 0.51 | 0.7763 | -0.083 | 0.4823 | 0.349 | -0.083 |
+| base | 0.0 | 0.3468 | 0.0 | 0.5281 | 0.0 | 0.5851 | 0.0 | 0.7691 | 0.0 | 0.5573 | 0.0 | 0.0 |

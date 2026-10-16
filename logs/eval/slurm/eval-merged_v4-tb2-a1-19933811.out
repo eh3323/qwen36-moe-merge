@@ -1,0 +1,6 @@
+[aio] host=gh124.hpc.nyu.edu ngpu=1 cpus=16 mem=300G benches=tb2 smoke=0
+[aio] sizing: TB2_N=12 SWE_N=32 ASI_PAR=8 HLE_N=128 (share 250G/lane)
+[aio] lane tb2 pid 1906315 -> /scratch/eh3323/apex/logs/allinone-merged_v4-19933811/tb2.log
+[aio] lanes finished rc=1
+[eval] done: /scratch/eh3323/apex/repo/results/merged/tb2/merged_v4__tb2__a1.jsonl
+[2026-10-16T01:33:46.303] error: Detected 1 oom_kill event in StepId=19933811.batch. Some of the step tasks have been OOM Killed.

@@ -1,0 +1,44 @@
+{
+ "expert": "tb",
+ "n_train": 973,
+ "n_val": 19,
+ "train_tokens": 15022992,
+ "val_tokens": 285633,
+ "train_by_source": {
+  "nemotron_terminal": 612,
+  "ot_agent_100k": 361
+ },
+ "train_tokens_by_source": {
+  "nemotron_terminal": 11074785,
+  "ot_agent_100k": 3948207
+ },
+ "train_by_stratum": {
+  "incomplete": 112,
+  "complete": 861
+ },
+ "mean_tokens": 15440,
+ "drops": {
+  "nemotron_terminal:convert:parse_errors": 4345,
+  "nemotron_terminal:convert:assistant_missing_fields": 671,
+  "nemotron_terminal:convert:no_think_block": 257,
+  "nemotron_terminal:too_long": 115,
+  "nemotron_terminal:too_long_est": 1,
+  "nemotron_terminal:convert:assistant_not_pure_json": 6,
+  "ot_agent_100k:source_filter": 7630,
+  "ot_agent_100k:convert:no_think_block": 133,
+  "ot_agent_100k:convert:parse_errors": 1431,
+  "ot_agent_100k:convert:assistant_not_pure_json": 161,
+  "ot_agent_100k:convert:summarization_or_system_warning": 503,
+  "ot_agent_100k:convert:role_alternation": 46,
+  "ot_agent_100k:decontam:tb2_13gram": 3,
+  "ot_agent_100k:too_long": 3
+ },
+ "n_candidates": 13225,
+ "candidates_by_stratum": {
+  "nemotron_terminal/incomplete": 6825,
+  "nemotron_terminal/complete": 1972,
+  "ot_agent_100k/complete": 4410,
+  "ot_agent_100k/incomplete": 18
+ },
+ "built_at": "2026-10-13 17:03:41"
+}

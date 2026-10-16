@@ -2,7 +2,7 @@
 # One-time setup of the evaluation tooling on torch (run by hand on the LOGIN node; every step is
 # idempotent and only downloads/unpacks: no compilation). Usage:
 #   bash scripts/eval_setup.sh all            # or a subset, in this order:
-#   bash scripts/eval_setup.sh harbor hostpy hle asi opencode pasta asi_noref asi_tasks asi_prewarm dirs verify
+#   bash scripts/eval_setup.sh harbor hostpy pylib hle asi opencode pasta asi_noref asi_tasks asi_prewarm dirs verify
 # Locked versions: harbor @4778ceba (+patch), mini-swe-agent 2.4.6, asibench @8859f9b (+patch),
 # opencode 1.17.15 (standalone binary from the npm registry, sha512-verified; no Node.js needed),
 # hle_eval @22ed3074 deps (openai 1.57.0, datasets 3.2.0, numpy 1.26.4).
@@ -12,7 +12,7 @@ REPO=$APEX/repo; source $REPO/configs/eval/harness.env
 SRC=$APEX/work/src; mkdir -p $SRC $APEX/tools/bin $APEX/cache/sif $APEX/work/endpoints $APEX/logs/eval $APEX/logs/serve
 PY312=3.12
 STEPS=("$@"); [ "${#STEPS[@]}" -eq 0 ] && { sed -n 2,9p "$0"; exit 1; }
-[ "${STEPS[0]}" = all ] && STEPS=(harbor hostpy hle asi opencode pasta asi_noref asi_tasks asi_prewarm dirs verify)
+[ "${STEPS[0]}" = all ] && STEPS=(harbor hostpy pylib hle asi opencode pasta asi_noref asi_tasks asi_prewarm dirs verify)
 
 checkout() {  # <src repo> <commit> <dest> <patch|-> : pristine local clone at the locked commit, then patch
   local src=$1 commit=$2 dest=$3 patch=$4
@@ -51,6 +51,22 @@ step_hostpy() {  # relocatable python + fastapi/uvicorn, bound into containers f
   uv pip install -q --python $H/bin/python3 --system --break-system-packages \
     "fastapi==0.136.3" "uvicorn==0.54.0" "pydantic==2.14.1"
   $H/bin/python3 -c "import fastapi, uvicorn; print('hostpy ok', fastapi.__version__, uvicorn.__version__)"
+}
+
+step_pylib() {  # exec-server deps for musl (Alpine) task images (10 of HARD-51), where the glibc hostpy
+  # cannot run: harbor binds <hostpy>-pylib at /opt/harbor-pylib and runs the server on the image's own
+  # python3 (3.10-3.12), see patches/harbor_singularity_network_none.patch. py3-none-any wheels only (no
+  # compiled code: any libc / CPython >= 3.10), hence pydantic v1 + fastapi 0.115. All pins explicit:
+  # pip evaluates markers for the host's 3.12, so exceptiongroup (anyio on 3.10) would otherwise be missing.
+  local P=$APEX/envs/harbor-hostpy-pylib T
+  T=$(mktemp -d $APEX/envs/.pylib.XXXXXX)
+  $APEX/envs/harbor-hostpy/bin/python3 -m pip install -q --no-compile --disable-pip-version-check --target $T \
+    --only-binary=:all: --platform any --implementation py --abi none --python-version 3.10 \
+    fastapi==0.115.14 pydantic==1.10.26 uvicorn==0.34.3 starlette==0.46.2 anyio==4.15.1 \
+    exceptiongroup==1.3.1 click==8.5.0 h11==0.16.0 idna==3.20 typing_extensions==4.16.0
+  if find $T -name '*.so' | grep -q .; then echo "compiled files in $T"; exit 1; fi
+  rm -rf $P.old; if [ -d $P ]; then mv $P $P.old; fi; mv $T $P; rm -rf $P.old; chmod -R a+rX $P
+  $APEX/envs/harbor-hostpy/bin/python3 -I -c "import sys; sys.path.insert(0, '$P'); import fastapi, uvicorn, pydantic, exceptiongroup; print('pylib ok', fastapi.__version__, uvicorn.__version__, pydantic.VERSION)"
 }
 
 step_hle() {  # envs/hle + patched copy of hle_eval
@@ -138,6 +154,7 @@ step_verify() {
   $APEX/tools/bin/pasta --version | head -1
   $APEX/envs/hle/bin/python -c "import openai, datasets; print('hle deps', openai.__version__, datasets.__version__)"
   $APEX/envs/harbor-hostpy/bin/python3 -c "import fastapi, uvicorn; print('hostpy ok')"
+  $APEX/envs/harbor-hostpy/bin/python3 -I -c "import sys; sys.path.insert(0, '$APEX/envs/harbor-hostpy-pylib'); import fastapi, pydantic; assert fastapi.__file__.startswith('$APEX/envs/harbor-hostpy-pylib'); print('pylib ok', pydantic.VERSION)"
   ls ~/.asibench -ld
 }
 

@@ -37,7 +37,7 @@ source /scratch/eh3323/apex/env.sh
 REPO=$APEX/repo
 BENCHES=${BENCHES:-tb2,swepro,asi,hle}; BENCHES=${BENCHES//+/,}; SMOKE=${SMOKE:-0}
 TB2_ATTEMPTS=${TB2_ATTEMPTS:-1}; TB2_ATTEMPTS=${TB2_ATTEMPTS//+/ }; SWE_REPS=${SWE_REPS:-1}; SWE_REPS=${SWE_REPS//+/ }; ASI_LEVELS=${ASI_LEVELS:-b1,b2,b3,b4}; ASI_LEVELS=${ASI_LEVELS//+/,}
-NGPU=$(nvidia-smi -L | wc -l); CPUS=${SLURM_CPUS_PER_TASK:-16}; MEM_GB=$(( ${SLURM_MEM_PER_NODE:-163840} / 1024 ))
+NGPU=${NGPU_OVERRIDE:-$(nvidia-smi -L | wc -l)}; CPUS=${SLURM_CPUS_PER_TASK:-16}; MEM_GB=$(( ${SLURM_MEM_PER_NODE:-163840} / 1024 ))
 export ENDPOINT_NAME="${RUN}@${SLURM_JOB_ID}"   # private endpoint for this allocation
 AIO_LOG=$APEX/logs/allinone-${RUN}-${SLURM_JOB_ID}; mkdir -p "$AIO_LOG"
 

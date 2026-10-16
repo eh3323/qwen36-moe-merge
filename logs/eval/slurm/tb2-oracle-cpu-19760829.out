@@ -1,0 +1,42 @@
+[eval] RUN_ID=base__tb2__oracle RAW_DIR=/scratch/eh3323/apex/results/base/tb2/base__tb2__oracle host=cs611.hpc.nyu.edu job=19760829
+[eval] net probe -> /scratch/eh3323/apex/logs/base__tb2__oracle/net_probe.txt
+egress 200 https://pypi.org/simple/pip/
+egress 404 https://files.pythonhosted.org
+egress 301 https://astral.sh/uv/0.9.5/install.sh
+egress 401 https://registry-1.docker.io/v2/
+egress 401 https://ghcr.io/v2/
+egress 200 https://github.com
+egress 200 https://proxy.golang.org
+egress 200 https://registry.npmjs.org/
+egress 200 https://huggingface.co
+egress 401 https://api.openai.com/v1/models
+egress 200 http://archive.ubuntu.com/ubuntu/
+egress 200 http://deb.debian.org/debian/
+/scratch/eh3323/apex/results/base/tb2/base__tb2__oracle/job_config.json
+  2/2 Mean: 0.000 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 0:01:47 0:00:00
+
+terminal_bench2_repo • oracle
+┏━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━┓
+┃ Trials ┃ Exceptions ┃  Mean ┃
+┡━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━┩
+│      2 │          0 │ 0.000 │
+└────────┴────────────┴───────┘
+
+┏━━━━━━━━┳━━━━━━━┓
+┃ Reward ┃ Count ┃
+┡━━━━━━━━╇━━━━━━━┩
+│ 0.0    │     2 │
+└────────┴───────┘
+
+Job Info
+Total runtime: 1m 47s
+Results written to 
+/scratch/eh3323/apex/results/base/tb2/base__tb2__oracle/jobs/base__tb2__oracle/r
+esult.json
+Inspect results by running `harbor view 
+/scratch/eh3323/apex/results/base/tb2/base__tb2__oracle/jobs`
+Share results by running `harbor upload 
+/scratch/eh3323/apex/results/base/tb2/base__tb2__oracle/jobs/base__tb2__oracle`
+
+/scratch/eh3323/apex/repo/results/base/tb2/base__tb2__oracle.jsonl: 2 rows, status={'fail': 2}
+[eval] done: /scratch/eh3323/apex/repo/results/base/tb2/base__tb2__oracle.jsonl

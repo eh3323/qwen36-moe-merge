@@ -1,0 +1,160 @@
+{
+ "run_id": "e_hle_r32",
+ "experiment": "E-HLE (HLE expert)",
+ "in_final_merge_v4": true,
+ "config_path": "configs/train/e_hle.yaml",
+ "config_chain": [
+  "configs/train/base.yaml",
+  "configs/train/e_hle.yaml"
+ ],
+ "status": "done",
+ "slurm": {
+  "job_id": "19752117",
+  "state": "COMPLETED",
+  "restarts": 0,
+  "node": "gh115",
+  "partition": "h200_courant",
+  "time_limit": "06:00:00",
+  "start": "2026-10-13T23:23:16",
+  "end": "2026-10-14T00:39:16",
+  "alloc": "1 GPU, 16 CPU, 160G host RAM, 1 node",
+  "submit_line": "sbatch --constraint=h200|b200|rtx6000 --gres=gpu:1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=16 --mem=160G --time=06:00:00 --job-name=lora-e_hle --export=ALL slurm/train_lora.sbatch",
+  "launch_wrapper": "CONSTRAINT='h200|b200|rtx6000' scripts/train_submit.sh configs/train/e_hle.yaml 1 06:00:00"
+ },
+ "hardware": {
+  "gpu_model": "NVIDIA H200",
+  "gpu_count": 1,
+  "gpu_memory_total": "143771 MiB",
+  "nvidia_driver": "610.43.02",
+  "cpus": 16,
+  "host_mem": "160G"
+ },
+ "timing": {
+  "job_wall_s": 4560,
+  "job_wall": "01:16:00",
+  "gpu_hours": 1.2656,
+  "model_load_s": 13.7,
+  "train_loop_wall_s": 4227.5,
+  "sum_step_time_s": 3918.6,
+  "note": "job_wall = sacct Elapsed (incl. tokenisation cache check, model load, evals, saves); train_loop_wall = first..last metrics record; sum_step_time = optimizer steps only"
+ },
+ "steps": {
+  "total": 118,
+  "epochs": 2,
+  "steps_per_epoch": [
+   59,
+   59
+  ],
+  "packs_per_step": 8,
+  "grad_accum": 8,
+  "tokens_per_step_capacity": 262144,
+  "max_seq_len": 32768
+ },
+ "tokens": {
+  "trained_total": 30248290,
+  "unique_train_tokens_per_epoch": 15124145,
+  "label_tokens_per_epoch": 14584427,
+  "train_samples": 1838,
+  "pack_efficiency": 0.9926
+ },
+ "throughput": {
+  "median_tokens_per_s": 8238.7,
+  "mean_tokens_per_s": 7719.1,
+  "note": "median over steps 4..N (throughput.json); mean = trained tokens / sum of step times"
+ },
+ "memory": {
+  "peak_allocated_gib": 82.9,
+  "peak_reserved_gib": 85.39,
+  "nvidia_smi_max_used_mib": 94765.0,
+  "gpu_util_mean_pct": 89.4
+ },
+ "optimizer": {
+  "name": "AdamW (fused)",
+  "betas": [
+   0.9,
+   0.999
+  ],
+  "weight_decay": 0.0,
+  "grad_clip": 1.0
+ },
+ "lr_schedule": {
+  "peak_lr": 0.0001,
+  "warmup_steps": 4,
+  "warmup_ratio": 0.03,
+  "decay": "cosine",
+  "min_lr": 1e-05,
+  "description": "linear warmup over 4 steps to 0.0001, then cosine decay to 1e-05 at step 118"
+ },
+ "seed": 1234,
+ "lora": {
+  "r": 32,
+  "alpha": 64,
+  "dropout": 0.05,
+  "n_modules": 250,
+  "trainable_params": 38338560,
+  "adapter_bytes": 153432736
+ },
+ "checkpoint_strategy": {
+  "save_every_steps": 10,
+  "keep_last": 2,
+  "saved_steps": [
+   10,
+   20,
+   30,
+   40,
+   50,
+   60,
+   70,
+   80,
+   90,
+   100,
+   110
+  ],
+  "retained_on_disk": [
+   "step_000100",
+   "step_000110",
+   "adapter_final"
+  ],
+  "final": "adapter_final = last step (118); never chosen by a benchmark",
+  "eval_every_steps": 20,
+  "eval_at_start": true,
+  "resume": "SIGUSR1 900 s before time limit / SIGTERM -> checkpoint + requeue (unused: 0 restarts)"
+ },
+ "final_train_loss": {
+  "last_step": 0.5962,
+  "mean_last_10_steps": 0.7061
+ },
+ "val_loss_step0": {
+  "e_swe": 0.3547,
+  "e_tb": 0.528,
+  "e_asi": 0.5849,
+  "e_hle": 0.7691
+ },
+ "val_loss_final": {
+  "e_swe": 0.3204,
+  "e_tb": 0.4049,
+  "e_asi": 0.4605,
+  "e_hle": 0.6816
+ },
+ "val_sets_missing": [],
+ "versions": {
+  "python": "3.12.13",
+  "torch": "2.12.1+cu129",
+  "transformers": "5.19.0",
+  "peft": "0.21.2",
+  "fla": "0.5.2",
+  "triton": "3.7.1",
+  "kernels": "0.17.2",
+  "safetensors": "0.8.0",
+  "numpy": "2.3.5",
+  "cuda": "12.9",
+  "cudnn": 92000,
+  "nvidia_driver": "610.43.02"
+ },
+ "kernels": {
+  "attention": "hub:flash-attn3",
+  "gdn": "fla_triton(chunk_gated_delta_rule+causal_conv1d, varlen)",
+  "experts": "grouped_mm",
+  "attn_implementation_config": "apex_varlen"
+ }
+}

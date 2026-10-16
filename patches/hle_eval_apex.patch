@@ -1,11 +1,18 @@
 # Apex patch for centerforaisafety/hle @22ed3074 hle_eval/run_model_predictions.py:
-# sampling via HLE_SAMPLING env, request timeout via HLE_REQUEST_TIMEOUT, --ids subset, store finish_reason+reasoning.
+# sampling via HLE_SAMPLING env, request timeout via HLE_REQUEST_TIMEOUT, --ids subset, store finish_reason+reasoning,
+# incremental checkpoint of the output file every HLE_CKPT_SEC s (atomic; a rerun resumes, as upstream).
 # The judge script (run_judge_results.py) is used UNMODIFIED. Apply: cd <copy of hle_eval> && patch -p1 < this
 diff --git a/run_model_predictions.py b/run_model_predictions.py
-index 171a78f..6b67267 100644
+index 171a78f..0bde8ce 100644
 --- a/run_model_predictions.py
 +++ b/run_model_predictions.py
-@@ -6,7 +6,12 @@ from datasets import load_dataset
+@@ -1,4 +1,5 @@
+ import os
++import time
+ import json
+ import argparse
+ import asyncio
+@@ -6,7 +7,12 @@ from datasets import load_dataset
  from openai import AsyncOpenAI
  from tqdm.asyncio import tqdm_asyncio
  
@@ -19,7 +26,7 @@ index 171a78f..6b67267 100644
  
  SYSTEM_PROMPT = "Your response should be in the following format:\nExplanation: {your explanation for your answer choice}\nAnswer: {your chosen answer}\nConfidence: {your confidence score between 0% and 100% for your answer}"
  
-@@ -37,9 +42,15 @@ async def attempt_question(question):
+@@ -37,9 +43,15 @@ async def attempt_question(question):
              max_completion_tokens=args.max_completion_tokens,
              messages=messages,
              stream=False,
@@ -35,16 +42,50 @@ index 171a78f..6b67267 100644
      except Exception as e:
          print("Error:", e)
          return None
-@@ -47,7 +58,7 @@ async def attempt_question(question):
+@@ -47,13 +59,41 @@ async def attempt_question(question):
      if content is None: # failed
          return None
      
 -    return question["id"], content, tokens
 +    return question["id"], content, tokens, extra
++
++
++# [apex] incremental checkpoint: answers are written to the output file every HLE_CKPT_SEC seconds (atomic
++# rename), so a run cut off by a Slurm time limit keeps its finished answers; a rerun skips them (upstream logic).
++_CKPT = {"preds": None, "path": None, "t": 0.0}
++
++def _store(predictions, result):
++    unique_id, response, usage, extra = result
++    predictions[unique_id] = {
++        "model": args.model,
++        "response": response,
++        "usage": usage,
++        **extra,
++    }
++
++def _save(predictions, path, indent=None):
++    with open(path + ".tmp", "w") as f:
++        json.dump(predictions, f, indent=indent)
++    os.replace(path + ".tmp", path)
++
++def _checkpoint(result):
++    if result is None or _CKPT["preds"] is None:
++        return
++    _store(_CKPT["preds"], result)
++    if time.time() - _CKPT["t"] > float(os.environ.get("HLE_CKPT_SEC", "300")):
++        _save(_CKPT["preds"], _CKPT["path"])
++        _CKPT["t"] = time.time()
  
  
  async def attempt_all(questions):
-@@ -73,6 +84,9 @@ def main(args):
+     async def bound_func(question):
+         async with semaphore:
+             content = await attempt_question(question)
++            _checkpoint(content)  # [apex]
+             return content
+             
+     semaphore = asyncio.Semaphore(args.num_workers)
+@@ -73,6 +113,9 @@ def main(args):
      # If max_samples is set, limit the number of questions
      if args.max_samples:
          questions = questions[:args.max_samples]
@@ -54,22 +95,33 @@ index 171a78f..6b67267 100644
      
      output_filepath = f"hle_{os.path.basename(args.model)}.json"   
  
-@@ -91,11 +105,12 @@ def main(args):
+@@ -85,22 +128,17 @@ def main(args):
+     else:
+         predictions = {}
+ 
++    _CKPT.update(preds=predictions, path=output_filepath, t=time.time())  # [apex]
+     results = asyncio.run(attempt_all(questions))
+ 
+     # You can rerun this script multiple times if there are failed API calls
      for result in results:
          if result is None: # API call failed
              continue
 -        unique_id, response, usage = result
-+        unique_id, response, usage, extra = result
-         predictions[unique_id] = {
-             "model": args.model,
-             "response": response,
+-        predictions[unique_id] = {
+-            "model": args.model,
+-            "response": response,
 -            "usage": usage
-+            "usage": usage,
-+            **extra,
-         }
+-        }
++        _store(predictions, result)  # [apex] same record as before (shared with the checkpoint)
  
      # cache responses
-@@ -110,5 +125,6 @@ if __name__ == "__main__":
+-    with open(output_filepath, "w") as f:
+-        json.dump(predictions, f, indent=4)
++    _save(predictions, output_filepath, indent=4)  # [apex] atomic
+ 
+ if __name__ == "__main__":
+     parser = argparse.ArgumentParser()
+@@ -110,5 +148,6 @@ if __name__ == "__main__":
      parser.add_argument("--temperature", type=float, default=0.0, help="Temperature for sampling.")
      parser.add_argument("--num_workers", type=int, default=10, help="Async semaphore size. This depends on your rate limit.")
      parser.add_argument("--max_samples", type=int, default=None, help="Limit evaluation to first N samples")

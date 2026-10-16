@@ -1,0 +1,22 @@
+# Shared merge settings. Expert adapters = final LoRA checkpoints of the 4 expert runs.
+base: /scratch/eh3323/apex/models/Qwen3.6-35B-A3B
+experts:
+  e_swe: /scratch/eh3323/apex/runs/e_swe_r32/adapter_final
+  e_tb:  /scratch/eh3323/apex/runs/e_tb_r32/adapter_final
+  e_asi: /scratch/eh3323/apex/runs/e_asi_r32/adapter_final
+  e_hle: /scratch/eh3323/apex/runs/e_hle_r32/adapter_final
+weights: {e_swe: 1.0, e_tb: 1.0, e_asi: 1.0, e_hle: 1.0}   # per-expert coefficients w_t
+global_scale: 1.0          # λ
+density: 0.2               # TIES trim: keep top-20% |ΔW| per module per expert
+drop_p: 0.9                # DARE drop probability (survivors x 1/(1-p))
+seed: 0
+svd_rank: null             # e.g. 128 -> report retained energy; with export_adapter also save a PEFT adapter
+export_adapter: false
+fold_svd: false            # fold the rank-k approximation instead of the exact dense merge
+fold: true
+link_unchanged: true       # symlink base shards that contain no adapted tensor
+analysis: false            # conflict analysis is run once via `--analyze-only` (configs/merge/analysis.yaml)
+analysis_density: 0.2
+analysis_dir: /scratch/eh3323/apex/analysis
+out_root: /scratch/eh3323/apex/models/merged
+device: auto

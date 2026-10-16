@@ -1,0 +1,232 @@
+{
+ "run_id": "e_swe_v2_r32",
+ "status": "done",
+ "git_commit": null,
+ "code_fingerprint": "58dd96b2eed932a4",
+ "config_path": "configs/train/e_swe_v2.yaml",
+ "config": {
+  "model": {
+   "path": "/scratch/eh3323/apex/models/Qwen3.6-35B-A3B",
+   "class": "Qwen3_5MoeForConditionalGeneration",
+   "dtype": "bfloat16",
+   "experts_implementation": "grouped_mm",
+   "attn_backend": "auto",
+   "gdn_backend": "fla",
+   "gradient_checkpointing": true
+  },
+  "lora": {
+   "r": 32,
+   "alpha": 64,
+   "dropout": 0.05,
+   "use_rslora": false,
+   "full_attn_targets": [
+    "q_proj",
+    "k_proj",
+    "v_proj",
+    "o_proj"
+   ],
+   "linear_attn_targets": [
+    "in_proj_qkv",
+    "in_proj_z",
+    "out_proj"
+   ],
+   "mlp_targets": [
+    "shared_expert.gate_proj",
+    "shared_expert.up_proj",
+    "shared_expert.down_proj"
+   ]
+  },
+  "data": {
+   "max_seq_len": 65536,
+   "overlong": "truncate",
+   "preserve_thinking": true,
+   "pack_window": 512,
+   "cache_dir": "/scratch/eh3323/apex/work/tokcache",
+   "num_proc": 16,
+   "val_max_tokens_per_set": 524288,
+   "val": {
+    "e_swe": "/scratch/eh3323/apex/data/processed/swe/val.jsonl",
+    "e_tb": "/scratch/eh3323/apex/data/processed/tb/val.jsonl",
+    "e_asi": "/scratch/eh3323/apex/data/processed/asi/val.jsonl",
+    "e_hle": "/scratch/eh3323/apex/data/processed/hle/val.jsonl",
+    "e_swe_v2": "/scratch/eh3323/apex/data/processed/swe_v2/val.jsonl"
+   },
+   "train": {
+    "e_swe_v2": "/scratch/eh3323/apex/data/processed/swe_v2/train.jsonl"
+   }
+  },
+  "train": {
+   "seed": 1234,
+   "epochs": 2,
+   "global_batch_tokens": 262144,
+   "lr": 0.0001,
+   "min_lr_ratio": 0.1,
+   "warmup_ratio": 0.03,
+   "weight_decay": 0.0,
+   "adam_betas": [
+    0.9,
+    0.999
+   ],
+   "grad_clip": 1.0,
+   "ce_chunk_tokens": 4096,
+   "max_steps": null,
+   "log_every": 1,
+   "eval_every": 20,
+   "eval_at_start": true,
+   "save_every": 10,
+   "keep_last": 2
+  },
+  "output": {
+   "root": "/scratch/eh3323/apex/runs",
+   "run_id": "e_swe_v2_r32"
+  },
+  "_config_path": "configs/train/e_swe_v2.yaml"
+ },
+ "seed": 1234,
+ "world_size": 1,
+ "gpu_type": "NVIDIA H200",
+ "gpu_count": 1,
+ "versions": {
+  "python": "3.12.13",
+  "torch": "2.12.1+cu129",
+  "transformers": "5.19.0",
+  "peft": "0.21.2",
+  "fla": "0.5.2",
+  "triton": "3.7.1",
+  "kernels": "0.17.2",
+  "safetensors": "0.8.0",
+  "numpy": "2.3.5",
+  "cuda": "12.9",
+  "cudnn": 92000,
+  "nvidia_driver": "610.43.02"
+ },
+ "kernels": {
+  "attention": "hub:flash-attn3",
+  "gdn": "fla_triton(chunk_gated_delta_rule+causal_conv1d, varlen)",
+  "experts": "grouped_mm",
+  "attn_implementation_config": "apex_varlen"
+ },
+ "gdn_selftest": {
+  "gdn_packed_vs_separate_maxdiff": 0.0,
+  "conv_packed_vs_separate_maxdiff": 0.0
+ },
+ "data_manifest": {
+  "train": {
+   "e_swe_v2": {
+    "source_file": "/scratch/eh3323/apex/data/processed/swe_v2/train.jsonl",
+    "source_sha256": "df3b1c224c535dbca310192c2e4aac530fe8ffccf03b4efce957c3a9cf6e5e70",
+    "n_records": 383,
+    "n_kept": 383,
+    "n_template_errors": 0,
+    "n_no_label": 0,
+    "n_turn_count_mismatch": 0,
+    "total_tokens": 14965525,
+    "label_tokens": 6536935,
+    "len_p50": 38148.0,
+    "len_p90": 58170.200000000004,
+    "len_max": 65529,
+    "tokenizer_fingerprint": "226c89bec76e2603",
+    "preserve_thinking": true
+   }
+  },
+  "val": {
+   "e_swe": {
+    "source_file": "/scratch/eh3323/apex/data/processed/swe/val.jsonl",
+    "source_sha256": "ce703c31b24a88ecb9853e5020b4569bd0f7fd440e612911ae2dad738fe456e9",
+    "n_kept": 9,
+    "total_tokens": 261259,
+    "label_tokens": 78902
+   },
+   "e_tb": {
+    "source_file": "/scratch/eh3323/apex/data/processed/tb/val.jsonl",
+    "source_sha256": "01bed761298298544897d7885f869d1bf361a20f1b809c5d7dd8a43f72b5ec10",
+    "n_kept": 19,
+    "total_tokens": 285633,
+    "label_tokens": 128680
+   },
+   "e_asi": {
+    "source_file": "/scratch/eh3323/apex/data/processed/asi/val.jsonl",
+    "source_sha256": "4032496ab7b96e45babce027e21e68fb369a56ad90dfbefa6451aa6fb97b4f57",
+    "n_kept": 23,
+    "total_tokens": 380677,
+    "label_tokens": 151911
+   },
+   "e_hle": {
+    "source_file": "/scratch/eh3323/apex/data/processed/hle/val.jsonl",
+    "source_sha256": "994bfee8c2d886434fc505807f21d0104e7e2ff215846e654dac46ed00a4bfbf",
+    "n_kept": 28,
+    "total_tokens": 182738,
+    "label_tokens": 175074
+   },
+   "e_swe_v2": {
+    "source_file": "/scratch/eh3323/apex/data/processed/swe_v2/val.jsonl",
+    "source_sha256": "1eb8fb07b9c52d758eaed92b9b54cfd4346970b41fcfb4101466f5708aa34152",
+    "n_kept": 10,
+    "total_tokens": 415684,
+    "label_tokens": 158142
+   }
+  }
+ },
+ "data_plan": {
+  "n_pieces": 383,
+  "n_truncated": 0,
+  "n_dropped": 0,
+  "tokens": 14965525,
+  "label_tokens": 6536935,
+  "packs_per_epoch": [
+   257,
+   257
+  ],
+  "pack_efficiency": 0.8885,
+  "packs_per_step": 4,
+  "grad_accum": 4,
+  "tokens_per_step_capacity": 262144,
+  "steps_per_epoch": [
+   65,
+   65
+  ],
+  "total_steps": 130
+ },
+ "lora": {
+  "regex": ".*language_model\\.layers\\.\\d+\\.(self_attn\\.(q_proj|k_proj|v_proj|o_proj)|linear_attn\\.(in_proj_qkv|in_proj_z|out_proj)|mlp\\.(shared_expert\\.gate_proj|shared_expert\\.up_proj|shared_expert\\.down_proj))",
+  "n_modules": 250,
+  "trainable_params": 38338560
+ },
+ "start": "2026-10-14T13:39:24",
+ "end": "2026-10-14T15:09:40",
+ "gpu_hours_total": 1.5046,
+ "segments": [
+  {
+   "job_id": "19816112",
+   "restart_count": null,
+   "host": "gh101.hpc.nyu.edu",
+   "world_size": 1,
+   "gpu": "NVIDIA H200",
+   "start": "2026-10-14T13:39:24",
+   "start_step": 0,
+   "model_load_s": 115.0,
+   "end": "2026-10-14T15:09:40",
+   "end_step": 130,
+   "gpu_hours": 1.5046
+  }
+ ],
+ "final_val": {
+  "e_swe": 0.42229100012911586,
+  "e_tb": 0.5252155525698438,
+  "e_asi": 0.6007399519188045,
+  "e_hle": 0.7816455470258291,
+  "e_swe_v2": 0.5103484088123728
+ },
+ "throughput": {
+  "steps_measured": 127,
+  "median_tokens_per_s": 7532.92139617079,
+  "median_tokens_per_s_per_gpu": 7532.92139617079,
+  "max_peak_mem_gb": 96.26331329345703,
+  "world_size": 1,
+  "gpu": "NVIDIA H200",
+  "max_seq_len": 65536,
+  "attention": "hub:flash-attn3",
+  "experts": "grouped_mm",
+  "gdn": "fla_triton(chunk_gated_delta_rule+causal_conv1d, varlen)"
+ }
+}

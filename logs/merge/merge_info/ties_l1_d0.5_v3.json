@@ -1,0 +1,70 @@
+{
+ "type": "expert_merge",
+ "name": "ties_l1_d0.5_v3",
+ "method": "ties",
+ "sparsify": "magnitude",
+ "combine": "ties",
+ "global_scale": 1.0,
+ "weights": {
+  "e_swe": 1.0,
+  "e_asi": 1.0,
+  "e_hle": 1.0
+ },
+ "density": 0.5,
+ "drop_p": 0.9,
+ "seed": 0,
+ "svd_rank": null,
+ "fold_svd": false,
+ "experts": {
+  "e_swe": {
+   "path": "/scratch/eh3323/apex/runs/e_swe_v2_r32/adapter_final",
+   "r": 32,
+   "scale": 2.0
+  },
+  "e_asi": {
+   "path": "/scratch/eh3323/apex/runs/e_asi_r32/adapter_final",
+   "r": 32,
+   "scale": 2.0
+  },
+  "e_hle": {
+   "path": "/scratch/eh3323/apex/runs/e_hle_r32/adapter_final",
+   "r": 32,
+   "scale": 2.0
+  }
+ },
+ "config": {
+  "base": "/scratch/eh3323/apex/models/Qwen3.6-35B-A3B",
+  "experts": {
+   "e_swe": "/scratch/eh3323/apex/runs/e_swe_v2_r32/adapter_final",
+   "e_asi": "/scratch/eh3323/apex/runs/e_asi_r32/adapter_final",
+   "e_hle": "/scratch/eh3323/apex/runs/e_hle_r32/adapter_final"
+  },
+  "weights": {
+   "e_swe": 1.0,
+   "e_asi": 1.0,
+   "e_hle": 1.0
+  },
+  "global_scale": 1.0,
+  "density": 0.5,
+  "drop_p": 0.9,
+  "seed": 0,
+  "svd_rank": null,
+  "export_adapter": false,
+  "fold_svd": false,
+  "fold": true,
+  "link_unchanged": true,
+  "analysis": false,
+  "analysis_density": 0.2,
+  "analysis_dir": "/scratch/eh3323/apex/analysis",
+  "out_root": "/scratch/eh3323/apex/models/merged",
+  "device": "auto",
+  "method": "ties",
+  "name": "ties_l1_d0.5_v3",
+  "_config_path": "configs/merge/ties_v3.yaml"
+ },
+ "n_modified": 250,
+ "max_rel_delta": 0.05244555324316025,
+ "base_dir": "/scratch/eh3323/apex/models/Qwen3.6-35B-A3B",
+ "written": "2026-10-14T19:49:22",
+ "seconds": 82.5
+}

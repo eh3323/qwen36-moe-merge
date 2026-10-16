@@ -3,11 +3,13 @@
 # Adds singularity_network={auto,host,none,pasta} (+ Unix-socket exec channel), host-provided server python,
 # local staging root, extra exec args, server start timeout, explicit no-network override for patch_replay,
 # per-trial writable sandboxes (singularity_sandbox_root), explicit /etc/hosts, pasta DNS relay (--dns-forward).
+# musl (Alpine) rootfs: --fakeroot without apptainer's glibc fakeroot command, exec server on the image python3
+# with pure-Python deps from singularity_server_pylib (default <singularity_server_python>-pylib).
 diff --git a/src/harbor/environments/singularity/bootstrap.sh b/src/harbor/environments/singularity/bootstrap.sh
-index d1b3868..2fcd833 100755
+index d1b3868..e4f2c7b 100755
 --- a/src/harbor/environments/singularity/bootstrap.sh
 +++ b/src/harbor/environments/singularity/bootstrap.sh
-@@ -7,14 +7,25 @@ mkdir -p "$WORKDIR"
+@@ -7,14 +7,42 @@ mkdir -p "$WORKDIR"
  
  export DEBIAN_FRONTEND=noninteractive
  
@@ -19,6 +21,23 @@ index d1b3868..2fcd833 100755
 +  _USE_HOSTPY=1
 +  echo "[harbor] using host-provided server python $HARBOR_HOSTPY" >&2
 +fi
++# [apex patch] musl (Alpine) images, where the glibc host python cannot run: the image's own
++# python3 + host-provided pure-Python fastapi/uvicorn/pydantic-v1 (HARBOR_PYLIB, read-only bind).
++# The deps go on sys.path of the server process only; nothing is exported to the commands it runs
++# and nothing is installed into the image. _PYLIB_BOOT = "python3 script args" with that sys.path
++# (-E: an image PYTHONPATH such as /app cannot shadow modules of the server; children keep it).
++_USE_PYLIB=0
++_PYLIB_BOOT='import os, runpy, sys; lib = sys.argv.pop(1); del sys.argv[0]; sys.path[0:1] = [lib, os.path.dirname(os.path.abspath(sys.argv[0]))]; runpy.run_path(sys.argv[0], run_name="__main__")'
++if [ "$_USE_HOSTPY" != "1" ] && [ -n "${HARBOR_PYLIB:-}" ] && [ -d "$HARBOR_PYLIB" ]; then
++  for _p in /usr/bin/python3 /usr/local/bin/python3; do
++    if [ -x "$_p" ] && "$_p" -E -c 'import sys; sys.path[0:1] = [sys.argv[1]]; import uvicorn, fastapi' "$HARBOR_PYLIB" 2>/dev/null; then
++      _USE_PYLIB=1; _PYLIB_PY="$_p"
++      echo "[harbor] using image python $_p with server deps from $HARBOR_PYLIB" >&2
++      break
++    fi
++  done
++  [ "$_USE_PYLIB" = "1" ] || echo "[harbor] WARNING: no image python3 imports fastapi/uvicorn from $HARBOR_PYLIB" >&2
++fi
 +
  # --- Refresh package index once (apt-based images) ---
 -if command -v apt-get >/dev/null 2>&1; then
@@ -29,24 +48,35 @@ index d1b3868..2fcd833 100755
  # --- Ensure /usr/bin/python3 exists ---
  _SYS_PY=/usr/bin/python3
 -if [ ! -x "$_SYS_PY" ]; then
-+if [ "$_USE_HOSTPY" = "1" ]; then
-+  :  # server runs on the host-provided python; leave the image untouched
++if [ "$_USE_HOSTPY" = "1" ] || [ "$_USE_PYLIB" = "1" ]; then
++  :  # server runs on the host-provided python / pylib; leave the image untouched
 +elif [ ! -x "$_SYS_PY" ]; then
    echo "[harbor] /usr/bin/python3 not found, installing..." >&2
    if command -v apt-get >/dev/null 2>&1; then
      apt-get install -y -qq python3 python3-venv 2>/dev/null || true
-@@ -34,7 +45,9 @@ fi
+@@ -34,7 +62,11 @@ fi
  # --- Create an isolated venv for the Harbor server at /opt/harbor-server ---
  _HARBOR_VENV=/opt/harbor-server
  _HARBOR_PY="$_HARBOR_VENV/bin/python3"
 -if [ ! -x "$_HARBOR_PY" ]; then
 +if [ "$_USE_HOSTPY" = "1" ]; then
 +  _HARBOR_PY="$HARBOR_HOSTPY"
++elif [ "$_USE_PYLIB" = "1" ]; then
++  _HARBOR_PY="$_PYLIB_PY"
 +elif [ ! -x "$_HARBOR_PY" ]; then
    echo "[harbor] Creating server venv at $_HARBOR_VENV..." >&2
    "$_SYS_PY" -m venv --without-pip "$_HARBOR_VENV" \
      || { echo "[harbor] FATAL: cannot create server venv" >&2; exit 1; }
-@@ -79,7 +92,9 @@ for f in "$HOME/.bashrc" "$HOME/.bash_profile"; do
+@@ -61,7 +93,7 @@ urllib.request.urlretrieve('https://bootstrap.pypa.io/get-pip.py', '/tmp/get-pip
+   fi
+ fi
+ 
+-if ! "$_HARBOR_PY" -c "import uvicorn; import fastapi" 2>/dev/null; then
++if [ "$_USE_PYLIB" != "1" ] && ! "$_HARBOR_PY" -c "import uvicorn; import fastapi" 2>/dev/null; then
+   echo "[harbor] Installing server dependencies (uvicorn/fastapi)..." >&2
+   "$_HARBOR_PY" -m pip install --upgrade pip 2>/dev/null || true
+   "$_HARBOR_PY" -m pip install uvicorn fastapi 2>/dev/null \
+@@ -79,7 +111,9 @@ for f in "$HOME/.bashrc" "$HOME/.bash_profile"; do
    grep -q 'TMUX_TMPDIR' "$f" 2>/dev/null || echo "alias tmux='tmux -S $TMUX_TMPDIR/default'" >> "$f"
  done
  
@@ -57,7 +87,7 @@ index d1b3868..2fcd833 100755
    echo "[harbor] Installing tmux..." >&2
    if command -v apt-get >/dev/null 2>&1; then
      apt-get install -y -qq tmux 2>/dev/null || true
-@@ -88,7 +103,9 @@ if ! command -v tmux >/dev/null 2>&1; then
+@@ -88,7 +122,9 @@ if ! command -v tmux >/dev/null 2>&1; then
    elif command -v apk >/dev/null 2>&1; then apk add --no-cache tmux 2>/dev/null || true
    fi
  fi
@@ -68,6 +98,17 @@ index d1b3868..2fcd833 100755
    if command -v apt-get >/dev/null 2>&1; then
      apt-get install -y -qq asciinema 2>/dev/null || true
    elif command -v pip3 >/dev/null 2>&1; then
+@@ -104,8 +140,9 @@ fi
+ 
+ # Re-verify after setup.sh (the /opt/harbor-server venv should be untouched,
+ # but check anyway in case something unusual happened)
+-if ! "$HARBOR_PYTHON" -c "import uvicorn; import fastapi" 2>/dev/null; then
++if [ "$_USE_PYLIB" != "1" ] && ! "$HARBOR_PYTHON" -c "import uvicorn; import fastapi" 2>/dev/null; then
+   echo "[harbor] WARNING: uvicorn/fastapi lost after setup.sh, server may fail" >&2
+ fi
+ 
++[ "$_USE_PYLIB" = "1" ] && exec "$HARBOR_PYTHON" -E -c "$_PYLIB_BOOT" "$HARBOR_PYLIB" "$@"
+ exec "$HARBOR_PYTHON" "$@"
 diff --git a/src/harbor/environments/singularity/server.py b/src/harbor/environments/singularity/server.py
 index 04f9644..020ef54 100644
 --- a/src/harbor/environments/singularity/server.py
@@ -101,7 +142,7 @@ index 04f9644..020ef54 100644
          server_header=False,
          timeout_graceful_shutdown=timeout_graceful_shutdown,
 diff --git a/src/harbor/environments/singularity/singularity.py b/src/harbor/environments/singularity/singularity.py
-index c728d73..da98b89 100644
+index c728d73..aec88e6 100644
 --- a/src/harbor/environments/singularity/singularity.py
 +++ b/src/harbor/environments/singularity/singularity.py
 @@ -43,7 +43,7 @@ from harbor.environments.capabilities import (
@@ -113,7 +154,7 @@ index c728d73..da98b89 100644
  from harbor.models.trial.paths import TrialPaths
  
  
-@@ -53,6 +53,26 @@ class MemoryLimitExceededError(Exception):
+@@ -53,6 +53,72 @@ class MemoryLimitExceededError(Exception):
      pass
  
  
@@ -137,10 +178,56 @@ index c728d73..da98b89 100644
 +    shutil.rmtree(path, onexc=onexc)
 +
 +
++def _rootfs_resolve(rootfs: Path, path: str) -> Path:
++    """[apex patch] Resolve `path` inside `rootfs`, following symlinks (absolute ones
++    relative to rootfs, never escaping it), e.g. Alpine /bin/sh -> /bin/busybox."""
++    parts = [p for p in path.split("/") if p not in ("", ".")]
++    cur, hops = rootfs, 0
++    while parts:
++        part = parts.pop(0)
++        if part == "..":
++            cur = cur.parent if cur != rootfs else cur
++            continue
++        nxt = cur / part
++        if nxt.is_symlink():
++            hops += 1
++            if hops > 40:
++                raise OSError(f"too many symlinks resolving {path} in {rootfs}")
++            target = os.readlink(nxt)
++            if target.startswith("/"):
++                cur = rootfs
++            parts = [p for p in target.split("/") if p not in ("", ".")] + parts
++            continue
++        cur = nxt
++    return cur
++
++
++def _elf_interp(path: Path) -> str | None:
++    """[apex patch] PT_INTERP of a 64-bit little-endian ELF ("" if static, None if not ELF64)."""
++    try:
++        with open(path, "rb") as f:
++            eh = f.read(64)
++            if len(eh) < 64 or eh[:4] != b"\x7fELF" or eh[4] != 2 or eh[5] != 1:
++                return None
++            phoff = int.from_bytes(eh[0x20:0x28], "little")
++            phentsize = int.from_bytes(eh[0x36:0x38], "little")
++            phnum = int.from_bytes(eh[0x38:0x3A], "little")
++            for i in range(phnum):
++                f.seek(phoff + i * phentsize)
++                ph = f.read(56)
++                if int.from_bytes(ph[0:4], "little") == 3:  # PT_INTERP
++                    f.seek(int.from_bytes(ph[8:16], "little"))
++                    raw = f.read(int.from_bytes(ph[32:40], "little"))
++                    return raw.rstrip(b"\0").decode("ascii", "replace")
++    except OSError:
++        return None
++    return ""
++
++
  class SingularityEnvironment(BaseEnvironment):
      """
      Singularity-based environment for HPC clusters.
-@@ -67,6 +87,50 @@ class SingularityEnvironment(BaseEnvironment):
+@@ -67,6 +133,62 @@ class SingularityEnvironment(BaseEnvironment):
          singularity_force_pull: Force re-pull even if cached (default False).
          singularity_no_mount: Comma-separated mount types to suppress
              (default "home,tmp,bind-paths"). Use "" to allow all Singularity mounts.
@@ -179,9 +266,21 @@ index c728d73..da98b89 100644
 +            has no /etc/subuid range: apptainer then uses a root-mapped
 +            namespace, in which the squashfuse + fuse-overlayfs stack refuses
 +            writes to image files (EACCES/EOVERFLOW), and kernel overlayfs breaks
-+            dpkg directory renames (EXDEV). Use a node-local filesystem. In musl
-+            (Alpine) rootfs the glibc fakeroot helper is skipped
-+            (--ignore-fakeroot-command); the root-mapped namespace still gives uid 0.
++            dpkg directory renames (EXDEV). Use a node-local filesystem.
++            musl (Alpine) rootfs, detected from the ELF interpreter of /bin/sh:
++            apptainer's no-subuid fallback injects the host's glibc ``fakeroot``
++            wrapper (faked + LD_PRELOADed libfakeroot.so), which cannot run there
++            ("faked: not found" / "Error relocating libfakeroot.so"), so it is
++            skipped (``--ignore-fakeroot-command``): the root-mapped user namespace
++            alone still gives uid 0 (no faked chown/mknod). The glibc host python
++            cannot run there either, so the exec server runs on the image's own
++            python3 with singularity_server_pylib (see bootstrap.sh).
++        singularity_server_pylib: host directory with pure-Python fastapi /
++            uvicorn / pydantic v1 (py3-none-any wheels; ``pip install --target``)
++            for the image's own python3. Bound read-only at /opt/harbor-pylib and
++            put on sys.path of the exec server process only (never exported to
++            the commands it runs). Used only for musl rootfs. Default: sibling
++            ``<singularity_server_python>-pylib`` if it exists.
 +        singularity_extra_args: extra args for ``singularity exec`` (shlex).
 +        singularity_server_start_timeout_sec: exec-server readiness timeout
 +            (default 60, upstream value).
@@ -191,7 +290,7 @@ index c728d73..da98b89 100644
      """
  
      def __init__(
-@@ -80,6 +144,13 @@ class SingularityEnvironment(BaseEnvironment):
+@@ -80,6 +202,14 @@ class SingularityEnvironment(BaseEnvironment):
          singularity_image_cache_dir: Path | str | None = None,
          singularity_force_pull: bool = False,
          singularity_no_mount: str | None = None,
@@ -202,10 +301,11 @@ index c728d73..da98b89 100644
 +        singularity_extra_args: str | None = None,
 +        singularity_server_start_timeout_sec: int | str = 60,
 +        singularity_ignore_network_policy: bool | str = False,
++        singularity_server_pylib: Path | str | None = None,
          **kwargs,
      ):
          if singularity_image_cache_dir:
-@@ -90,6 +161,33 @@ class SingularityEnvironment(BaseEnvironment):
+@@ -90,6 +220,43 @@ class SingularityEnvironment(BaseEnvironment):
          self._force_pull = singularity_force_pull
          self._singularity_no_mount = singularity_no_mount
  
@@ -224,6 +324,16 @@ index c728d73..da98b89 100644
 +            if singularity_server_python
 +            else None
 +        )
++        # default = sibling dir, so job configs written before this kwarg existed
++        # (e.g. `harbor jobs resume` of an older job) pick it up as well
++        if singularity_server_pylib:
++            self._server_pylib_dir: Path | None = Path(singularity_server_pylib).resolve()
++        elif self._server_python_dir is not None:
++            sib = self._server_python_dir.with_name(self._server_python_dir.name + "-pylib")
++            self._server_pylib_dir = sib if sib.is_dir() else None
++        else:
++            self._server_pylib_dir = None
++        self._musl_rootfs = False
 +        self._staging_root = (
 +            Path(singularity_staging_root) if singularity_staging_root else None
 +        )
@@ -239,7 +349,7 @@ index c728d73..da98b89 100644
          super().__init__(
              environment_dir=environment_dir,
              environment_name=environment_name,
-@@ -126,11 +224,55 @@ class SingularityEnvironment(BaseEnvironment):
+@@ -126,11 +293,55 @@ class SingularityEnvironment(BaseEnvironment):
      def resource_capabilities(cls) -> EnvironmentResourceCapabilities:
          return EnvironmentResourceCapabilities()
  
@@ -295,7 +405,7 @@ index c728d73..da98b89 100644
      @property
      def _docker_image(self) -> str | None:
          return self.task_env_config.docker_image
-@@ -312,6 +454,65 @@ class SingularityEnvironment(BaseEnvironment):
+@@ -312,6 +523,73 @@ class SingularityEnvironment(BaseEnvironment):
              shutil.rmtree(self._staging_dir, ignore_errors=True)
              self._staging_dir = None
  
@@ -319,17 +429,25 @@ index c728d73..da98b89 100644
 +            self._sandbox_dir = None
 +            raise RuntimeError(f"sandbox build failed for {self._sif_path}: {tail}")
 +        self.logger.debug(f"Built sandbox {rootfs} from {self._sif_path}")
++        self._musl_rootfs = self._is_musl_rootfs()
++        if self._musl_rootfs:
++            self.logger.info(
++                "musl rootfs: --fakeroot without the fakeroot command; exec server on "
++                f"the image python3 + {self._server_pylib_dir or 'NO singularity_server_pylib'}"
++            )
 +
 +    def _is_musl_rootfs(self) -> bool:
-+        """[apex patch] musl loader present and no glibc loader/libc (lexists: absolute symlinks)."""
++        """[apex patch] True iff the rootfs /bin/sh is dynamically linked against musl.
++
++        /bin/sh is what runs apptainer's fakeroot wrapper and every exec'd command, so
++        its loader decides. Loader-file heuristics misfire: Alpine + gcompat ships
++        ld-linux-x86-64.so.2 shims (still musl), Debian + musl-tools ships ld-musl."""
 +        rootfs = self._sandbox_dir / "rootfs"
-+        musl = any((rootfs / "lib").glob("ld-musl-*.so.1"))
-+        glibc = any(
-+            os.path.lexists(rootfs / p)
-+            for p in ("lib64/ld-linux-x86-64.so.2", "lib/ld-linux-x86-64.so.2",
-+                      "lib/x86_64-linux-gnu/libc.so.6", "usr/lib/x86_64-linux-gnu/libc.so.6")
-+        )
-+        return musl and not glibc
++        try:
++            interp = _elf_interp(_rootfs_resolve(rootfs, "/bin/sh"))
++        except OSError:
++            interp = None
++        return bool(interp) and "ld-musl" in interp
 +
 +    def _make_mount_targets(self, bind_mounts: list[str]) -> None:
 +        """[apex patch] --writable cannot create bind targets: make them in the sandbox."""
@@ -361,7 +479,7 @@ index c728d73..da98b89 100644
      async def _start_server(self) -> None:
          """Start the FastAPI server inside the Singularity container.
  
-@@ -320,7 +521,14 @@ class SingularityEnvironment(BaseEnvironment):
+@@ -320,7 +598,14 @@ class SingularityEnvironment(BaseEnvironment):
          """
          await self._cleanup_server_resources()
  
@@ -377,7 +495,7 @@ index c728d73..da98b89 100644
          self._staging_dir.chmod(0o755)
  
          server_script = Path(__file__).parent / "server.py"
-@@ -336,7 +544,16 @@ class SingularityEnvironment(BaseEnvironment):
+@@ -336,7 +621,16 @@ class SingularityEnvironment(BaseEnvironment):
          last_error = None
  
          for port_attempt in range(max_port_retries):
@@ -395,12 +513,19 @@ index c728d73..da98b89 100644
              self._server_port = port
  
              # Note: --memory and --cpus flags are NOT used because they require
-@@ -353,6 +570,39 @@ class SingularityEnvironment(BaseEnvironment):
+@@ -353,6 +647,46 @@ class SingularityEnvironment(BaseEnvironment):
                      bind_mounts.extend(["-B", f"{mount['source']}:{mount['target']}"])
              if env_files_dir.exists():
                  bind_mounts.extend(["-B", f"{env_files_dir}:/staging/env_files"])
 +            env_args: list[str] = []
-+            if self._server_python_dir is not None:
++            if self._musl_rootfs:
++                # glibc host python cannot run on musl: image python3 + pure-Python deps
++                if self._server_pylib_dir is not None:
++                    bind_mounts.extend(
++                        ["-B", f"{self._server_pylib_dir}:/opt/harbor-pylib:ro"]
++                    )
++                    env_args.extend(["--env", "HARBOR_PYLIB=/opt/harbor-pylib"])
++            elif self._server_python_dir is not None:
 +                bind_mounts.extend(
 +                    ["-B", f"{self._server_python_dir}:/opt/harbor-hostpy:ro"]
 +                )
@@ -426,7 +551,7 @@ index c728d73..da98b89 100644
 +            if self._sandbox_dir is not None:
 +                image_args = ["--writable", str(self._sandbox_dir / "rootfs")]
 +                self._make_mount_targets(bind_mounts)
-+                if self._is_musl_rootfs():
++                if self._musl_rootfs:
 +                    # apptainer's bundled fakeroot/faked are glibc binaries and cannot run in
 +                    # musl (Alpine) images; the root-mapped namespace alone still gives uid 0
 +                    fakeroot_args.append("--ignore-fakeroot-command")
@@ -435,7 +560,7 @@ index c728d73..da98b89 100644
  
              no_mount_args: list[str] = []
              singularity_no_mount = self._singularity_no_mount
-@@ -371,8 +621,11 @@ class SingularityEnvironment(BaseEnvironment):
+@@ -371,8 +705,11 @@ class SingularityEnvironment(BaseEnvironment):
                  "bash",
                  self._workdir,
                  "/staging/_hbexec.py",
@@ -449,7 +574,7 @@ index c728d73..da98b89 100644
                  "--workdir",
                  self._workdir,
              ]
-@@ -382,37 +635,57 @@ class SingularityEnvironment(BaseEnvironment):
+@@ -382,37 +719,57 @@ class SingularityEnvironment(BaseEnvironment):
                  *no_mount_args,
                  "--pwd",
                  self._workdir,
@@ -514,7 +639,7 @@ index c728d73..da98b89 100644
                      )
                      if response.status_code == 200:
                          # Verify OUR server is still alive before declaring ready.
-@@ -658,6 +931,8 @@ class SingularityEnvironment(BaseEnvironment):
+@@ -658,6 +1015,8 @@ class SingularityEnvironment(BaseEnvironment):
              self._sif_path = await self._convert_docker_to_sif(
                  self._docker_image, force_pull=force_pull
              )
@@ -523,7 +648,7 @@ index c728d73..da98b89 100644
  
          await self._start_server()
  
-@@ -680,14 +955,21 @@ class SingularityEnvironment(BaseEnvironment):
+@@ -680,14 +1039,21 @@ class SingularityEnvironment(BaseEnvironment):
          if self._server_process and self._server_process.returncode is None:
              pid = self._server_process.pid
  
@@ -548,7 +673,7 @@ index c728d73..da98b89 100644
                  await self._server_process.wait()
  
              try:
-@@ -709,6 +991,10 @@ class SingularityEnvironment(BaseEnvironment):
+@@ -709,6 +1075,10 @@ class SingularityEnvironment(BaseEnvironment):
          if self._staging_dir and self._staging_dir.exists():
              shutil.rmtree(self._staging_dir, ignore_errors=True)
  
@@ -559,7 +684,7 @@ index c728d73..da98b89 100644
          if delete:
              self.logger.debug(
                  f"Singularity image preserved at {self._sif_path} for reuse"
-@@ -724,7 +1010,7 @@ class SingularityEnvironment(BaseEnvironment):
+@@ -724,7 +1094,7 @@ class SingularityEnvironment(BaseEnvironment):
          user: str | int | None = None,
      ) -> ExecResult:
          """Execute a command in the Singularity container via HTTP."""
@@ -568,7 +693,7 @@ index c728d73..da98b89 100644
              raise RuntimeError("Singularity environment not started")
  
          if self._memory_limit_exceeded:
-@@ -747,7 +1033,7 @@ class SingularityEnvironment(BaseEnvironment):
+@@ -747,7 +1117,7 @@ class SingularityEnvironment(BaseEnvironment):
              )
  
              response = await self._http_client.post(

@@ -1,0 +1,12 @@
+{
+ "steps_measured": 115,
+ "median_tokens_per_s": 8238.669806919826,
+ "median_tokens_per_s_per_gpu": 8238.669806919826,
+ "max_peak_mem_gb": 82.90131378173828,
+ "world_size": 1,
+ "gpu": "NVIDIA H200",
+ "max_seq_len": 32768,
+ "attention": "hub:flash-attn3",
+ "experts": "grouped_mm",
+ "gdn": "fla_triton(chunk_gated_delta_rule+causal_conv1d, varlen)"
+}

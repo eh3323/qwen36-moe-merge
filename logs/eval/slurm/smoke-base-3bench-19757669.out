@@ -1,0 +1,9 @@
+[aio] host=gh121.hpc.nyu.edu ngpu=1 cpus=16 mem=160G benches=tb2,asi,swepro smoke=1
+[aio] sizing: TB2_N=1 SWE_N=9 ASI_PAR=4 HLE_N=128 (share 36G/lane)
+[aio] lane tb2 pid 117195 -> /scratch/eh3323/apex/logs/allinone-base-19757669/tb2.log
+[aio] lane swepro pid 117196 -> /scratch/eh3323/apex/logs/allinone-base-19757669/swepro.log
+[aio] lane asi pid 117197 -> /scratch/eh3323/apex/logs/allinone-base-19757669/asi.log
+[aio] lanes finished rc=0
+[eval] agent phase done: /scratch/eh3323/apex/results/base/asi/base__asi__smoke/run ; score with: RUN=base RUN_ID=base__asi__smoke scripts/eval_asi_score.sh
+[eval] done: /scratch/eh3323/apex/repo/results/base/swepro/base__swepro__smoke.jsonl
+[eval] done: /scratch/eh3323/apex/repo/results/base/tb2/base__tb2__smoke.jsonl

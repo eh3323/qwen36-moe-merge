@@ -1,0 +1,5 @@
+[aio] host=gb008.hpc.nyu.edu ngpu=1 cpus=16 mem=160G benches=hle smoke=0
+[aio] sizing: TB2_N=2 SWE_N=27 ASI_PAR=8 HLE_N=256 (share 110G/lane)
+[aio] lane hle pid 1038055 -> /scratch/eh3323/apex/logs/allinone-merged_v4-19873756/hle.log
+[aio] lanes finished rc=0
+[eval] generation done; judge with: RUN=merged_v4 RUN_ID=merged_v4__hle__s1 scripts/eval_hle_judge.sh

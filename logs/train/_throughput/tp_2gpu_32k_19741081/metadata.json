@@ -1,0 +1,159 @@
+{
+ "run_id": "tp_2gpu_32k_19741081",
+ "status": "running",
+ "git_commit": null,
+ "code_fingerprint": "5beb6e8f602c282e",
+ "config_path": "configs/train/throughput_test.yaml",
+ "config": {
+  "model": {
+   "path": "/scratch/eh3323/apex/models/Qwen3.6-35B-A3B",
+   "class": "Qwen3_5MoeForConditionalGeneration",
+   "dtype": "bfloat16",
+   "experts_implementation": "grouped_mm",
+   "attn_backend": "auto",
+   "gdn_backend": "fla",
+   "gradient_checkpointing": true
+  },
+  "lora": {
+   "r": 32,
+   "alpha": 64,
+   "dropout": 0.05,
+   "use_rslora": false,
+   "full_attn_targets": [
+    "q_proj",
+    "k_proj",
+    "v_proj",
+    "o_proj"
+   ],
+   "linear_attn_targets": [
+    "in_proj_qkv",
+    "in_proj_z",
+    "out_proj"
+   ],
+   "mlp_targets": [
+    "shared_expert.gate_proj",
+    "shared_expert.up_proj",
+    "shared_expert.down_proj"
+   ]
+  },
+  "data": {
+   "max_seq_len": 32768,
+   "overlong": "truncate",
+   "preserve_thinking": true,
+   "pack_window": 512,
+   "cache_dir": "/scratch/eh3323/apex/work/tokcache",
+   "num_proc": 16,
+   "val_max_tokens_per_set": 524288,
+   "val": {},
+   "synthetic": {
+    "n_samples": 768,
+    "min_len": 2048,
+    "max_len": 16384
+   }
+  },
+  "train": {
+   "seed": 1234,
+   "epochs": 1,
+   "global_batch_tokens": 32768,
+   "lr": 0.0001,
+   "min_lr_ratio": 0.1,
+   "warmup_ratio": 0.03,
+   "weight_decay": 0.0,
+   "adam_betas": [
+    0.9,
+    0.999
+   ],
+   "grad_clip": 1.0,
+   "ce_chunk_tokens": 4096,
+   "max_steps": 25,
+   "log_every": 1,
+   "eval_every": 0,
+   "eval_at_start": false,
+   "save_every": 0,
+   "keep_last": 2,
+   "skip_final_save": true,
+   "no_resume": true
+  },
+  "output": {
+   "root": "/scratch/eh3323/apex/runs/_throughput",
+   "run_id": "tp_2gpu_32k_19741081"
+  },
+  "_config_path": "configs/train/throughput_test.yaml"
+ },
+ "seed": 1234,
+ "world_size": 2,
+ "gpu_type": "NVIDIA H200",
+ "gpu_count": 2,
+ "versions": {
+  "python": "3.12.13",
+  "torch": "2.12.1+cu129",
+  "transformers": "5.19.0",
+  "peft": "0.21.2",
+  "fla": "0.5.2",
+  "triton": "3.7.1",
+  "kernels": "0.17.2",
+  "safetensors": "0.8.0",
+  "numpy": "2.3.5",
+  "cuda": "12.9",
+  "cudnn": 92000,
+  "nvidia_driver": "610.43.02"
+ },
+ "kernels": {
+  "attention": "hub:flash-attn3",
+  "gdn": "fla_triton(chunk_gated_delta_rule+causal_conv1d, varlen)",
+  "experts": "grouped_mm",
+  "attn_implementation_config": "apex_varlen"
+ },
+ "gdn_selftest": {
+  "gdn_packed_vs_separate_maxdiff": 0.0,
+  "conv_packed_vs_separate_maxdiff": 0.0
+ },
+ "data_manifest": {
+  "synthetic": {
+   "n_samples": 768,
+   "min_len": 2048,
+   "max_len": 16384
+  }
+ },
+ "data_plan": {
+  "n_pieces": 768,
+  "n_truncated": 0,
+  "n_dropped": 0,
+  "tokens": 7092924,
+  "label_tokens": 4965399,
+  "packs_per_epoch": [
+   219
+  ],
+  "pack_efficiency": 0.9884,
+  "packs_per_step": 2,
+  "grad_accum": 1,
+  "tokens_per_step_capacity": 65536,
+  "steps_per_epoch": [
+   110
+  ],
+  "total_steps": 25
+ },
+ "lora": {
+  "regex": ".*language_model\\.layers\\.\\d+\\.(self_attn\\.(q_proj|k_proj|v_proj|o_proj)|linear_attn\\.(in_proj_qkv|in_proj_z|out_proj)|mlp\\.(shared_expert\\.gate_proj|shared_expert\\.up_proj|shared_expert\\.down_proj))",
+  "n_modules": 250,
+  "trainable_params": 38338560
+ },
+ "start": "2026-10-13T16:53:00",
+ "end": "2026-10-13T16:53:55",
+ "gpu_hours_total": 0.0308,
+ "segments": [
+  {
+   "job_id": "19741081",
+   "restart_count": null,
+   "host": "gh108.hpc.nyu.edu",
+   "world_size": 2,
+   "gpu": "NVIDIA H200",
+   "start": "2026-10-13T16:53:00",
+   "start_step": 0,
+   "model_load_s": 12.8,
+   "end": "2026-10-13T16:53:55",
+   "end_step": 0,
+   "gpu_hours": 0.0308
+  }
+ ]
+}

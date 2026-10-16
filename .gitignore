@@ -32,8 +32,8 @@ data/processed/
 models/*
 !models/README.md
 # raw eval outputs (benchmark questions/answers, agent trajectories) are not redistributed;
-# only aggregated summaries (md/csv/json) under results/ are committed
-results/**/*.jsonl
+# results/<group>/<bench>/<run_id>.jsonl (normalized per-task outcomes: ids, status, score, tokens; no benchmark
+# question/answer text) and aggregated summaries are committed; raw trajectories stay on the cluster
 results/**/trajectories/
 results/**/raw/
 *.traj
@@ -45,3 +45,12 @@ results/**/raw/
 *.log
 *.out
 *.err
+# ...except the training / merge job logs that are part of the experiment records
+!logs/train/**/*.out
+!logs/merge/**/*.out
+!logs/merge/*.log
+
+# evaluation / training logs are part of the deliverable (a few MB in total)
+!logs/**/*.log
+!logs/**/
+!logs/eval/**/*.out

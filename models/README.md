@@ -1,0 +1,51 @@
+# 模型：链接、合版配方与加载方法
+
+所有权重都在 Hugging Face 上（提交时设为公开，下载无需授权）。基座直接引用官方仓库。
+
+| 模型 | 仓库 | revision | 内容 |
+|---|---|---|---|
+| Base | [Qwen/Qwen3.6-35B-A3B](https://huggingface.co/Qwen/Qwen3.6-35B-A3B) | `995ad96e` | 官方基座，未改动 |
+| 专家与对照（LoRA） | [eh3323/Qwen3.6-35B-A3B-apex-lora-experts](https://huggingface.co/eh3323/Qwen3.6-35B-A3B-apex-lora-experts) | `e08bd952` | 子目录 `e_swe_v2/`、`e_tb_v2/`、`e_asi/`、`e_hle/`（进入合版）、`mixed/`（对照）、`e_swe_v1/`、`e_tb_v1/`（历史版本） |
+| **最终合版 v4** | [eh3323/Qwen3.6-35B-A3B-apex-merged-v4](https://huggingface.co/eh3323/Qwen3.6-35B-A3B-apex-merged-v4) | `223a1b15` | 完整权重（bf16，26 个分片）+ `merge_info.json` |
+| 折叠后的完整权重 | [e_asi-folded](https://huggingface.co/eh3323/Qwen3.6-35B-A3B-apex-e_asi-folded)、[mixed-folded](https://huggingface.co/eh3323/Qwen3.6-35B-A3B-apex-mixed-folded)、[e_tb_v2-folded](https://huggingface.co/eh3323/Qwen3.6-35B-A3B-apex-e_tb_v2-folded) | `3476649b`、`816e1ec6`、`9281bb8c` | 基座 + 对应 adapter 折叠成的稠密权重（bf16），租用节点上评测时直接加载 |
+
+许可证：Apache-2.0，继承自基座。
+
+## LoRA 专家
+
+- 秩 r=32，alpha=64，dropout 0.05。
+- 每层都挂了 LoRA 的模块：全注意力的 q/k/v/o、线性注意力（Gated DeltaNet）的 in_proj_qkv/in_proj_z/out_proj，以及 shared expert MLP 的 gate/up/down。routed experts 和 router 不动。
+- 训练配置在 `configs/train/<expert>.yaml`，每次运行的配置快照、日志和资源记录在 `logs/train/<run_id>/`。
+- 每个子目录里的 `state.json` 记录最终步数和训练过的 token 数。
+
+## 合版配方（v4，`configs/merge/ties_v4.yaml` → `ties_v3.yaml` → `ties.yaml`）
+
+- **方法**：TIES。先把每个专家的 LoRA 增量 ΔW = (alpha/r)·B·A 展开到稠密空间；每个模块只保留幅值最大的 50%（density 0.5）；按元素做符号投票，只对与多数符号相同的专家取平均；最后乘 λ=1 加回基座。
+- **专家**：E-SWE v2、E-TB v2、E-ASI、E-HLE，权重都是 1.0。
+- **超参来源**：从 18 个 Linear/TIES/DARE 候选中，按独立开发集的 val loss 选出（`configs/merge/select.yaml`，结果见 `curves/merge_ablation.png`）。
+- **完整配置**：实际使用的完整配置（专家路径、缩放、模块数）写在合版仓库的 `merge_info.json` 里。
+
+本地复现合版：先下载 LoRA 仓库，把 `configs/merge/ties_v3.yaml` 和 `ties_v4.yaml` 里的专家路径改成本地下载的路径，然后执行：
+
+```bash
+python -m src.merge.merge_experts --config configs/merge/ties_v4.yaml   # 输出 models/merged/ties_l1_d0.5_v4
+```
+
+## 加载
+
+合版模型（与基座用法相同；tokenizer、chat template、generation config 都来自基座）：
+
+```bash
+vllm serve eh3323/Qwen3.6-35B-A3B-apex-merged-v4 --revision <revision> \
+  --reasoning-parser qwen3 --enable-auto-tool-choice --tool-call-parser qwen3_coder --max-model-len 262144
+```
+
+单个专家（PEFT）：
+
+```python
+from peft import PeftModel
+from transformers import AutoModelForCausalLM
+base = AutoModelForCausalLM.from_pretrained("Qwen/Qwen3.6-35B-A3B", revision="995ad96e", torch_dtype="bfloat16", device_map="auto")
+model = PeftModel.from_pretrained(base, "eh3323/Qwen3.6-35B-A3B-apex-lora-experts", subfolder="e_swe_v2")
+model = model.merge_and_unload()   # 可选：折叠成稠密权重（评测时各专家就是这样折叠后用 vLLM 加载的）
+```

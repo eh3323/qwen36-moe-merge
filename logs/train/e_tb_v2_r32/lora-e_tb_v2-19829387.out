@@ -1,0 +1,222 @@
+[sbatch] job=19829387 restart=0 host=gb004.hpc.nyu.edu config=configs/train/e_tb_v2.yaml run=e_tb_v2_r32 ngpus=1
+NVIDIA B200, 183359 MiB, 610.43.02
+    "total_tokens": 380677,
+    "label_tokens": 151911
+   },
+   "e_hle": {
+    "source_file": "/scratch/eh3323/apex/data/processed/hle/val.jsonl",
+    "source_sha256": "994bfee8c2d886434fc505807f21d0104e7e2ff215846e654dac46ed00a4bfbf",
+    "n_kept": 28,
+    "total_tokens": 182738,
+    "label_tokens": 175074
+   },
+   "e_tb_v2_turns": {
+    "source_file": "/scratch/eh3323/apex/data/processed/tb_v2_turns/val.jsonl",
+    "source_sha256": "319a4d5dcbaeefb7e1d332dbce0e7eba4c582995e7690767ede4d71427ada552",
+    "n_kept": 55,
+    "total_tokens": 646905,
+    "label_tokens": 113007
+   }
+  }
+ },
+ "plan": {
+  "n_pieces": 1215,
+  "n_truncated": 0,
+  "n_dropped": 0,
+  "tokens": 15023563,
+  "label_tokens": 3501892,
+  "packs_per_epoch": [
+   231,
+   232
+  ],
+  "pack_efficiency": 0.9924,
+  "packs_per_step": 4,
+  "grad_accum": 4,
+  "tokens_per_step_capacity": 262144,
+  "steps_per_epoch": [
+   58,
+   58
+  ],
+  "total_steps": 116
+ }
+}
+20:05:45 [data] {"n_pieces": 1215, "n_truncated": 0, "n_dropped": 0, "tokens": 15023563, "label_tokens": 3501892, "packs_per_epoch": [231, 232], "pack_efficiency": 0.9924, "packs_per_step": 4, "grad_accum": 4, "tokens_per_step_capacity": 262144, "steps_per_epoch": [58, 58], "total_steps": 116}
+20:06:27 [attn] flash_attn(pip) unavailable: ModuleNotFoundError: No module named 'flash_attn'
+You are using version 1 of 'kernels-community/flash-attn3', but version 2 is available.
+20:06:27 [attn] hub:flash-attn3 unavailable: RuntimeError: Kernel 'flash-attn3' variant 'torch-stable-abi29-cu128-x86_64-linux' does not support the current device: CUDA capability 10.0 of the current device is not supported by the architectures of the build:
+You are using version 2 of 'kernels-community/flash-attn2', but version 3 is available.
+20:06:28 [attn] hub:flash-attn2 unavailable: RuntimeError: Kernel 'flash-attn2' variant 'torch212-cxx11-cu126-x86_64-linux' does not support the current device: CUDA capability 10.0 of the current device is not supported by the architectures of the build: 8.0
+20:06:28 [attn] using exact per-sample SDPA (flash/cudnn/efficient backends)
+20:06:38 [gdn] patched HF Qwen3.5-MoE GatedDeltaNet -> FLA Triton kernels (varlen)
+20:07:22 [gdn] selftest {'gdn_packed_vs_separate_maxdiff': 0.0, 'conv_packed_vs_separate_maxdiff': 0.0}
+Loading weights:   0%|          | 0/1026 [00:00<?, ?it/s]Loading weights:   0%|          | 1/1026 [00:02<48:23,  2.83s/it]Loading weights:   1%|▏         | 13/1026 [00:03<03:56,  4.29it/s]Loading weights:   1%|▏         | 14/1026 [00:05<05:40,  2.97it/s]Loading weights:   3%|▎         | 28/1026 [00:05<01:56,  8.58it/s]Loading weights:   3%|▎         | 34/1026 [00:07<02:56,  5.63it/s]Loading weights:   4%|▍         | 45/1026 [00:07<01:43,  9.43it/s]Loading weights:   5%|▍         | 51/1026 [00:10<03:14,  5.02it/s]Loading weights:   6%|▌         | 58/1026 [00:10<02:51,  5.64it/s]Loading weights:   6%|▌         | 61/1026 [00:12<03:45,  4.27it/s]Loading weights:   8%|▊         | 77/1026 [00:12<01:47,  8.80it/s]Loading weights:   8%|▊         | 82/1026 [00:15<02:54,  5.41it/s]Loading weights:   9%|▉         | 95/1026 [00:15<01:43,  9.01it/s]Loading weights:  10%|▉         | 101/1026 [00:18<02:54,  5.30it/s]Loading weights:  11%|█▏        | 117/1026 [00:18<01:36,  9.39it/s]Loading weights:  12%|█▏        | 125/1026 [00:20<02:01,  7.41it/s]Loading weights:  13%|█▎        | 131/1026 [00:21<02:32,  5.86it/s]Loading weights:  14%|█▍        | 144/1026 [00:22<01:35,  9.19it/s]Loading weights:  15%|█▍        | 150/1026 [00:23<02:07,  6.88it/s]Loading weights:  15%|█▌        | 154/1026 [00:24<02:21,  6.14it/s]Loading weights:  16%|█▌        | 165/1026 [00:24<01:29,  9.62it/s]Loading weights:  17%|█▋        | 170/1026 [00:27<02:40,  5.35it/s]Loading weights:  18%|█▊        | 183/1026 [00:27<01:33,  9.04it/s]Loading weights:  18%|█▊        | 189/1026 [00:30<02:32,  5.49it/s]Loading weights:  19%|█▉        | 196/1026 [00:32<02:55,  4.72it/s]Loading weights:  21%|██        | 214/1026 [00:32<01:29,  9.10it/s]Loading weights:  22%|██▏       | 221/1026 [00:34<01:54,  7.02it/s]Loading weights:  23%|██▎       | 238/1026 [00:34<01:14, 10.57it/s]Loading weights:  24%|██▎       | 243/1026 [00:35<01:25,  9.20it/s]Loading weights:  25%|██▍       | 255/1026 [00:35<00:57, 13.40it/s]Loading weights:  25%|██▌       | 261/1026 [00:38<01:59,  6.38it/s]Loading weights:  26%|██▌       | 265/1026 [00:39<02:02,  6.24it/s]Loading weights:  26%|██▌       | 268/1026 [00:41<02:46,  4.56it/s]Loading weights:  27%|██▋       | 276/1026 [00:41<01:50,  6.81it/s]Loading weights:  28%|██▊       | 289/1026 [00:42<01:20,  9.21it/s]Loading weights:  28%|██▊       | 292/1026 [00:43<02:06,  5.80it/s]Loading weights:  30%|██▉       | 307/1026 [00:44<01:20,  8.93it/s]Loading weights:  30%|███       | 310/1026 [00:45<01:45,  6.81it/s]Loading weights:  32%|███▏      | 325/1026 [00:46<01:10,  9.99it/s]Loading weights:  32%|███▏      | 327/1026 [00:48<01:54,  6.10it/s]Loading weights:  33%|███▎      | 334/1026 [00:50<02:21,  4.90it/s]Loading weights:  34%|███▍      | 352/1026 [00:50<01:09,  9.75it/s]Loading weights:  35%|███▍      | 358/1026 [00:51<01:16,  8.76it/s]Loading weights:  35%|███▌      | 362/1026 [00:53<01:52,  5.92it/s]Loading weights:  36%|███▋      | 373/1026 [00:53<01:11,  9.19it/s]Loading weights:  37%|███▋      | 378/1026 [00:57<02:47,  3.88it/s]Loading weights:  38%|███▊      | 390/1026 [00:57<01:39,  6.36it/s]Loading weights:  39%|███▊      | 396/1026 [01:00<02:28,  4.25it/s]Loading weights:  39%|███▉      | 403/1026 [01:01<02:07,  4.87it/s]Loading weights:  40%|███▉      | 406/1026 [01:02<02:26,  4.24it/s]Loading weights:  41%|████      | 420/1026 [01:03<01:16,  7.94it/s]Loading weights:  42%|████▏     | 426/1026 [01:04<01:18,  7.64it/s]Loading weights:  42%|████▏     | 430/1026 [01:05<01:44,  5.72it/s]Loading weights:  43%|████▎     | 445/1026 [01:06<01:05,  8.91it/s]Loading weights:  44%|████▎     | 448/1026 [01:07<01:37,  5.90it/s]Loading weights:  45%|████▌     | 462/1026 [01:08<00:54, 10.35it/s]Loading weights:  46%|████▌     | 468/1026 [01:10<01:27,  6.38it/s]Loading weights:  46%|████▌     | 472/1026 [01:12<01:58,  4.67it/s]Loading weights:  48%|████▊     | 492/1026 [01:12<00:54,  9.83it/s]Loading weights:  48%|████▊     | 497/1026 [01:14<01:16,  6.87it/s]Loading weights:  50%|█████     | 513/1026 [01:14<00:44, 11.57it/s]Loading weights:  51%|█████     | 520/1026 [01:16<01:06,  7.66it/s]Loading weights:  52%|█████▏    | 531/1026 [01:16<00:45, 10.90it/s]Loading weights:  52%|█████▏    | 538/1026 [01:18<01:08,  7.10it/s]Loading weights:  53%|█████▎    | 543/1026 [01:20<01:18,  6.14it/s]Loading weights:  55%|█████▍    | 561/1026 [01:20<00:40, 11.53it/s]Loading weights:  55%|█████▌    | 568/1026 [01:22<01:01,  7.46it/s]Loading weights:  56%|█████▋    | 578/1026 [01:22<00:43, 10.36it/s]Loading weights:  57%|█████▋    | 584/1026 [01:24<01:05,  6.77it/s]Loading weights:  58%|█████▊    | 596/1026 [01:24<00:42, 10.20it/s]Loading weights:  59%|█████▊    | 602/1026 [01:27<01:14,  5.67it/s]Loading weights:  59%|█████▉    | 610/1026 [01:29<01:24,  4.92it/s]Loading weights:  61%|██████    | 628/1026 [01:29<00:43,  9.10it/s]Loading weights:  62%|██████▏   | 634/1026 [01:30<00:44,  8.75it/s]Loading weights:  62%|██████▏   | 639/1026 [01:32<00:57,  6.78it/s]Loading weights:  63%|██████▎   | 646/1026 [01:32<00:42,  8.89it/s]Loading weights:  64%|██████▎   | 652/1026 [01:33<00:46,  8.04it/s]Loading weights:  64%|██████▍   | 655/1026 [01:34<01:07,  5.51it/s]Loading weights:  65%|██████▍   | 666/1026 [01:34<00:39,  9.07it/s]Loading weights:  65%|██████▌   | 670/1026 [01:38<01:27,  4.07it/s]Loading weights:  66%|██████▌   | 673/1026 [01:41<02:23,  2.47it/s]Loading weights:  66%|██████▌   | 679/1026 [01:43<01:56,  2.98it/s]Loading weights:  66%|██████▋   | 681/1026 [01:44<02:13,  2.58it/s]Loading weights:  67%|██████▋   | 691/1026 [01:44<01:08,  4.89it/s]Loading weights:  69%|██████▉   | 709/1026 [01:44<00:29, 10.58it/s]Loading weights:  70%|███████   | 721/1026 [01:44<00:19, 15.32it/s]Loading weights:  72%|███████▏  | 737/1026 [01:44<00:12, 23.70it/s]Loading weights:  73%|███████▎  | 753/1026 [01:45<00:08, 34.02it/s]Loading weights:  75%|███████▌  | 771/1026 [01:45<00:05, 48.15it/s]Loading weights:  78%|███████▊  | 805/1026 [01:45<00:02, 83.93it/s]Loading weights:  82%|████████▏ | 838/1026 [01:45<00:01, 119.90it/s]Loading weights:  85%|████████▌ | 875/1026 [01:45<00:00, 161.47it/s]Loading weights:  89%|████████▊ | 910/1026 [01:45<00:00, 196.04it/s]Loading weights:  92%|█████████▏| 941/1026 [01:45<00:00, 217.01it/s]Loading weights:  96%|█████████▌| 982/1026 [01:45<00:00, 255.66it/s]Loading weights:  99%|█████████▊| 1013/1026 [01:45<00:00, 268.54it/s]Loading weights: 100%|██████████| 1026/1026 [01:46<00:00,  9.68it/s] 
+20:09:09 [model] loaded Qwen3_5MoeForConditionalGeneration experts_impl=grouped_mm attn_impl=apex_varlen
+20:09:12 [lora] regex=.*language_model\.layers\.\d+\.(self_attn\.(q_proj|k_proj|v_proj|o_proj)|linear_attn\.(in_proj_qkv|in_proj_z|out_proj)|mlp\.(shared_expert\.gate_proj|shared_expert\.up_proj|shared_expert\.down_proj))
+[lora] 250 target modules, 38.34M trainable params
+20:09:12 [train] run=e_tb_v2_r32 world=1 gpu=NVIDIA B200 total_steps=116 warmup=3 packs/step=4 accum=4 trainable=38.34M
+20:10:21 [val] step=0 e_swe loss=0.3469 targets=78902
+20:10:49 [val] step=0 e_tb loss=0.5280 targets=128680
+20:11:03 [val] step=0 e_asi loss=0.5843 targets=151911
+20:11:19 [val] step=0 e_hle loss=0.7688 targets=175074
+20:11:31 [val] step=0 e_tb_v2_turns loss=0.4831 targets=105878
+20:12:52 [train] step 1/116 ep=0 loss=0.4219 lr=3.33e-05 gnorm=0.315 tok=261164 3,225 tok/s (3,225/gpu) 81.0s peak=96.0GB
+20:13:16 [train] step 2/116 ep=0 loss=0.4664 lr=6.67e-05 gnorm=0.297 tok=261210 10,845 tok/s (10,845/gpu) 24.1s peak=96.3GB
+20:13:44 [train] step 3/116 ep=0 loss=0.5250 lr=1.00e-04 gnorm=0.304 tok=261291 9,191 tok/s (9,191/gpu) 28.4s peak=96.2GB
+20:14:10 [train] step 4/116 ep=0 loss=0.4801 lr=1.00e-04 gnorm=0.218 tok=262019 10,087 tok/s (10,087/gpu) 26.0s peak=96.3GB
+20:14:43 [train] step 5/116 ep=0 loss=0.5027 lr=1.00e-04 gnorm=0.211 tok=259957 7,958 tok/s (7,958/gpu) 32.7s peak=96.3GB
+20:15:09 [train] step 6/116 ep=0 loss=0.4836 lr=9.99e-05 gnorm=0.219 tok=261746 10,143 tok/s (10,143/gpu) 25.8s peak=96.2GB
+20:15:32 [train] step 7/116 ep=0 loss=0.3178 lr=9.98e-05 gnorm=0.203 tok=261914 11,197 tok/s (11,197/gpu) 23.4s peak=96.3GB
+20:16:01 [train] step 8/116 ep=0 loss=0.5648 lr=9.97e-05 gnorm=0.278 tok=261718 9,213 tok/s (9,213/gpu) 28.4s peak=96.3GB
+20:16:25 [train] step 9/116 ep=0 loss=0.4435 lr=9.96e-05 gnorm=0.219 tok=260024 10,809 tok/s (10,809/gpu) 24.1s peak=96.3GB
+20:16:50 [train] step 10/116 ep=0 loss=0.4544 lr=9.94e-05 gnorm=0.143 tok=261169 10,482 tok/s (10,482/gpu) 24.9s peak=96.3GB
+20:16:50 [ckpt] saved /scratch/eh3323/apex/runs/e_tb_v2_r32/checkpoints/step_000010
+20:17:17 [train] step 11/116 ep=0 loss=0.3363 lr=9.92e-05 gnorm=0.200 tok=261476 9,964 tok/s (9,964/gpu) 26.2s peak=96.3GB
+20:17:42 [train] step 12/116 ep=0 loss=0.3580 lr=9.89e-05 gnorm=0.157 tok=261655 10,344 tok/s (10,344/gpu) 25.3s peak=96.3GB
+20:18:09 [train] step 13/116 ep=0 loss=0.2503 lr=9.86e-05 gnorm=0.105 tok=261481 9,780 tok/s (9,780/gpu) 26.7s peak=96.3GB
+20:18:36 [train] step 14/116 ep=0 loss=0.3640 lr=9.83e-05 gnorm=0.124 tok=261777 9,757 tok/s (9,757/gpu) 26.8s peak=96.3GB
+20:19:03 [train] step 15/116 ep=0 loss=0.3024 lr=9.79e-05 gnorm=0.161 tok=261519 9,621 tok/s (9,621/gpu) 27.2s peak=96.3GB
+20:19:29 [train] step 16/116 ep=0 loss=0.4136 lr=9.75e-05 gnorm=0.195 tok=261972 10,123 tok/s (10,123/gpu) 25.9s peak=96.3GB
+20:19:53 [train] step 17/116 ep=0 loss=0.5015 lr=9.71e-05 gnorm=0.174 tok=260460 10,642 tok/s (10,642/gpu) 24.5s peak=96.2GB
+20:20:19 [train] step 18/116 ep=0 loss=0.2713 lr=9.66e-05 gnorm=0.190 tok=262007 10,042 tok/s (10,042/gpu) 26.1s peak=96.3GB
+20:20:46 [train] step 19/116 ep=0 loss=0.4430 lr=9.61e-05 gnorm=0.145 tok=261774 9,832 tok/s (9,832/gpu) 26.6s peak=96.3GB
+20:21:09 [train] step 20/116 ep=0 loss=0.4278 lr=9.56e-05 gnorm=0.124 tok=260814 11,055 tok/s (11,055/gpu) 23.6s peak=96.3GB
+20:21:16 [val] step=20 e_swe loss=0.3160 targets=78902
+20:21:23 [val] step=20 e_tb loss=0.4060 targets=128680
+20:21:33 [val] step=20 e_asi loss=0.4667 targets=151911
+20:21:37 [val] step=20 e_hle loss=0.7482 targets=175074
+20:21:50 [val] step=20 e_tb_v2_turns loss=0.4279 targets=105878
+20:21:50 [ckpt] saved /scratch/eh3323/apex/runs/e_tb_v2_r32/checkpoints/step_000020
+20:22:15 [train] step 21/116 ep=0 loss=0.4412 lr=9.51e-05 gnorm=0.129 tok=261429 10,678 tok/s (10,678/gpu) 24.5s peak=96.3GB
+20:22:41 [train] step 22/116 ep=0 loss=0.4482 lr=9.45e-05 gnorm=0.115 tok=262078 10,125 tok/s (10,125/gpu) 25.9s peak=96.3GB
+20:23:05 [train] step 23/116 ep=0 loss=0.4995 lr=9.39e-05 gnorm=0.143 tok=260967 10,747 tok/s (10,747/gpu) 24.3s peak=96.2GB
+20:23:32 [train] step 24/116 ep=0 loss=0.2968 lr=9.32e-05 gnorm=0.153 tok=261004 9,826 tok/s (9,826/gpu) 26.6s peak=96.3GB
+20:23:56 [train] step 25/116 ep=0 loss=0.4115 lr=9.25e-05 gnorm=0.117 tok=260482 10,874 tok/s (10,874/gpu) 24.0s peak=96.2GB
+20:24:23 [train] step 26/116 ep=0 loss=0.4262 lr=9.18e-05 gnorm=0.132 tok=260857 9,431 tok/s (9,431/gpu) 27.7s peak=96.3GB
+20:25:11 [train] step 27/116 ep=0 loss=0.2900 lr=9.11e-05 gnorm=0.126 tok=231878 4,871 tok/s (4,871/gpu) 47.6s peak=96.3GB
+20:25:39 [train] step 28/116 ep=0 loss=0.5427 lr=9.03e-05 gnorm=0.157 tok=261816 9,212 tok/s (9,212/gpu) 28.4s peak=96.3GB
+20:26:05 [train] step 29/116 ep=0 loss=0.4191 lr=8.96e-05 gnorm=0.125 tok=261611 10,338 tok/s (10,338/gpu) 25.3s peak=96.3GB
+20:26:30 [train] step 30/116 ep=0 loss=0.3808 lr=8.87e-05 gnorm=0.122 tok=259239 10,376 tok/s (10,376/gpu) 25.0s peak=96.3GB
+20:26:30 [ckpt] saved /scratch/eh3323/apex/runs/e_tb_v2_r32/checkpoints/step_000030
+20:26:57 [train] step 31/116 ep=0 loss=0.3052 lr=8.79e-05 gnorm=0.110 tok=261893 9,865 tok/s (9,865/gpu) 26.5s peak=96.3GB
+20:27:24 [train] step 32/116 ep=0 loss=0.5975 lr=8.70e-05 gnorm=0.519 tok=261791 9,761 tok/s (9,761/gpu) 26.8s peak=96.3GB
+20:27:48 [train] step 33/116 ep=0 loss=0.4366 lr=8.61e-05 gnorm=0.130 tok=261970 10,811 tok/s (10,811/gpu) 24.2s peak=96.3GB
+20:28:15 [train] step 34/116 ep=0 loss=0.3929 lr=8.52e-05 gnorm=0.130 tok=261622 9,675 tok/s (9,675/gpu) 27.0s peak=96.3GB
+20:28:41 [train] step 35/116 ep=0 loss=0.3622 lr=8.43e-05 gnorm=0.533 tok=261859 10,069 tok/s (10,069/gpu) 26.0s peak=96.3GB
+20:29:08 [train] step 36/116 ep=0 loss=0.3600 lr=8.33e-05 gnorm=0.124 tok=261559 9,731 tok/s (9,731/gpu) 26.9s peak=96.3GB
+20:29:34 [train] step 37/116 ep=0 loss=0.3798 lr=8.24e-05 gnorm=0.135 tok=261571 10,069 tok/s (10,069/gpu) 26.0s peak=96.3GB
+20:29:58 [train] step 38/116 ep=0 loss=0.3300 lr=8.13e-05 gnorm=0.119 tok=260664 10,777 tok/s (10,777/gpu) 24.2s peak=96.3GB
+20:30:23 [train] step 39/116 ep=0 loss=0.4920 lr=8.03e-05 gnorm=0.150 tok=261853 10,248 tok/s (10,248/gpu) 25.6s peak=96.3GB
+20:31:13 [train] step 40/116 ep=0 loss=0.3184 lr=7.93e-05 gnorm=0.098 tok=250212 5,048 tok/s (5,048/gpu) 49.6s peak=96.3GB
+20:31:20 [val] step=40 e_swe loss=0.3099 targets=78902
+20:31:27 [val] step=40 e_tb loss=0.3981 targets=128680
+20:31:37 [val] step=40 e_asi loss=0.4616 targets=151911
+20:31:41 [val] step=40 e_hle loss=0.7512 targets=175074
+20:31:53 [val] step=40 e_tb_v2_turns loss=0.4135 targets=105878
+20:31:54 [ckpt] saved /scratch/eh3323/apex/runs/e_tb_v2_r32/checkpoints/step_000040
+20:32:20 [train] step 41/116 ep=0 loss=0.3520 lr=7.82e-05 gnorm=0.151 tok=261965 10,119 tok/s (10,119/gpu) 25.9s peak=96.3GB
+20:32:45 [train] step 42/116 ep=0 loss=0.2622 lr=7.71e-05 gnorm=0.127 tok=262041 10,354 tok/s (10,354/gpu) 25.3s peak=96.3GB
+20:33:09 [train] step 43/116 ep=0 loss=0.4711 lr=7.60e-05 gnorm=0.138 tok=261594 10,840 tok/s (10,840/gpu) 24.1s peak=96.3GB
+20:33:35 [train] step 44/116 ep=0 loss=0.3433 lr=7.49e-05 gnorm=0.099 tok=261782 10,155 tok/s (10,155/gpu) 25.8s peak=96.2GB
+20:34:01 [train] step 45/116 ep=0 loss=0.3053 lr=7.38e-05 gnorm=0.428 tok=261240 10,253 tok/s (10,253/gpu) 25.5s peak=96.3GB
+20:34:25 [train] step 46/116 ep=0 loss=0.3266 lr=7.27e-05 gnorm=0.111 tok=260822 10,666 tok/s (10,666/gpu) 24.5s peak=96.3GB
+20:34:50 [train] step 47/116 ep=0 loss=0.3672 lr=7.15e-05 gnorm=0.097 tok=261755 10,602 tok/s (10,602/gpu) 24.7s peak=96.2GB
+20:35:18 [train] step 48/116 ep=0 loss=0.4408 lr=7.03e-05 gnorm=0.125 tok=261986 9,377 tok/s (9,377/gpu) 27.9s peak=96.3GB
+20:36:06 [train] step 49/116 ep=0 loss=0.3182 lr=6.91e-05 gnorm=0.113 tok=229902 4,738 tok/s (4,738/gpu) 48.5s peak=96.3GB
+20:36:33 [train] step 50/116 ep=0 loss=0.4433 lr=6.80e-05 gnorm=0.182 tok=261778 9,811 tok/s (9,811/gpu) 26.7s peak=96.3GB
+20:36:34 [ckpt] saved /scratch/eh3323/apex/runs/e_tb_v2_r32/checkpoints/step_000050
+20:36:58 [train] step 51/116 ep=0 loss=0.4491 lr=6.67e-05 gnorm=0.110 tok=259155 10,551 tok/s (10,551/gpu) 24.6s peak=96.3GB
+20:37:22 [train] step 52/116 ep=0 loss=0.3382 lr=6.55e-05 gnorm=0.130 tok=261753 10,803 tok/s (10,803/gpu) 24.2s peak=96.3GB
+20:37:48 [train] step 53/116 ep=0 loss=0.4889 lr=6.43e-05 gnorm=0.112 tok=261862 10,301 tok/s (10,301/gpu) 25.4s peak=96.3GB
+20:38:15 [train] step 54/116 ep=0 loss=0.4213 lr=6.31e-05 gnorm=0.160 tok=261126 9,776 tok/s (9,776/gpu) 26.7s peak=96.3GB
+20:38:40 [train] step 55/116 ep=0 loss=0.4184 lr=6.19e-05 gnorm=0.120 tok=261772 10,505 tok/s (10,505/gpu) 24.9s peak=96.3GB
+20:39:07 [train] step 56/116 ep=0 loss=0.3136 lr=6.06e-05 gnorm=0.129 tok=261814 9,572 tok/s (9,572/gpu) 27.4s peak=96.3GB
+20:39:33 [train] step 57/116 ep=0 loss=0.3309 lr=5.94e-05 gnorm=0.118 tok=261137 10,086 tok/s (10,086/gpu) 25.9s peak=96.2GB
+20:39:52 [train] step 58/116 ep=0 loss=0.3570 lr=5.81e-05 gnorm=0.141 tok=196577 10,435 tok/s (10,435/gpu) 18.8s peak=96.3GB
+20:40:17 [train] step 59/116 ep=1 loss=0.4688 lr=5.69e-05 gnorm=0.126 tok=261935 10,525 tok/s (10,525/gpu) 24.9s peak=96.3GB
+20:40:43 [train] step 60/116 ep=1 loss=0.2453 lr=5.56e-05 gnorm=0.092 tok=261952 9,926 tok/s (9,926/gpu) 26.4s peak=96.3GB
+20:40:50 [val] step=60 e_swe loss=0.3093 targets=78902
+20:40:57 [val] step=60 e_tb loss=0.4006 targets=128680
+20:41:06 [val] step=60 e_asi loss=0.4644 targets=151911
+20:41:11 [val] step=60 e_hle loss=0.7543 targets=175074
+20:41:23 [val] step=60 e_tb_v2_turns loss=0.4078 targets=105878
+20:41:24 [ckpt] saved /scratch/eh3323/apex/runs/e_tb_v2_r32/checkpoints/step_000060
+20:41:50 [train] step 61/116 ep=1 loss=0.2694 lr=5.44e-05 gnorm=0.133 tok=261691 10,056 tok/s (10,056/gpu) 26.0s peak=96.3GB
+20:42:14 [train] step 62/116 ep=1 loss=0.4481 lr=5.31e-05 gnorm=0.119 tok=261432 10,993 tok/s (10,993/gpu) 23.8s peak=96.2GB
+20:42:39 [train] step 63/116 ep=1 loss=0.4217 lr=5.19e-05 gnorm=0.156 tok=261085 10,234 tok/s (10,234/gpu) 25.5s peak=96.3GB
+20:43:05 [train] step 64/116 ep=1 loss=0.4305 lr=5.06e-05 gnorm=0.173 tok=261788 10,128 tok/s (10,128/gpu) 25.8s peak=96.2GB
+20:43:29 [train] step 65/116 ep=1 loss=0.3470 lr=4.94e-05 gnorm=0.103 tok=261820 10,744 tok/s (10,744/gpu) 24.4s peak=96.3GB
+20:43:55 [train] step 66/116 ep=1 loss=0.3485 lr=4.81e-05 gnorm=0.129 tok=262076 10,296 tok/s (10,296/gpu) 25.5s peak=96.3GB
+20:44:21 [train] step 67/116 ep=1 loss=0.5139 lr=4.69e-05 gnorm=0.152 tok=260949 10,045 tok/s (10,045/gpu) 26.0s peak=96.2GB
+20:44:46 [train] step 68/116 ep=1 loss=0.3993 lr=4.57e-05 gnorm=0.125 tok=261996 10,347 tok/s (10,347/gpu) 25.3s peak=96.3GB
+20:45:12 [train] step 69/116 ep=1 loss=0.2416 lr=4.45e-05 gnorm=0.156 tok=261735 9,977 tok/s (9,977/gpu) 26.2s peak=96.3GB
+20:45:36 [train] step 70/116 ep=1 loss=0.2851 lr=4.33e-05 gnorm=0.104 tok=261908 11,184 tok/s (11,184/gpu) 23.4s peak=96.3GB
+20:45:36 [ckpt] saved /scratch/eh3323/apex/runs/e_tb_v2_r32/checkpoints/step_000070
+20:46:01 [train] step 71/116 ep=1 loss=0.3273 lr=4.20e-05 gnorm=0.151 tok=261744 10,750 tok/s (10,750/gpu) 24.3s peak=96.3GB
+20:46:25 [train] step 72/116 ep=1 loss=0.4695 lr=4.09e-05 gnorm=0.123 tok=261223 10,840 tok/s (10,840/gpu) 24.1s peak=96.3GB
+20:46:50 [train] step 73/116 ep=1 loss=0.3692 lr=3.97e-05 gnorm=0.121 tok=261431 10,405 tok/s (10,405/gpu) 25.1s peak=96.3GB
+20:47:18 [train] step 74/116 ep=1 loss=0.3999 lr=3.85e-05 gnorm=0.111 tok=259881 9,463 tok/s (9,463/gpu) 27.5s peak=96.2GB
+20:47:42 [train] step 75/116 ep=1 loss=0.2797 lr=3.73e-05 gnorm=0.096 tok=258459 10,707 tok/s (10,707/gpu) 24.1s peak=96.3GB
+20:48:07 [train] step 76/116 ep=1 loss=0.3099 lr=3.62e-05 gnorm=0.103 tok=260786 10,254 tok/s (10,254/gpu) 25.4s peak=96.3GB
+20:48:32 [train] step 77/116 ep=1 loss=0.3209 lr=3.51e-05 gnorm=0.132 tok=261826 10,384 tok/s (10,384/gpu) 25.2s peak=96.3GB
+20:48:58 [train] step 78/116 ep=1 loss=0.2532 lr=3.40e-05 gnorm=0.132 tok=261121 10,273 tok/s (10,273/gpu) 25.4s peak=96.2GB
+20:49:24 [train] step 79/116 ep=1 loss=0.2330 lr=3.29e-05 gnorm=0.125 tok=261720 9,804 tok/s (9,804/gpu) 26.7s peak=96.3GB
+20:50:09 [train] step 80/116 ep=1 loss=0.2872 lr=3.18e-05 gnorm=0.119 tok=209424 4,712 tok/s (4,712/gpu) 44.4s peak=96.3GB
+20:50:16 [val] step=80 e_swe loss=0.3101 targets=78902
+20:50:23 [val] step=80 e_tb loss=0.4011 targets=128680
+20:50:32 [val] step=80 e_asi loss=0.4650 targets=151911
+20:50:37 [val] step=80 e_hle loss=0.7565 targets=175074
+20:50:49 [val] step=80 e_tb_v2_turns loss=0.4054 targets=105878
+20:50:50 [ckpt] saved /scratch/eh3323/apex/runs/e_tb_v2_r32/checkpoints/step_000080
+20:51:17 [train] step 81/116 ep=1 loss=0.2794 lr=3.07e-05 gnorm=0.153 tok=261605 9,643 tok/s (9,643/gpu) 27.1s peak=96.2GB
+20:51:43 [train] step 82/116 ep=1 loss=0.4756 lr=2.97e-05 gnorm=0.127 tok=261125 9,858 tok/s (9,858/gpu) 26.5s peak=96.3GB
+20:52:09 [train] step 83/116 ep=1 loss=0.5119 lr=2.87e-05 gnorm=0.128 tok=259170 10,043 tok/s (10,043/gpu) 25.8s peak=96.3GB
+20:52:37 [train] step 84/116 ep=1 loss=0.5123 lr=2.76e-05 gnorm=0.190 tok=261432 9,473 tok/s (9,473/gpu) 27.6s peak=96.2GB
+20:53:03 [train] step 85/116 ep=1 loss=0.4689 lr=2.67e-05 gnorm=0.127 tok=261606 9,953 tok/s (9,953/gpu) 26.3s peak=96.2GB
+20:53:28 [train] step 86/116 ep=1 loss=0.4797 lr=2.57e-05 gnorm=0.141 tok=262078 10,699 tok/s (10,699/gpu) 24.5s peak=96.3GB
+20:53:52 [train] step 87/116 ep=1 loss=0.3844 lr=2.48e-05 gnorm=0.145 tok=261415 10,546 tok/s (10,546/gpu) 24.8s peak=96.3GB
+20:54:19 [train] step 88/116 ep=1 loss=0.3217 lr=2.39e-05 gnorm=0.111 tok=262072 9,911 tok/s (9,911/gpu) 26.4s peak=96.3GB
+20:54:47 [train] step 89/116 ep=1 loss=0.2556 lr=2.30e-05 gnorm=0.195 tok=261291 9,337 tok/s (9,337/gpu) 28.0s peak=96.3GB
+20:55:35 [train] step 90/116 ep=1 loss=0.3326 lr=2.21e-05 gnorm=0.160 tok=241439 4,971 tok/s (4,971/gpu) 48.6s peak=96.3GB
+20:55:36 [ckpt] saved /scratch/eh3323/apex/runs/e_tb_v2_r32/checkpoints/step_000090
+20:56:02 [train] step 91/116 ep=1 loss=0.3253 lr=2.13e-05 gnorm=0.127 tok=261632 10,123 tok/s (10,123/gpu) 25.8s peak=96.3GB
+20:56:28 [train] step 92/116 ep=1 loss=0.2677 lr=2.04e-05 gnorm=0.081 tok=260633 9,953 tok/s (9,953/gpu) 26.2s peak=96.2GB
+20:56:59 [train] step 93/116 ep=1 loss=0.5809 lr=1.97e-05 gnorm=0.258 tok=261946 8,591 tok/s (8,591/gpu) 30.5s peak=96.3GB
+20:57:45 [train] step 94/116 ep=1 loss=0.4215 lr=1.89e-05 gnorm=0.158 tok=201798 4,366 tok/s (4,366/gpu) 46.2s peak=96.2GB
+20:58:13 [train] step 95/116 ep=1 loss=0.2511 lr=1.82e-05 gnorm=0.102 tok=261007 9,283 tok/s (9,283/gpu) 28.1s peak=96.3GB
+20:58:37 [train] step 96/116 ep=1 loss=0.4100 lr=1.75e-05 gnorm=0.108 tok=261991 11,014 tok/s (11,014/gpu) 23.8s peak=96.3GB
+20:59:02 [train] step 97/116 ep=1 loss=0.3731 lr=1.68e-05 gnorm=0.116 tok=260244 10,491 tok/s (10,491/gpu) 24.8s peak=96.3GB
+20:59:27 [train] step 98/116 ep=1 loss=0.2948 lr=1.61e-05 gnorm=0.127 tok=261427 10,147 tok/s (10,147/gpu) 25.8s peak=96.2GB
+20:59:53 [train] step 99/116 ep=1 loss=0.3809 lr=1.55e-05 gnorm=0.137 tok=260195 10,236 tok/s (10,236/gpu) 25.4s peak=96.3GB
+21:00:18 [train] step 100/116 ep=1 loss=0.4307 lr=1.49e-05 gnorm=0.161 tok=262025 10,355 tok/s (10,355/gpu) 25.3s peak=96.3GB
+21:00:25 [val] step=100 e_swe loss=0.3101 targets=78902
+21:00:32 [val] step=100 e_tb loss=0.4025 targets=128680
+21:00:42 [val] step=100 e_asi loss=0.4671 targets=151911
+21:00:46 [val] step=100 e_hle loss=0.7588 targets=175074
+21:00:58 [val] step=100 e_tb_v2_turns loss=0.4036 targets=105878
+21:00:59 [ckpt] saved /scratch/eh3323/apex/runs/e_tb_v2_r32/checkpoints/step_000100
+21:01:23 [train] step 101/116 ep=1 loss=0.3651 lr=1.44e-05 gnorm=0.120 tok=260744 11,116 tok/s (11,116/gpu) 23.5s peak=96.3GB
+21:01:48 [train] step 102/116 ep=1 loss=0.4108 lr=1.39e-05 gnorm=0.136 tok=261565 10,326 tok/s (10,326/gpu) 25.3s peak=96.3GB
+21:02:13 [train] step 103/116 ep=1 loss=0.2919 lr=1.34e-05 gnorm=0.261 tok=261914 10,408 tok/s (10,408/gpu) 25.2s peak=96.3GB
+21:02:38 [train] step 104/116 ep=1 loss=0.3036 lr=1.29e-05 gnorm=0.087 tok=261815 10,692 tok/s (10,692/gpu) 24.5s peak=96.2GB
+21:03:02 [train] step 105/116 ep=1 loss=0.3613 lr=1.25e-05 gnorm=0.109 tok=261897 10,618 tok/s (10,618/gpu) 24.7s peak=96.2GB
+21:03:28 [train] step 106/116 ep=1 loss=0.3966 lr=1.21e-05 gnorm=0.123 tok=261191 10,148 tok/s (10,148/gpu) 25.7s peak=96.3GB
+21:03:55 [train] step 107/116 ep=1 loss=0.2671 lr=1.17e-05 gnorm=0.106 tok=261974 9,712 tok/s (9,712/gpu) 27.0s peak=96.2GB
+21:04:21 [train] step 108/116 ep=1 loss=0.3122 lr=1.14e-05 gnorm=0.153 tok=260618 10,153 tok/s (10,153/gpu) 25.7s peak=96.3GB
+21:04:45 [train] step 109/116 ep=1 loss=0.4795 lr=1.11e-05 gnorm=0.172 tok=261824 10,530 tok/s (10,530/gpu) 24.9s peak=96.3GB
+21:05:09 [train] step 110/116 ep=1 loss=0.4091 lr=1.08e-05 gnorm=0.122 tok=260262 11,004 tok/s (11,004/gpu) 23.7s peak=96.3GB
+21:05:10 [ckpt] saved /scratch/eh3323/apex/runs/e_tb_v2_r32/checkpoints/step_000110
+21:05:37 [train] step 111/116 ep=1 loss=0.4148 lr=1.06e-05 gnorm=0.153 tok=261327 9,640 tok/s (9,640/gpu) 27.1s peak=96.2GB
+21:06:04 [train] step 112/116 ep=1 loss=0.3904 lr=1.04e-05 gnorm=0.121 tok=260242 9,446 tok/s (9,446/gpu) 27.6s peak=96.2GB
+21:06:29 [train] step 113/116 ep=1 loss=0.3865 lr=1.03e-05 gnorm=0.113 tok=261246 10,623 tok/s (10,623/gpu) 24.6s peak=96.2GB
+21:06:56 [train] step 114/116 ep=1 loss=0.2952 lr=1.02e-05 gnorm=0.142 tok=259198 9,593 tok/s (9,593/gpu) 27.0s peak=96.2GB
+21:07:22 [train] step 115/116 ep=1 loss=0.3137 lr=1.01e-05 gnorm=0.137 tok=261758 9,992 tok/s (9,992/gpu) 26.2s peak=96.2GB
+21:07:47 [train] step 116/116 ep=1 loss=0.3889 lr=1.00e-05 gnorm=0.131 tok=261875 10,473 tok/s (10,473/gpu) 25.0s peak=96.3GB
+21:07:54 [val] step=116 e_swe loss=0.3102 targets=78902
+21:08:01 [val] step=116 e_tb loss=0.4027 targets=128680
+21:08:11 [val] step=116 e_asi loss=0.4673 targets=151911
+21:08:15 [val] step=116 e_hle loss=0.7590 targets=175074
+21:08:27 [val] step=116 e_tb_v2_turns loss=0.4027 targets=105878
+21:08:28 THROUGHPUT_SUMMARY {"steps_measured": 113, "median_tokens_per_s": 10147.268179749659, "median_tokens_per_s_per_gpu": 10147.268179749659, "max_peak_mem_gb": 96.26331329345703, "world_size": 1, "gpu": "NVIDIA B200", "max_seq_len": 65536, "attention": "sdpa_segments", "experts": "grouped_mm", "gdn": "fla_triton(chunk_gated_delta_rule+causal_conv1d, varlen)"}
+21:08:28 [ckpt] final adapter -> /scratch/eh3323/apex/runs/e_tb_v2_r32/adapter_final
+[sbatch] gpu_hours(this segment)=1.0478
+[sbatch] rc=0 status=done

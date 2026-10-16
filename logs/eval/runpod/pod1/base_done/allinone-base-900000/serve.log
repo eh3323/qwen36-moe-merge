@@ -1,0 +1,17 @@
+host=67b6140d6430 port=20000 ngpu=2 RUN=base MODEL_DIR=/scratch/eh3323/apex/models/Qwen3.6-35B-A3B
+name, memory.total [MiB], driver_version
+NVIDIA H200, 143771 MiB, 595.91.07
+NVIDIA H200, 143771 MiB, 595.91.07
+endpoint written: /scratch/eh3323/apex/work/endpoints/base@900000.env
+RUN=base
+MODEL_DIR=/scratch/eh3323/apex/models/Qwen3.6-35B-A3B
+ENDPOINT_HOST=67b6140d6430
+ENDPOINT_PORT=20000
+API_BASE=http://67b6140d6430:20000/v1
+SERVED_MODEL=qwen3.6-35b-a3b
+SERVE_JOB_ID=900000
+NGPU=2
+GPU_NAME='NVIDIA H200'
+STARTED=2026-10-15T20:52:22+00:00
+SERVE_LOGDIR=/scratch/eh3323/apex/logs/serve-base-900000
+SIGTERM (preemption?)

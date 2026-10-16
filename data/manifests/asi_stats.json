@@ -1,0 +1,46 @@
+{
+ "expert": "asi",
+ "n_train": 868,
+ "n_val": 23,
+ "train_tokens": 14930379,
+ "val_tokens": 380677,
+ "train_by_source": {
+  "jupyter_agent": 148,
+  "nemotron_terminal": 720
+ },
+ "train_tokens_by_source": {
+  "jupyter_agent": 983255,
+  "nemotron_terminal": 13947124
+ },
+ "train_by_stratum": {
+  "long": 65,
+  "short": 803
+ },
+ "mean_tokens": 17201,
+ "drops": {
+  "nemotron_terminal:convert:parse_errors": 4036,
+  "nemotron_terminal:convert:no_think_block": 108,
+  "nemotron_terminal:convert:not_complete": 5031,
+  "nemotron_terminal:convert:interactive_keystrokes": 73,
+  "nemotron_terminal:convert:assistant_missing_fields": 878,
+  "nemotron_terminal:too_long": 33,
+  "nemotron_terminal:convert:missing_observation": 80,
+  "nemotron_terminal:convert:assistant_not_pure_json": 8,
+  "nemotron_terminal:convert:wait_turn": 17,
+  "nemotron_terminal:decontam:method_blacklist": 36,
+  "jupyter_agent:convert:jupyter_cell_error": 861,
+  "jupyter_agent:convert:jupyter_answer_mismatch": 1597,
+  "jupyter_agent:convert:jupyter_magic": 10,
+  "jupyter_agent:too_long": 1,
+  "jupyter_agent:convert:jupyter_no_final_answer": 1,
+  "jupyter_agent:convert:cell_syntax_error": 1
+ },
+ "n_candidates": 3004,
+ "candidates_by_stratum": {
+  "nemotron_terminal/short": 2418,
+  "nemotron_terminal/long": 63,
+  "jupyter_agent/short": 519,
+  "jupyter_agent/long": 4
+ },
+ "built_at": "2026-10-13 17:05:21"
+}

@@ -1,0 +1,45 @@
+[ensure_merged] building /scratch/eh3323/apex/models/merged/ties_l1_d0.5_v4 from configs/merge/ties_v4.yaml on gr103.hpc.nyu.edu
+[merge] ties_l1_d0.5_v4: method=ties (magnitude,ties) λ=1.0 weights={'e_swe': 1.0, 'e_asi': 1.0, 'e_hle': 1.0, 'e_tb': 1.0} density=0.5 drop_p=0.9 modules=250 device=cuda
+[fold] model-00001-of-00026.safetensors: 6 modified (6/250) 11s
+[fold] model-00002-of-00026.safetensors: 6 modified (12/250) 15s
+[fold] model-00003-of-00026.safetensors: 13 modified (25/250) 32s
+[fold] model-00004-of-00026.safetensors: 12 modified (37/250) 42s
+[fold] model-00005-of-00026.safetensors: 13 modified (50/250) 52s
+[fold] model-00006-of-00026.safetensors: 9 modified (59/250) 63s
+[fold] model-00007-of-00026.safetensors: 9 modified (68/250) 66s
+[fold] model-00008-of-00026.safetensors: 10 modified (78/250) 77s
+[fold] model-00009-of-00026.safetensors: 9 modified (87/250) 80s
+[fold] model-00010-of-00026.safetensors: 10 modified (97/250) 91s
+[fold] model-00011-of-00026.safetensors: 9 modified (106/250) 94s
+[fold] model-00012-of-00026.safetensors: 10 modified (116/250) 103s
+[fold] model-00013-of-00026.safetensors: 9 modified (125/250) 108s
+[fold] model-00014-of-00026.safetensors: 9 modified (134/250) 117s
+[fold] model-00015-of-00026.safetensors: 9 modified (143/250) 120s
+[fold] model-00016-of-00026.safetensors: 10 modified (153/250) 132s
+[fold] model-00017-of-00026.safetensors: 9 modified (162/250) 135s
+[fold] model-00018-of-00026.safetensors: 10 modified (172/250) 148s
+[fold] model-00019-of-00026.safetensors: 9 modified (181/250) 151s
+[fold] model-00020-of-00026.safetensors: 10 modified (191/250) 161s
+[fold] model-00021-of-00026.safetensors: 9 modified (200/250) 164s
+[fold] model-00022-of-00026.safetensors: 12 modified (212/250) 175s
+[fold] model-00023-of-00026.safetensors: 13 modified (225/250) 185s
+[fold] model-00024-of-00026.safetensors: 12 modified (237/250) 194s
+[fold] model-00025-of-00026.safetensors: 6 modified (243/250) 203s
+[fold] model-00026-of-00026.safetensors: 7 modified (250/250) 209s
+[fold] wrote /scratch/eh3323/apex/models/merged/ties_l1_d0.5_v4 (250 tensors modified, max ||ΔW||/||W|| = 5.364e-02)
+[merge] done in 209s -> /scratch/eh3323/apex/models/merged/ties_l1_d0.5_v4
+[ensure_merged] built /scratch/eh3323/apex/models/merged/ties_l1_d0.5_v4
+host=gr103.hpc.nyu.edu port=20891 ngpu=1 RUN=merged_v4 MODEL_DIR=/scratch/eh3323/apex/models/merged/ties_l1_d0.5_v4
+name, memory.total [MiB], driver_version
+NVIDIA RTX PRO 6000 Blackwell Server Edition, 97887 MiB, 610.43.02
+endpoint written: /scratch/eh3323/apex/work/endpoints/merged_v4@19840891.env
+RUN=merged_v4
+MODEL_DIR=/scratch/eh3323/apex/models/merged/ties_l1_d0.5_v4
+ENDPOINT_HOST=gr103.hpc.nyu.edu
+ENDPOINT_PORT=20891
+API_BASE=http://gr103.hpc.nyu.edu:20891/v1
+SERVED_MODEL=qwen3.6-35b-a3b
+SERVE_JOB_ID=19840891
+NGPU=1
+STARTED=2026-10-14T21:20:55-04:00
+SERVE_LOGDIR=/scratch/eh3323/apex/logs/serve-merged_v4-19840891

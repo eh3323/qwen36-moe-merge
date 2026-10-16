@@ -1,0 +1,11 @@
+# Launch command for mixed_r32 (Slurm job 19752119).
+# 1) submit wrapper, run on the login node from $APEX/repo = /scratch/eh3323/apex/repo (reconstructed: it emits
+#    exactly the SubmitLine below; CONFIG/NGPUS/EXTRA_ARGS travel via --export=ALL and are not in SubmitLine):
+scripts/train_submit.sh configs/train/mixed.yaml 1 12:00:00
+#    -> exports CONFIG=configs/train/mixed.yaml NGPUS=1 EXTRA_ARGS='' and submits:
+# 2) Slurm SubmitLine (sacct -j 19752119 -o SubmitLine):
+sbatch --gres=gpu:1 --ntasks=1 --gpus-per-task=1 --cpus-per-task=16 --mem=160G --time=12:00:00 --job-name=lora-mixed --export=ALL slurm/train_lora.sbatch
+# 3) inside slurm/train_lora.sbatch (env: source /scratch/eh3323/apex/env.sh; envs/train venv):
+python -m src.train.sft_lora --config configs/train/mixed.yaml --prepare-only
+srun --ntasks=1 --cpus-per-task=16 --cpu-bind=none --kill-on-bad-exit=1 --export=ALL \
+  bash -c 'export RANK=$SLURM_PROCID LOCAL_RANK=$SLURM_LOCALID WORLD_SIZE=$SLURM_NTASKS; exec python -u -m src.train.sft_lora --config configs/train/mixed.yaml'

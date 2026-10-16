@@ -1,0 +1,5 @@
+[aio] host=gb008.hpc.nyu.edu ngpu=1 cpus=16 mem=200G benches=asi smoke=0
+[aio] sizing: TB2_N=3 SWE_N=32 ASI_PAR=12 HLE_N=128 (share 150G/lane)
+[aio] lane asi pid 1002539 -> /scratch/eh3323/apex/logs/allinone-merged_v4-19840888/asi.log
+[aio] lanes finished rc=0
+[eval] agent phase done: /scratch/eh3323/apex/results/merged/asi/merged_v4__asi__b3/run ; score with: RUN=merged_v4 RUN_ID=merged_v4__asi__b3 scripts/eval_asi_score.sh

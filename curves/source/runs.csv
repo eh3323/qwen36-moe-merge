@@ -1,0 +1,8 @@
+run_id,experiment,in_domain_val,gpu,gpu_count,seed,lora_r,peak_lr,max_seq_len,steps,tokens_trained,slurm_job,in_final_merge_v4
+e_swe_r32,"E-SWE v1 (SWE expert, historical)",e_swe,NVIDIA H200,1,1234,32,0.0001,65536,124,30107200,19741877,False
+e_swe_v2_r32,"E-SWE v2 (SWE expert, Open-SWE-Traces)",e_swe_v2,NVIDIA H200,1,1234,32,0.0001,65536,130,29931050,19816112,True
+e_tb_r32,"E-TB v1 (Terminal-Bench expert, historical)",e_tb,NVIDIA H200,1,1234,32,0.0001,32768,116,30045984,19742097,False
+e_tb_v2_r32,"E-TB v2 (Terminal-Bench expert, TermGrade per-turn)",e_tb_v2_turns,NVIDIA B200,1,1234,32,0.0001,65536,116,30047126,19829387,True
+e_asi_r32,E-ASI (ASI-Bench expert),e_asi,NVIDIA H200,1,1234,32,0.0001,32768,125,29860758,19742098,True
+e_hle_r32,E-HLE (HLE expert),e_hle,NVIDIA H200,1,1234,32,0.0001,32768,118,30248290,19752117,True
+mixed_r32,Mixed control (union of E-SWE v1 + E-TB v1 + E-ASI + E-HLE data),,NVIDIA H200,1,1234,32,0.0001,65536,462,120262232,19752119,False

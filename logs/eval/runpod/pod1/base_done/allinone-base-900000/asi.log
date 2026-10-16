@@ -1,0 +1,44 @@
+[eval] RUN_ID=base__asi__b3 RAW_DIR=/scratch/eh3323/apex/results/base/asi/base__asi__b3 host=67b6140d6430 job=900000
+[eval] endpoint up: http://67b6140d6430:20000/v1 (model_dir=/scratch/eh3323/apex/models/Qwen3.6-35B-A3B, serve job 900000)
+[eval] proxy http://127.0.0.1:42321/v1 (pid 17424)
+
+Sandbox mode: --sandbox task  [Task Environment Sandbox]
+  Isolated Python venv per task (via uv). Ensures correct package versions declared in task.yaml runtime.packages.
+  Pros:  Cross-platform (no Docker needed); deterministic Python dependencies; fast cached venv reuse.
+  Cons:  No filesystem or network isolation — agent still has full shell access and can read host files, reference answers, and other instances.
+
+
+==============================================================
+  Agent Configuration (affects reproducibility)
+==============================================================
+  Agent    opencode_cli
+  Model    qwen3.6-35b-a3b
+  Effort   None (default)
+  Timeout  10800s
+  Tools    restricted
+  CLI      1.17.15  (/scratch/eh3323/apex/tools/opencode-wrap/900000-base__asi__b3/opencode)
+==============================================================
+
+Skipping output 'analysis.py' for math.ucb_q_learning_regret__seed31415__b3: resolves outside the workspace.
+============================================================
+  ASI-Bench Produce-Only Summary
+  Agent: OpenCodeCLIAdapter
+  Tasks: 60  |  Instances: 60
+============================================================
+  Scoring: submit to https://asibench.apexin.ai/
+
+  Unscored submissions (submit mode): 60
+
+  Agent Behavior:
+    Avg turns: 6.5
+    Avg tool calls: 63.5 (bash: 2469, edit: 510, glob: 6, grep: 21, invalid: 2, read: 494, skill: 2, task: 6, todowrite: 63, write: 240)
+    Avg thinking length: 0 chars
+
+  Model Calls:
+    Attempted: unknown (3688 observed)
+    Responses: 3682
+    Empty response rate: unknown
+
+  Total execution time: 166751s
+============================================================
+[eval] agent phase done (sandbox=task): /scratch/eh3323/apex/results/base/asi/base__asi__b3/run ; score with: RUN=base RUN_ID=base__asi__b3 scripts/eval_asi_score.sh

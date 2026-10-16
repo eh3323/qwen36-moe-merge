@@ -1,0 +1,23 @@
+[eval] RUN_ID=merged_v4__asi__b3 RAW_DIR=/scratch/eh3323/apex/results/merged/asi/merged_v4__asi__b3 host=67b6140d6430 job=900000
+[eval] endpoint up: http://67b6140d6430:20000/v1 (model_dir=/scratch/eh3323/apex/models/merged/ties_l1_d0.5_v4, serve job 900000)
+[eval] proxy http://127.0.0.1:37354/v1 (pid 244321)
+
+Sandbox mode: --sandbox task  [Task Environment Sandbox]
+  Isolated Python venv per task (via uv). Ensures correct package versions declared in task.yaml runtime.packages.
+  Pros:  Cross-platform (no Docker needed); deterministic Python dependencies; fast cached venv reuse.
+  Cons:  No filesystem or network isolation — agent still has full shell access and can read host files, reference answers, and other instances.
+
+
+==============================================================
+  Agent Configuration (affects reproducibility)
+==============================================================
+  Agent    opencode_cli
+  Model    qwen3.6-35b-a3b
+  Effort   None (default)
+  Timeout  10800s
+  Tools    restricted
+  CLI      1.17.15  (/scratch/eh3323/apex/tools/opencode-wrap/900000-merged_v4__asi__b3/opencode)
+==============================================================
+
+Terminated
+[eval] agent phase done (sandbox=task): /scratch/eh3323/apex/results/merged/asi/merged_v4__asi__b3/run ; score with: RUN=merged_v4 RUN_ID=merged_v4__asi__b3 scripts/eval_asi_score.sh

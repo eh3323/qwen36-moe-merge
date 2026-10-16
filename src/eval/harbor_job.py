@@ -51,9 +51,12 @@ def build(a: argparse.Namespace) -> dict:
     }
     if a.kind == "tb2" or (a.kind == "oracle" and a.dataset == "tb2"):
         ds = {"path": E["TB2_DIR"]}
-        net = "pasta"
-        env = {"type": "singularity", "kwargs": env_kwargs(net), "delete": True,
-               "override_cpus": int(E["TB2_CPUS"]), "override_memory_mb": int(E["TB2_MEMORY_MB"])}
+        if E.get("HARBOR_ENV") == "docker":  # rented node with Docker (scripts/tb2_cloud.sh): Harbor's native backend
+            env = {"type": "docker", "delete": True,
+                   "override_cpus": int(E["TB2_CPUS"]), "override_memory_mb": int(E["TB2_MEMORY_MB"])}
+        else:
+            env = {"type": "singularity", "kwargs": env_kwargs("pasta"), "delete": True,
+                   "override_cpus": int(E["TB2_CPUS"]), "override_memory_mb": int(E["TB2_MEMORY_MB"])}
     else:
         ds = {"path": E["SWE_TASKS"]}
         ids = Path(E["SWE_IDS"]).read_text().split()

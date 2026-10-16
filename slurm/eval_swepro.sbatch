@@ -39,14 +39,39 @@ TASK_ARG=(); [ "$SMOKE" = 1 ] && TASK_ARG=(--tasks "$(head -n $SWE_SMOKE_N $SWE_
 JOBS_DIR=$RAW_DIR/jobs; AJOB=${RUN_ID}__agent; GJOB=${RUN_ID}__regrade
 cd "$RAW_DIR"
 # RETRY_ERRORS=1: on resume, drop trials that ended in a RuntimeError (environment failures such as an
-# exec server that never came up) and run them again; finished trials are kept as they are.
+# exec server that never came up) and run them again; finished trials are kept as they are. -f replaces
+# harbor's default filter (CancelledError: trials cut by preemption / time limit), so it is passed again.
 run_harbor() {  # <job_name> <config>
   if [ -f "$JOBS_DIR/$1/config.json" ]; then
-    harbor jobs resume -p "$JOBS_DIR/$1" $( [ "${RETRY_ERRORS:-0}" = 1 ] && echo -f RuntimeError )
+    harbor jobs resume -p "$JOBS_DIR/$1" $( [ "${RETRY_ERRORS:-0}" = 1 ] && echo -f RuntimeError -f CancelledError )
   else harbor run -c "$2" -y; fi 2>&1 | tee -a "$LOGDIR/harbor_$1.log"
 }
 
-if [ "$ORACLE" = 1 ]; then
+if [ "${REGRADE_ONLY:-0}" = 1 ]; then
+  # Re-grade an existing agent job (no model needed). Runs before 2026-10-15 captured model.patch without its final
+  # newline (exec-server stdout.strip()), so `git apply` failed on patches ending in added lines: restore the
+  # newline (original kept as model.patch.stripped), keep the old regrade as <job>.nonl.<ts>, and re-grade.
+  [ -d "$JOBS_DIR/$AJOB" ] || { echo "no agent job $JOBS_DIR/$AJOB"; exit 2; }
+  $EVAL_PY -I - "$JOBS_DIR/$AJOB" <<'PY'
+import pathlib, sys
+fixed = 0
+for p in pathlib.Path(sys.argv[1]).glob("*/agent/model.patch"):
+    s = p.read_bytes()
+    if s and not s.endswith(b"\n"):
+        bak = p.with_name("model.patch.stripped")
+        if not bak.exists():
+            bak.write_bytes(s)
+        p.write_bytes(s + b"\n")
+        fixed += 1
+print(f"[regrade] restored the final newline of {fixed} patches")
+PY
+  # all trials, not only the 11-23 per run where GNU patch then failed ("malformed patch"): in most others
+  # `git apply` rejected the truncated patch and `patch --fuzz=3` applied it with fuzz, which can misplace hunks
+  [ -d "$JOBS_DIR/$GJOB" ] && mv "$JOBS_DIR/$GJOB" "$JOBS_DIR/$GJOB.nonl.$(date +%Y%m%dT%H%M%S)"
+  $EVAL_PY $REPO/src/eval/harbor_job.py swe_regrade --job-name "$GJOB" --jobs-dir "$JOBS_DIR" \
+    --source-job "$JOBS_DIR/$AJOB" -n "$N_CONCURRENT" --out "$RAW_DIR/regrade_config.json" || exit 2
+  run_harbor "$GJOB" "$RAW_DIR/regrade_config.json"
+elif [ "$ORACLE" = 1 ]; then
   $EVAL_PY $REPO/src/eval/harbor_job.py oracle --dataset swe --job-name "$GJOB" --jobs-dir "$JOBS_DIR" \
     -n "$N_CONCURRENT" "${TASK_ARG[@]}" --out "$RAW_DIR/regrade_config.json" || exit 2
   write_run_meta "{\"oracle\": 1, \"smoke\": $SMOKE}"

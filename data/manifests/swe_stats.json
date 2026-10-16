@@ -1,0 +1,57 @@
+{
+ "expert": "swe",
+ "n_train": 432,
+ "n_val": 9,
+ "train_tokens": 15053600,
+ "val_tokens": 261259,
+ "train_by_source": {
+  "swe_hero_oh": 63,
+  "swe_rebench_oh": 369
+ },
+ "train_tokens_by_source": {
+  "swe_hero_oh": 2314681,
+  "swe_rebench_oh": 12738919
+ },
+ "train_by_stratum": {
+  "hard": 246,
+  "other": 186
+ },
+ "mean_tokens": 34846,
+ "drops": {
+  "swe_rebench_oh:not_resolved": 34913,
+  "swe_rebench_oh:exit_not_submit": 1126,
+  "swe_rebench_oh:convert:bash_soft_timeout": 1981,
+  "swe_rebench_oh:convert:bash_is_input": 46,
+  "swe_rebench_oh:convert:too_many_skipped_editor_errors": 81,
+  "swe_rebench_oh:convert:unexpected_role_order": 33,
+  "swe_rebench_oh:too_long": 1273,
+  "swe_rebench_oh:patch_no_source_change": 73,
+  "swe_rebench_oh:decontam:swe_pro_org(ansible/*)": 68,
+  "swe_rebench_oh:convert:editor_undo_edit": 53,
+  "swe_rebench_oh:convert:bash_stateful": 52,
+  "swe_rebench_oh:convert:residual_workspace_path": 51,
+  "swe_rebench_oh:too_long_est": 15,
+  "swe_rebench_oh:convert:not_one_tool_call": 48,
+  "swe_rebench_oh:convert:bash_no_exit_code": 30,
+  "swe_rebench_oh:convert:editor_str_replace_no_old": 8,
+  "swe_rebench_oh:decontam:swe_pro_13gram": 24,
+  "swe_rebench_oh:convert:editor_create_no_text": 1,
+  "swe_rebench_oh:convert:editor_append": 1,
+  "swe_rebench_oh:convert:editor_delete": 3,
+  "swe_rebench_oh:convert:bash_empty": 1,
+  "swe_hero_oh:convert:bash_soft_timeout": 519,
+  "swe_hero_oh:too_long": 263,
+  "swe_hero_oh:convert:editor_undo_edit": 21,
+  "swe_hero_oh:convert:bash_is_input": 4,
+  "swe_hero_oh:too_long_est": 2,
+  "swe_hero_oh:not_r2e_gym(execution-verified)": 24048
+ },
+ "n_candidates": 36605,
+ "candidates_by_stratum": {
+  "swe_rebench_oh/hard": 25211,
+  "swe_rebench_oh/other": 1982,
+  "swe_hero_oh/hard": 9411,
+  "swe_hero_oh/other": 1
+ },
+ "built_at": "2026-10-13 16:51:56"
+}

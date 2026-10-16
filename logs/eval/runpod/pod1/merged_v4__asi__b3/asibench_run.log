@@ -1,0 +1,75 @@
+
+Sandbox mode: --sandbox task  [Task Environment Sandbox]
+  Isolated Python venv per task (via uv). Ensures correct package versions declared in task.yaml runtime.packages.
+  Pros:  Cross-platform (no Docker needed); deterministic Python dependencies; fast cached venv reuse.
+  Cons:  No filesystem or network isolation — agent still has full shell access and can read host files, reference answers, and other instances.
+
+
+==============================================================
+  Agent Configuration (affects reproducibility)
+==============================================================
+  Agent    opencode_cli
+  Model    qwen3.6-35b-a3b
+  Effort   None (default)
+  Timeout  10800s
+  Tools    restricted
+  CLI      1.17.15  (/scratch/eh3323/apex/tools/opencode-wrap/900000-merged_v4__asi__b3/opencode)
+==============================================================
+
+
+Sandbox mode: --sandbox task  [Task Environment Sandbox]
+  Isolated Python venv per task (via uv). Ensures correct package versions declared in task.yaml runtime.packages.
+  Pros:  Cross-platform (no Docker needed); deterministic Python dependencies; fast cached venv reuse.
+  Cons:  No filesystem or network isolation — agent still has full shell access and can read host files, reference answers, and other instances.
+
+
+==============================================================
+  Agent Configuration (affects reproducibility)
+==============================================================
+  Agent    opencode_cli
+  Model    qwen3.6-35b-a3b
+  Effort   None (default)
+  Timeout  10800s
+  Tools    restricted
+  CLI      1.17.15  (/scratch/eh3323/apex/tools/opencode-wrap/900000-merged_v4__asi__b3/opencode)
+==============================================================
+
+
+Sandbox mode: --sandbox task  [Task Environment Sandbox]
+  Isolated Python venv per task (via uv). Ensures correct package versions declared in task.yaml runtime.packages.
+  Pros:  Cross-platform (no Docker needed); deterministic Python dependencies; fast cached venv reuse.
+  Cons:  No filesystem or network isolation — agent still has full shell access and can read host files, reference answers, and other instances.
+
+
+==============================================================
+  Agent Configuration (affects reproducibility)
+==============================================================
+  Agent    opencode_cli
+  Model    qwen3.6-35b-a3b
+  Effort   None (default)
+  Timeout  10800s
+  Tools    restricted
+  CLI      1.17.15  (/scratch/eh3323/apex/tools/opencode-wrap/900000-merged_v4__asi__b3/opencode)
+==============================================================
+
+============================================================
+  ASI-Bench Produce-Only Summary
+  Agent: OpenCodeCLIAdapter
+  Tasks: 47  |  Instances: 47
+============================================================
+  Scoring: submit to https://asibench.apexin.ai/
+
+  Unscored submissions (submit mode): 47
+
+  Agent Behavior:
+    Avg turns: 18.7
+    Avg tool calls: 108.1 (bash: 4235, edit: 470, glob: 5, grep: 1, invalid: 5, read: 207, task: 6, todowrite: 5, write: 145)
+    Avg thinking length: 0 chars
+
+  Model Calls:
+    Attempted: unknown (5029 observed)
+    Responses: 5013
+    Empty response rate: unknown
+
+  Total execution time: 346272s
+============================================================

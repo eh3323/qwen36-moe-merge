@@ -1,0 +1,68 @@
+host=33e9d0f2247d port=20000 ngpu=2 RUN=mixed MODEL_DIR=/scratch/eh3323/apex/models/merged/mixed_r32
+name, memory.total [MiB], driver_version
+NVIDIA H200, 143771 MiB, 580.178.04
+NVIDIA H200, 143771 MiB, 580.178.04
+endpoint written: /scratch/eh3323/apex/work/endpoints/mixed@900000.env
+RUN=mixed
+MODEL_DIR=/scratch/eh3323/apex/models/merged/mixed_r32
+ENDPOINT_HOST=33e9d0f2247d
+ENDPOINT_PORT=20000
+API_BASE=http://33e9d0f2247d:20000/v1
+SERVED_MODEL=qwen3.6-35b-a3b
+SERVE_JOB_ID=900000
+NGPU=2
+GPU_NAME='NVIDIA H200'
+STARTED=2026-10-15T22:02:33+00:00
+SERVE_LOGDIR=/scratch/eh3323/apex/logs/serve-mixed-900000
+/scratch/eh3323/apex/repo/slurm/serve_model.sbatch: line 122:  7722 Killed                  vllm serve "${VLLM_ARGS[@]}" > "$LOGDIR/vllm.log" 2>&1
+vLLM exited
+(ApiServer_0 pid=8674) INFO:     172.18.0.2:59628 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+(ApiServer_0 pid=8674) INFO:     172.18.0.2:35192 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+(ApiServer_0 pid=8674) INFO:     172.18.0.2:49624 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+(ApiServer_1 pid=8675) INFO:     172.18.0.2:37408 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+(ApiServer_0 pid=8674) INFO:     172.18.0.2:51034 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+(ApiServer_1 pid=8675) INFO:     172.18.0.2:44804 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+(ApiServer_1 pid=8675) INFO:     172.18.0.2:35196 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+(ApiServer_1 pid=8675) INFO:     172.18.0.2:44842 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+(ApiServer_0 pid=8674) INFO:     172.18.0.2:51034 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+(ApiServer_1 pid=8675) INFO:     127.0.0.1:54316 - "GET /health HTTP/1.1" 200 OK
+(ApiServer_0 pid=8674) INFO:     172.18.0.2:51034 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+(ApiServer_1 pid=8675) INFO:     172.18.0.2:35196 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+(ApiServer_1 pid=8675) INFO:     172.18.0.2:58034 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+(ApiServer_0 pid=8674) INFO:     172.18.0.2:52916 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+(ApiServer_0 pid=8674) INFO:     172.18.0.2:59628 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+(ApiServer_1 pid=8675) INFO:     172.18.0.2:41860 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+(ApiServer_0 pid=8674) INFO:     172.18.0.2:46438 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+(ApiServer_0 pid=8674) INFO:     172.18.0.2:52916 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+(ApiServer_0 pid=8674) INFO:     172.18.0.2:37934 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+(ApiServer_1 pid=8675) INFO:     172.18.0.2:41860 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+(ApiServer_0 pid=8674) INFO:     172.18.0.2:51034 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+(ApiServer_1 pid=8675) INFO:     172.18.0.2:44804 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+(ApiServer_0 pid=8674) INFO:     172.18.0.2:37944 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+(ApiServer_1 pid=8675) INFO:     172.18.0.2:38800 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+(ApiServer_0 pid=8674) INFO:     172.18.0.2:37944 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+(ApiServer_0 pid=8674) INFO:     172.18.0.2:37934 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+(ApiServer_0 pid=8674) INFO:     172.18.0.2:51034 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+(ApiServer_0 pid=8674) INFO:     127.0.0.1:47368 - "GET /health HTTP/1.1" 200 OK
+(ApiServer_0 pid=8674) INFO:     172.18.0.2:51034 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+(ApiServer_0 pid=8674) INFO:     172.18.0.2:50002 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+(ApiServer_1 pid=8675) INFO:     172.18.0.2:36166 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+(ApiServer_0 pid=8674) INFO:     172.18.0.2:51034 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+(ApiServer_1 pid=8675) INFO:     172.18.0.2:41860 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+(ApiServer_1 pid=8675) INFO:     172.18.0.2:35776 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+(ApiServer_1 pid=8675) INFO:     172.18.0.2:35786 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+(ApiServer_1 pid=8675) INFO:     172.18.0.2:39214 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+(ApiServer_1 pid=8675) INFO:     172.18.0.2:44804 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+(ApiServer_1 pid=8675) INFO:     172.18.0.2:43724 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+(ApiServer_0 pid=8674) INFO:     172.18.0.2:35192 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+(ApiServer_1 pid=8675) INFO:     172.18.0.2:35776 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+(ApiServer_0 pid=8674) INFO:     172.18.0.2:35192 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+(ApiServer_1 pid=8675) INFO:     172.18.0.2:38214 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+(ApiServer_1 pid=8675) INFO:     172.18.0.2:37408 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+(ApiServer_0 pid=8674) INFO:     172.18.0.2:35192 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+(ApiServer_0 pid=8674) INFO:     172.18.0.2:52916 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+(ApiServer_1 pid=8675) INFO:     172.18.0.2:35786 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+(ApiServer_1 pid=8675) INFO:     172.18.0.2:51048 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+(ApiServer_1 pid=8675) INFO:     172.18.0.2:35776 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+(ApiServer_1 pid=8675) INFO:     172.18.0.2:41860 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+(ApiServer_1 pid=8675) INFO:     172.18.0.2:39214 - "POST /v1/chat/completions HTTP/1.1" 200 OK

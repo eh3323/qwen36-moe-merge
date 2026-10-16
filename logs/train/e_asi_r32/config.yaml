@@ -1,0 +1,54 @@
+# Resolved training config of run e_asi_r32 as recorded by src/train/sft_lora.py in metadata.json['config']
+# (inheritance chain configs/train/base.yaml -> e_asi.yaml; no --set overrides: EXTRA_ARGS was empty).
+model:
+  path: /scratch/eh3323/apex/models/Qwen3.6-35B-A3B
+  class: Qwen3_5MoeForConditionalGeneration
+  dtype: bfloat16
+  experts_implementation: grouped_mm
+  attn_backend: auto
+  gdn_backend: fla
+  gradient_checkpointing: true
+lora:
+  r: 32
+  alpha: 64
+  dropout: 0.05
+  use_rslora: false
+  full_attn_targets: [q_proj, k_proj, v_proj, o_proj]
+  linear_attn_targets: [in_proj_qkv, in_proj_z, out_proj]
+  mlp_targets: [shared_expert.gate_proj, shared_expert.up_proj, shared_expert.down_proj]
+data:
+  max_seq_len: 32768
+  overlong: truncate
+  preserve_thinking: true
+  pack_window: 512
+  cache_dir: /scratch/eh3323/apex/work/tokcache
+  num_proc: 16
+  val_max_tokens_per_set: 524288
+  val:
+    e_swe: /scratch/eh3323/apex/data/processed/swe/val.jsonl
+    e_tb: /scratch/eh3323/apex/data/processed/tb/val.jsonl
+    e_asi: /scratch/eh3323/apex/data/processed/asi/val.jsonl
+    e_hle: /scratch/eh3323/apex/data/processed/hle/val.jsonl
+  train:
+    e_asi: /scratch/eh3323/apex/data/processed/asi/train.jsonl
+train:
+  seed: 1234
+  epochs: 2
+  global_batch_tokens: 262144
+  lr: 0.0001
+  min_lr_ratio: 0.1
+  warmup_ratio: 0.03
+  weight_decay: 0.0
+  adam_betas: [0.9, 0.999]
+  grad_clip: 1.0
+  ce_chunk_tokens: 4096
+  max_steps: null
+  log_every: 1
+  eval_every: 20
+  eval_at_start: true
+  save_every: 10
+  keep_last: 2
+output:
+  root: /scratch/eh3323/apex/runs
+  run_id: e_asi_r32
+_config_path: configs/train/e_asi.yaml
