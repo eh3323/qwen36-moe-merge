@@ -1,5 +1,7 @@
 # 失败案例目录：最终合版 merged_v4
 
+> **历史快照（2026-10-15），已被 [`failure_cases.md`](failure_cases.md) 取代。** 这里的数字基于当时未跑完的运行，最终结果以 `failure_cases.md` 和 README §8 为准。只为保留分析过程而保留本文件。
+
 > 状态：基于 2026-10-15 白天的集群只读快照。TB2 和 ASI 的 v4 运行还没跑完，HLE 的 v4 生成也没跑完（见 §0、§5）。
 > 对象：最终合版 **merged_v4**，即 E-SWE v2、E-TB v2、E-ASI、E-HLE 四个 LoRA 专家的 TIES 合并（`ties_l1_d0.5_v4`）。
 > 证据路径如无特别说明，均相对于 `/scratch/eh3323/apex/results`。缩写见 §0.2。

@@ -138,10 +138,14 @@ def asi(a) -> list[dict]:
     rows = []
     for r in report.get("results", []):
         src = {}
+        sr = Path(r["source_result"]) if r.get("source_result") else None
+        if sr is not None and not sr.is_absolute():  # asibench writes it relative to --results-dir
+            sr = Path(a.run_dir) / sr
         try:
-            src = json.load(open(r["source_result"]))
+            src = json.load(open(sr))
         except Exception:
             pass
+        cost = src.get("cost") or {}
         ao = src.get("agent_output") or {}
         fs, ms = r.get("final_score"), r.get("max_score") or 100.0
         score = (float(fs) / float(ms)) if fs is not None and ms else None
@@ -163,7 +167,7 @@ def asi(a) -> list[dict]:
         rows.append({
             "run_id": a.run_id, "bench": "asi", "task_id": f'{r["task_id"]}@{r["prompt_level"]}',
             "attempt": r.get("attempt", 1), "status": status, "score": score if score is not None else 0.0,
-            "tokens_in": None, "tokens_out": None, "tokens_cached": None,
+            "tokens_in": cost.get("input_tokens"), "tokens_out": cost.get("output_tokens"), "tokens_cached": None,
             "wall_s": src.get("execution_time_seconds"), "error": err,
             "extra": {"level": r["prompt_level"], "agent_status": agent_status,
                       "hard_gates_passed": r.get("hard_gates_passed"), "raw_final_score": fs,

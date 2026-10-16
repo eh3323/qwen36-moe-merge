@@ -77,9 +77,11 @@ Percent scores; Δ is the paired-bootstrap 95% CI against the measured base.
 |---|---|---|---|---|---|
 | SWE-bench Pro HARD-51 (resolved, 3 runs) | 21.57 | 27.45 (SWE v2) | 13.73 | 16.34 | −5.23 [−12.42, +1.31] |
 | Terminal-Bench 2.0 (Harbor + Terminus-2) | 44.94 | 38.20 (TB v2) | 30.34 | 41.57 | −3.37 [−8.99, +2.25] |
-| HLE (2500, multimodal, no tools) | 20.80 | 16.92 (HLE) | 16.60 | 19.21 | −1.60 [−3.16, −0.08] |
+| HLE (2500, multimodal, no tools)¹ | 20.80 | 16.92 (HLE) | 16.60 | 19.21 | −1.60 [−3.16, −0.08] |
 | ASI-Bench seed31415 B3 (local scoring) | 10.03 | 7.75 (ASI) | 7.39 | 7.53 | −2.50 [−6.79, +2.52] |
 | macro average | 24.33 | — | 17.02 | 21.16 | −3.18 [−5.75, −0.67] |
+
+¹ One merged-v4 item was generated but not judged and is left out (480/2499); counted as wrong it is 19.20.
 
 ## Limitations
 
@@ -89,8 +91,9 @@ Percent scores; Δ is the paired-bootstrap 95% CI against the measured base.
   calibration gain lost.
 - Few repeats: the Terminal-Bench numbers above are same-node runs (base 2, the others 1; 4 and 2 runs for base and v4
   including cluster runs) instead of the 5 the protocol asks for; experts and the control were run once.
-- ASI-Bench scores are local (seed31415) scores, not official ones. Dropping the first SWE / TB experts and retraining
-  them happened after looking at test results, so the SWE and TB deltas may be optimistic.
+- ASI-Bench scores are local (seed31415) scores, not official ones. Dropping the first SWE / TB experts, retraining
+  them and parts of the v2 data design (the SWE v2 language mix, its scratch-file / test-edit filters, the TB v2 success
+  filter) were informed by test results, so the SWE and TB deltas may be optimistic.
 - Research artefact for a take-home study, not a production model.
 """
 
@@ -118,10 +121,10 @@ step and training tokens seen).
 
 ```python
 from peft import PeftModel
-from transformers import AutoModelForCausalLM
-base = AutoModelForCausalLM.from_pretrained("{BASE_ID}", revision="{BASE_REV}", torch_dtype="bfloat16", device_map="auto")
+from transformers import Qwen3_5MoeForConditionalGeneration  # the class used in training; target regex expects language_model.layers
+base = Qwen3_5MoeForConditionalGeneration.from_pretrained("{BASE_ID}", revision="{BASE_REV}", torch_dtype="bfloat16", device_map="auto")
 model = PeftModel.from_pretrained(base, "{EXPERTS_REPO}", subfolder="e_swe_v2")
-model = model.merge_and_unload()   # optional: dense weights, as served with vLLM in the evaluation
+model = model.merge_and_unload()   # optional: dense weights (the evaluation used the equivalent src/merge/merge_lora_to_full.py)
 ```
 
 Tokenizer, chat template and generation config are the base model's.
@@ -152,8 +155,8 @@ ASI-Bench and HLE experts from `{EXPERTS_REPO}`. Code, configs, logs and per-tas
   the weighted sum, average only the experts that agree with the elected sign (weights 1.0 each), scale by λ = 1.
 - W' = W + τ in fp32, saved as bf16. `merge_info.json` in this repo holds the exact configuration
   (`configs/merge/ties_v4.yaml` in the GitHub repo).
-- The hyper-parameters were chosen among 12 Linear / TIES / DARE configurations by validation loss on independent
-  dev sets (no benchmark data).
+- The hyper-parameters were chosen among 12 Linear / TIES / DARE configurations by loss on held-out validation splits
+  (2% of each expert's training sources, no benchmark data).
 
 ## Usage
 
@@ -161,7 +164,7 @@ ASI-Bench and HLE experts from `{EXPERTS_REPO}`. Code, configs, logs and per-tas
 vllm serve {MERGED_REPO} --reasoning-parser qwen3 --enable-auto-tool-choice --tool-call-parser qwen3_coder --max-model-len 262144
 ```
 
-or `AutoModelForCausalLM.from_pretrained("{MERGED_REPO}", torch_dtype="bfloat16")`. Tokenizer, chat template and
+or `Qwen3_5MoeForConditionalGeneration.from_pretrained("{MERGED_REPO}", torch_dtype="bfloat16")` (same class as the base). Tokenizer, chat template and
 generation config are the base model's. No quantization.
 
 {TRAINING}
@@ -180,7 +183,7 @@ tags: [qwen3.6, moe, lora, folded]
 # Qwen3.6-35B-A3B + `{sub}` LoRA, folded (Apex take-home)
 
 Dense weights: `{base}` (revision `{rev}`) with the `{sub}/` adapter from `{experts}` folded into the
-weights ({desc}; W + scale * B A, bf16, no quantization). This is exactly the checkpoint that was served with vLLM in
+weights ({desc}; W + scale * B A computed in fp32 by `src/merge/merge_lora_to_full.py`, saved as bf16, no quantization). This is exactly the checkpoint that was served with vLLM in
 the evaluation; it is published so that rented evaluation nodes could download it, and is equivalent to loading the
 base plus the adapter and calling `merge_and_unload()`. Tokenizer, chat template and generation config are the base
 model's. Training run_id: `{run}`.

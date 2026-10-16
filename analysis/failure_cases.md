@@ -2,7 +2,7 @@
 
 > 状态：SWE、HLE、TB2（集群 a1）案例基于 2026-10-16 01:00 EDT 的只读快照；§6（Nebius TB2）和 §7.3（v4 的 ASI）在 05:30 EDT 所有运行和评分完成后补写。数字与 README §8 一致。
 > 对象：最终合版 **merged_v4**，即 E-SWE v2、E-TB v2、E-ASI、E-HLE 四个 LoRA 专家的 TIES 合并（`ties_l1_d0.5_v4`，density 0.5，λ=1）。v3 = 去掉 E-TB v2 的同配方合版，本文只在 HLE 上作对照。
-> 证据路径如无特别说明，相对 `/scratch/eh3323/apex/results`；ASI 的 RunPod 归档和 TB2 的 Nebius 路径另行标注。缩写见 §0.3。
+> 证据路径如无特别说明，相对 `/scratch/eh3323/apex/results`；ASI 的 RunPod 归档和 TB2 的 Nebius 路径另行标注。缩写见 §0.3。这些原始输出留在集群上，评审无法直接访问；仓库里可核对的是逐任务结果 `results/**/*.jsonl`、SWE 补丁 `results/*/swepro/patches/` 和 `logs/eval/` 下的日志。
 > HLE 遵守防污染规则：只列题目 id、学科类别、答案类型、是否带图、判分结论、token 数、finish_reason、置信度，不含题干、标准答案或模型回答文本。
 > 轨迹摘录每段不超过 5 行，只取自命令、命令输出、测试输出。格式沿用 `failure_cases_v4.md` 与 `failure_cases_draft.md`。
 

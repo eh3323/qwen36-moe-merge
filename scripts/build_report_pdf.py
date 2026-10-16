@@ -18,7 +18,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 CSS = """
 @page { size: A4; margin: 11mm 12mm; }
 body { font-family: "PingFang SC", "Noto Sans CJK SC", "Helvetica Neue", Arial, sans-serif;
-       font-size: 8.9pt; line-height: 1.36; color: #111; }
+       font-size: 8.8pt; line-height: 1.33; color: #111; }
 h1 { font-size: 13pt; margin: 0 0 3pt; }
 h2 { font-size: 10.5pt; margin: 8pt 0 3pt; border-bottom: 0.5pt solid #999; }
 p, li { margin: 2pt 0; }

@@ -1,5 +1,5 @@
 {
- "generated": "2026-10-16T05:20",
+ "generated": "2026-10-16T06:51",
  "results_dir": "results",
  "n_boot": 10000,
  "seed": 0,
@@ -14,7 +14,7 @@
     "fail": 23,
     "env_error": 1
    },
-   "mtime": "2026-10-16T01:09:19"
+   "mtime": "2026-10-16T06:51:00"
   },
   {
    "file": "results/base/hle/base__hle__s1.jsonl",
@@ -102,11 +102,12 @@
    "file": "results/experts/asi/e_asi__asi__b3.jsonl",
    "n_rows": 60,
    "status_counts": {
-    "fail": 34,
+    "fail": 33,
     "success": 24,
+    "timeout": 1,
     "env_error": 2
    },
-   "mtime": "2026-10-16T01:25:44"
+   "mtime": "2026-10-16T06:51:00"
   },
   {
    "file": "results/experts/hle/e_hle__hle__s1.jsonl",
@@ -164,11 +165,12 @@
    "file": "results/merged/asi/merged_v4__asi__b3.jsonl",
    "n_rows": 60,
    "status_counts": {
-    "fail": 32,
+    "fail": 19,
     "success": 27,
+    "timeout": 13,
     "env_error": 1
    },
-   "mtime": "2026-10-16T03:32:33"
+   "mtime": "2026-10-16T06:51:00"
   },
   {
    "file": "results/merged/hle/merged__hle__s1.jsonl",
@@ -248,10 +250,11 @@
    "n_rows": 60,
    "status_counts": {
     "success": 36,
-    "fail": 22,
-    "env_error": 2
+    "fail": 21,
+    "env_error": 2,
+    "timeout": 1
    },
-   "mtime": "2026-10-16T01:42:00"
+   "mtime": "2026-10-16T06:51:00"
   },
   {
    "file": "results/mixed/hle/mixed__hle__s1.jsonl",

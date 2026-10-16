@@ -5,16 +5,16 @@
 | 模型 | 仓库 | revision | 内容 |
 |---|---|---|---|
 | Base | [Qwen/Qwen3.6-35B-A3B](https://huggingface.co/Qwen/Qwen3.6-35B-A3B) | `995ad96e` | 官方基座，未改动 |
-| **最终合版 v4** | [eh3323/Qwen3.6-35B-A3B-apex-merged-v4](https://huggingface.co/eh3323/Qwen3.6-35B-A3B-apex-merged-v4) | `babefb71` | 完整权重（bf16，26 个分片）+ `merge_info.json` |
-| 专家与对照（LoRA） | [eh3323/Qwen3.6-35B-A3B-apex-lora-experts](https://huggingface.co/eh3323/Qwen3.6-35B-A3B-apex-lora-experts) | `242a1fef` | 7 个 adapter，子目录见下 |
-| E-ASI（折叠） | [eh3323/Qwen3.6-35B-A3B-apex-e_asi-folded](https://huggingface.co/eh3323/Qwen3.6-35B-A3B-apex-e_asi-folded) | `ada68b78` | 基座 + E-ASI 的完整权重 |
-| Mixed（折叠） | [eh3323/Qwen3.6-35B-A3B-apex-mixed-folded](https://huggingface.co/eh3323/Qwen3.6-35B-A3B-apex-mixed-folded) | `1de1a77b` | 基座 + Mixed 的完整权重 |
-| E-TB v2（折叠） | [eh3323/Qwen3.6-35B-A3B-apex-e_tb_v2-folded](https://huggingface.co/eh3323/Qwen3.6-35B-A3B-apex-e_tb_v2-folded) | `4ae247a7` | 基座 + E-TB v2 的完整权重 |
+| **最终合版 v4** | [eh3323/Qwen3.6-35B-A3B-apex-merged-v4](https://huggingface.co/eh3323/Qwen3.6-35B-A3B-apex-merged-v4) | `186bfdcb` | 完整权重（bf16，26 个分片）+ `merge_info.json` |
+| 专家与对照（LoRA） | [eh3323/Qwen3.6-35B-A3B-apex-lora-experts](https://huggingface.co/eh3323/Qwen3.6-35B-A3B-apex-lora-experts) | `8a128596` | 7 个 adapter，子目录见下 |
+| E-ASI（折叠） | [eh3323/Qwen3.6-35B-A3B-apex-e_asi-folded](https://huggingface.co/eh3323/Qwen3.6-35B-A3B-apex-e_asi-folded) | `4b88fe7c` | 基座 + E-ASI 的完整权重 |
+| Mixed（折叠） | [eh3323/Qwen3.6-35B-A3B-apex-mixed-folded](https://huggingface.co/eh3323/Qwen3.6-35B-A3B-apex-mixed-folded) | `ac6a2323` | 基座 + Mixed 的完整权重 |
+| E-TB v2（折叠） | [eh3323/Qwen3.6-35B-A3B-apex-e_tb_v2-folded](https://huggingface.co/eh3323/Qwen3.6-35B-A3B-apex-e_tb_v2-folded) | `8e601f5f` | 基座 + E-TB v2 的完整权重 |
 
-各仓库的 revision 是 2026-10-16 更新模型卡之后的提交。与之前的提交（merged-v4 `223a1b15`、lora-experts `e08bd952`、e_asi-folded `3476649b`、mixed-folded `816e1ec6`、e_tb_v2-folded `9281bb8c`）相比只改了 `README.md`，权重文件完全相同。
+各仓库的 revision 是 2026-10-16 最后一次更新模型卡之后的提交。与最初上传权重时的提交（merged-v4 `223a1b15`、lora-experts `e08bd952`、e_asi-folded `3476649b`、mixed-folded `816e1ec6`、e_tb_v2-folded `9281bb8c`）相比只改了 `README.md`，权重文件完全相同。
 
 - LoRA 仓库的子目录：`e_swe_v2/`、`e_tb_v2/`、`e_asi/`、`e_hle/`（进入 v4）、`mixed/`（对照）、`e_swe_v1/`、`e_tb_v1/`（历史版本）。
-- “折叠”指把单个 adapter 用 `merge_and_unload()` 加回基座得到的稠密权重（bf16），租用节点上评测时直接加载。为了和多专家的“合版”区分，这里不叫 merged。
+- “折叠”指把单个 adapter 加回基座得到的稠密权重：`src/merge/merge_lora_to_full.py` 在 fp32 中计算 W + (α/r)·B·A 后存为 bf16，数学上等价于 PEFT 的 `merge_and_unload()`。租用节点上评测时直接加载。为了和多专家的“合版”区分，这里不叫 merged。
 
 许可证：Apache-2.0，继承自基座。
 
@@ -48,7 +48,7 @@
 
 - **方法**：TIES。先把每个专家的 LoRA 增量 ΔW = (alpha/r)·B·A 展开到稠密空间；每个模块只保留幅值最大的 50%（density 0.5）；按元素做符号投票，只对与多数符号相同的专家取平均；最后乘 λ=1 加回基座。
 - **专家**：E-SWE v2、E-TB v2、E-ASI、E-HLE，权重都是 1.0。
-- **超参来源**：从 18 个 Linear/TIES/DARE 候选中，按独立开发集的 val loss 选出（`configs/merge/select.yaml`，结果见 `curves/merge_ablation.png`）。
+- **超参来源**：从 18 个 Linear/TIES/DARE 候选中，按各专家训练数据留出验证集（2%，不含 benchmark 数据）的 val loss 选出（`configs/merge/select.yaml`，结果见 `curves/merge_ablation.png`）。
 - **完整配置**：实际使用的完整配置（专家路径、缩放、模块数）写在合版仓库的 `merge_info.json` 里。
 
 本地复现合版：先下载 LoRA 仓库，把 `configs/merge/ties_v3.yaml` 和 `ties_v4.yaml` 里的专家路径改成本地下载的路径，然后执行：
@@ -62,7 +62,7 @@ python -m src.merge.merge_experts --config configs/merge/ties_v4.yaml   # 输出
 合版模型（与基座用法相同；tokenizer、chat template、generation config 都来自基座）：
 
 ```bash
-vllm serve eh3323/Qwen3.6-35B-A3B-apex-merged-v4 --revision babefb71 \
+vllm serve eh3323/Qwen3.6-35B-A3B-apex-merged-v4 --revision 186bfdcb \
   --reasoning-parser qwen3 --enable-auto-tool-choice --tool-call-parser qwen3_coder --max-model-len 262144
 ```
 
@@ -70,8 +70,8 @@ vllm serve eh3323/Qwen3.6-35B-A3B-apex-merged-v4 --revision babefb71 \
 
 ```python
 from peft import PeftModel
-from transformers import AutoModelForCausalLM
-base = AutoModelForCausalLM.from_pretrained("Qwen/Qwen3.6-35B-A3B", revision="995ad96e", torch_dtype="bfloat16", device_map="auto")
-model = PeftModel.from_pretrained(base, "eh3323/Qwen3.6-35B-A3B-apex-lora-experts", subfolder="e_swe_v2", revision="242a1fef")
-model = model.merge_and_unload()   # 可选：折叠成稠密权重（评测时各专家就是这样折叠后用 vLLM 加载的）
+from transformers import Qwen3_5MoeForConditionalGeneration   # 训练时用的类；adapter 的 target 正则匹配 language_model.layers
+base = Qwen3_5MoeForConditionalGeneration.from_pretrained("Qwen/Qwen3.6-35B-A3B", revision="995ad96e", torch_dtype="bfloat16", device_map="auto")
+model = PeftModel.from_pretrained(base, "eh3323/Qwen3.6-35B-A3B-apex-lora-experts", subfolder="e_swe_v2", revision="8a128596")
+model = model.merge_and_unload()   # 可选：折叠成稠密权重（评测时用的是等价的 src/merge/merge_lora_to_full.py）
 ```

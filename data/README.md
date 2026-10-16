@@ -23,7 +23,7 @@ For each expert, `build.py` runs these steps in order:
 3. conversion to the eval harness format
 4. exact token count
 5. embedding decontamination (ASI, HLE)
-6. dedup
+6. dedup (SWE: identical content; HLE: identical question; TB / ASI: only the per-task caps of step 7)
 7. stratified, token-budgeted selection (deterministic, by sha256 hash)
 8. 2 % validation split, grouped by `instance_id`
 
@@ -124,7 +124,7 @@ Other format details:
 | OpenHands call | Converted to |
 |---|---|
 | `execute_bash` | Same command, prefixed with `cd <cwd> &&` when needed ¹ |
-| `view` (file) | `nl -ba file [| sed -n 'a,bp']`. Same `cat -n` format. |
+| `view` (file) | `nl -ba file [\| sed -n 'a,bp']`. Same `cat -n` format. |
 | `view` (directory) | `find … -maxdepth 2 -not -path '*/.*' \| sort` |
 | `create` | `cat <<'EOF' > file` |
 | `str_replace` / `insert` | A `python3` heredoc doing an exact, unique replacement ² |
@@ -166,7 +166,7 @@ Other conversion rules:
 **Selection:**
 - Stratified with "hard" = at least 2 changed source files or at least 40 assistant turns, targeted at
   50 %.
-- SWE-Hero gets 25 % of the set.
+- SWE-Hero is targeted at 25 % of the set; the final set has 63 / 432 = 14.6 %.
 - At most 2 trajectories per instance and at most 3 % per repo.
 
 ### E-TB: native Terminus-2 JSON (Harbor `terminus-2`, `templates/terminus-json-plain.txt` @4778ceba)
@@ -271,7 +271,7 @@ Dropped:
 **Sources and selection:**
 - Nemotron medium + mixed `scientific_computing` / `data_science`, plus medium `model_training`.
 - jupyter-agent thinking: 6 shards, about 15 % of the set.
-- "long" = at least 12 turns, about 60 % of the Nemotron share.
+- "long" = at least 12 turns, targeted at about 60 % of the Nemotron share; only 67 long candidates passed the filters, so the final set has 65 / 868 = 7.5 % long samples.
 - At most 1 per task; at most 32 Ki tokens.
 
 **Decontamination:**
@@ -350,7 +350,11 @@ yield on HLE and could dilute general reasoning.
 (val) sets with **exactly the same ids**, deterministically shuffled. `mix.py` asserts that the id set
 equals the union of the expert manifests.
 
-## 6. Dev sets (independent; for checkpoint selection only)
+## 6. Dev sets (independent; built but not used)
+
+These dev sets were built for tuning, but in the end nothing was selected on them: the merge hyper-parameters were
+chosen on the 2 % validation splits of the expert training data (step 8 above; README §3), and no checkpoint was
+selected (the last step is always used).
 
 | expert | dev set | manifest |
 |---|---|---|
@@ -423,7 +427,7 @@ E-SWE did not beat Base on HARD-51. Its training data was 100% Python, while HAR
   | over 64K tokens | 319 |
   | SWE-Pro org / 13-gram | 12 |
   | test or scratch files in the teacher's own patch | 1 |
-- **Selection.** From 1,599 candidates: language quota Go 40 / TS+JS 30 / Python 30, with a 75% preference for hard tasks (reference patch with ≥2 files or ≥30 lines), 1 trajectory per instance, at most 36 per repo.
+- **Selection.** From 1,599 candidates: language quota Go 40 / TS+JS 30 / Python 30 (set to match HARD-51, i.e. informed by the test set's language mix; README §4), with a 75% preference for hard tasks (reference patch with ≥2 files or ≥30 lines), 1 trajectory per instance, at most 36 per repo.
   - **Counts:** Go 157, TS/JS 118, Python 118.
   - **Tokens:** 5.93M / 4.98M / 4.48M, mean 39k tokens per sample.
   - **Shape:** median 39 executed actions and 31 assistant turns, from 263 repos.

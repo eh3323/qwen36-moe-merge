@@ -81,7 +81,7 @@ def bullet(note: str) -> str:
     if note.startswith(head):
         runs = [r.strip().rstrip(".") for r in note[len(head):].split("; ")]
         return "- 不在矩阵中的运行：\n" + "\n".join(f"  - {r.replace(': ', '：', 1)}" for r in runs)
-    return "- " + note.replace("HLE RMS calibration error (official hle_eval, β=100): ", "HLE 校准误差（官方 hle_eval，RMS，β=100）：")
+    return "- " + note.replace("HLE RMS calibration error (official hle_eval, β=100): ", "HLE 校准误差（RMS，β=100，按官方 hle_eval 的方法复算，§9）：")
 
 
 def main() -> None:
