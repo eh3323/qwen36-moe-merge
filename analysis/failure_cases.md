@@ -102,9 +102,9 @@ TB2 的 Nebius VM 运行（8×H100，Docker 原生后端；Base 2 次、E-TB v2�
 | H2 | ASI | Mixed、E-ASI | harness-环境 | 环境/工具失败 | agent 在无 PID namespace 的 RunPod 上 `pkill -f python*`，杀掉 vLLM/asibench |
 | H3 | ASI | 评分阶段 | harness-环境 | 环境/工具失败 | 裁判 temperature 被 gpt-5.5 拒、`tasks` 导入路径崩溃、TSP 需 Docker |
 | H4 | ASI | E-ASI / math.manifold_pde_meshfree | 能力回退 | 其他 | prompt 230K + 32K 输出 > 262K，ContextOverflowError（模型行为） |
-| S1 | ASI | v4 / 全部 60 题 | 能力回退 | 其他 | 逐题分数与 E-ASI 相关 0.67（与 Base 0.22），掉分题与 E-ASI 重合：ASI 回退来自专家 |
+| S1 | ASI | v4 / 全部 60 题 | 能力回退 | 其他 | 逐题分数与 E-ASI 相关 0.67（与 Base 0.22），掉分题与 E-ASI 重合：分数回退跟随专家（超时见 S3） |
 | S2 | ASI | v4 / stable_latent_state_fitting 等 4 题 | 能力回退 | 补丁错误 | 第一轮不调用工具就结束或没写交付文件，hard gate 不通过（v4 32/60 vs Base 39/60） |
-| S3 | ASI | v4 / 全部 60 题 | 合版引入的回退 | 合版引入的退化 | 每题模型调用中位数 81，Base 46、E-ASI 19：轨迹最长、得分更低 |
+| S3 | ASI | v4 / 全部 60 题 | 合版引入的回退 | 合版引入的退化 | 每题模型调用中位数 81，Base 46、E-ASI 19；13/60 题跑满 3 小时（E-ASI 1、Base 0）：轨迹最长、得分更低 |
 | S4 | ASI | v4 / math.symplectic_integrators | 能力回退 | 测试理解错误 | 交付了但说明里没写积分器名，soft gate 判 0（Base 42.8） |
 
 **计数**：共 **46 个案例**（SWE 23 = A1–A12 + B1–B6 + C1–C5；HLE 5 = D1–D5；TB2 10 = T1–T10；ASI 8 = H1–H4 + S1–S4）。其中 **SWE 23 + HLE 5 + TB2 10 + ASI 4（S1–S4）= 42 个直接在最终合版 v4 的运行上**（C4 为"全部运行"口径但含 v4；H1、H3 也涉及 v4，H2/H4 是其他模型 / 专家对照）——远超题目 ≥20 的要求。**明确标为"合版引入的回退"的 = 12 个**（A1–A4、A9、B3、B6、D3、D5、T1、T2、S3），另有一批"能力回退"（A7、A8、A11、B1、B2、B4、B5、D1、D4、T3–T7、H4）是 v4 从 Base/专家继承或自身的能力缺陷。按根因与计数见 §8。
@@ -501,12 +501,12 @@ Nebius 上的运行全部完成后（README §11 第 21 条），同一台 8×H1
 
 v4 的 ASI B3 为 7.53（60 题，无效题计 0），Base 10.03，v4 − Base −2.50 [−6.79, +2.52]，不显著；E-ASI 7.75、Mixed 7.39（README §8.2）。
 
-#### S1. v4 的 ASI 表现基本继承自 E-ASI（能力回退，专家导致）
+#### S1. v4 的 ASI 分数基本跟随 E-ASI（能力回退，专家导致；超时另见 S3）
 
 - 逐题分数的 Pearson 相关：v4 与 E-ASI **0.67**，v4 与 Base 0.22，v4 与 Mixed 0.27，E-ASI 与 Base 0.13。
 - v4 相对 Base 掉分最多的题，E-ASI 也几乎同样掉分：`math.symplectic_integrators` Base 42.8 → v4 0.0（E-ASI 0.1），`computer_science.stable_latent_state_fitting` 39.0 → 0.0（0.0），`robotics.particle_filter` 28.4 → 0.0（0.0），`robotics.lidar_imu_time_offset_yaw_calibration` 77.1 → 35.6（34.3）。
 - 涨分也同步：`earth_science.farquhar_ballberry_photosynthesis` 0 → 100（E-ASI 100），`earth_science.snow_3layer_compaction` 3.0 → 36.0（36.0）。
-- 结论：合版后 ASI 上的行为由 E-ASI 主导，而 E-ASI 本身就比 Base 差（−2.29），所以 v4 的 ASI 回退来自专家，不是合版冲突。
+- 结论：合版后 ASI 上的逐题分数由 E-ASI 主导，而 E-ASI 本身就比 Base 差（−2.29），所以分数层面的回退主要来自专家。但超时是合版引入的：修正 ASI 归一化后，v4 有 13/60 题跑满 3 小时上限，E-ASI 只有 1 题，Base 为 0 题。这与 S3（v4 每题模型调用中位数 81，Base 46、E-ASI 19）以及 TB2 上轨迹变长是同一种模式。
 
 #### S2. 交付文件缺失，硬性检查不通过（能力回退）
 
